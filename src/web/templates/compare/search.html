@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}품목 가격 검색{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-bold text-gray-900 mb-5 break-ko">🔍 품목 가격 검색</h1>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-6">
+  <form method="GET" class="flex flex-col sm:flex-row gap-3">
+    <select name="project_id"
+            class="sm:w-48 px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+      <option value="">전체 프로젝트</option>
+      {% for p in projects %}
+      <option value="{{ p.project_id }}" {% if p.project_id == project_id %}selected{% endif %}>
+        {{ p.name }}
+      </option>
+      {% endfor %}
+    </select>
+    <input type="text" name="q" value="{{ q }}" required autofocus
+           placeholder="품목명 검색 (예: 랙 서버, PM, 교통비)"
+           class="flex-1 px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                  focus:ring-2 focus:ring-blue-500">
+    <button type="submit"
+            class="bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                   px-5 py-2.5 rounded-lg text-sm transition-colors whitespace-nowrap">
+      검색
+    </button>
+  </form>
+</div>
+
+{% if q and results %}
+<div class="mb-3 text-sm text-gray-600">
+  <strong>"{{ q }}"</strong> 검색 결과 — {{ results|length }}건
+</div>
+
+<!-- 모바일: 카드 -->
+<div class="sm:hidden space-y-3">
+  {% for r in results %}
+  <div class="bg-white rounded-xl border border-gray-200 p-4 text-sm">
+    <div class="font-semibold break-ko text-gray-900">{{ r.name_normalized or r.name_normalized }}</div>
+    {% if r.spec %}<div class="text-xs text-gray-500 mt-0.5">{{ r.spec }}</div>{% endif %}
+    <div class="mt-2 grid grid-cols-2 gap-1 text-xs text-gray-600">
+      <div>프로젝트: {{ r.project_name }}</div>
+      <div>입찰: {{ r.bid_name }}</div>
+      <div>업체: <strong>{{ r.vendor_name }}</strong></div>
+      <div>날짜: {{ r.due_date or '-' }}</div>
+    </div>
+    <div class="mt-2 font-bold text-blue-700">
+      {{ '{:,}'.format(r.unit_price|int) if r.unit_price else '-' }}원
+      {% if r.unit %}<span class="text-xs font-normal text-gray-500">/ {{ r.unit }}</span>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- 데스크톱: 테이블 -->
+<div class="hidden sm:block bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-xs text-gray-600 uppercase">
+      <tr>
+        <th class="text-left px-4 py-3">품명</th>
+        <th class="text-left px-4 py-3">규격</th>
+        <th class="text-left px-4 py-3">프로젝트 / 입찰</th>
+        <th class="text-left px-4 py-3">업체</th>
+        <th class="text-left px-4 py-3">날짜</th>
+        <th class="text-right px-4 py-3">단가 (원)</th>
+        <th class="text-right px-4 py-3">수량</th>
+        <th class="text-right px-4 py-3">금액 (원)</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+    {% for r in results %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-medium break-ko">{{ r.name_normalized }}</td>
+        <td class="px-4 py-3 text-xs text-gray-500">{{ r.spec or '—' }}</td>
+        <td class="px-4 py-3 text-xs break-ko">
+          <div class="text-gray-700">{{ r.project_name }}</div>
+          <div class="text-gray-400">{{ r.bid_name }}</div>
+        </td>
+        <td class="px-4 py-3 font-semibold">{{ r.vendor_name }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ r.due_date or '—' }}</td>
+        <td class="px-4 py-3 text-right font-semibold text-blue-700">
+          {{ '{:,}'.format(r.unit_price|int) if r.unit_price else '—' }}
+        </td>
+        <td class="px-4 py-3 text-right text-gray-600">
+          {{ r.quantity if r.quantity else '—' }}
+          {% if r.unit %}<span class="text-xs text-gray-400">{{ r.unit }}</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right">
+          {{ '{:,}'.format(r.amount|int) if r.amount else '—' }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% elif q and not results %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+  <div class="text-3xl mb-2">🔍</div>
+  <p class="text-gray-500 break-ko">"{{ q }}"에 해당하는 품목이 없습니다.</p>
+  <p class="text-xs text-gray-400 mt-1 break-ko">다른 검색어를 시도하거나 먼저 제출서를 업로드하세요.</p>
+</div>
+{% else %}
+<div class="bg-gray-50 rounded-xl border border-gray-200 p-8 text-center">
+  <div class="text-3xl mb-2">📊</div>
+  <p class="text-gray-500 break-ko text-sm">품목명을 입력하면 모든 프로젝트와 입찰에 걸친 가격 이력을 조회합니다.</p>
+  <p class="text-xs text-gray-400 mt-1 break-ko">예: "랙 서버", "PM", "출장비", "유지보수"</p>
+</div>
+{% endif %}
+{% endblock %}

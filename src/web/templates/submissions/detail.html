@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ sub.vendor_name }} · {{ sub.bid_name }}{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.detail', project_id=sub.project_id) }}" class="hover:text-blue-700 break-ko">{{ sub.project_name }}</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('bids.detail', bid_id=sub.bid_id) }}" class="hover:text-blue-700 break-ko">{{ sub.bid_name }}</a>
+  <span class="mx-2">›</span>
+  <span class="text-gray-900 break-ko">{{ sub.vendor_name }}</span>
+</nav>
+
+<!-- 헤더 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-start justify-between flex-wrap gap-3 mb-3">
+    <div>
+      <h1 class="text-xl font-bold text-gray-900 break-ko">{{ sub.vendor_name }}</h1>
+      <p class="text-sm text-gray-500 break-ko">{{ sub.bid_name }} · {{ sub.file_name }}</p>
+    </div>
+    <span class="text-xs px-2 py-1 rounded-full
+      {% if sub.extraction_status=='done' %}bg-green-100 text-green-700
+      {% elif sub.extraction_status=='failed' %}bg-red-100 text-red-700
+      {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+      {{ sub.extraction_status }}
+    </span>
+  </div>
+  <!-- 금액 요약 -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+    <div>
+      <div class="text-xs text-gray-500">공급가액</div>
+      <div class="font-bold text-gray-900">
+        {{ '{:,}'.format(sub.subtotal_excl_vat|int) if sub.subtotal_excl_vat else '-' }}원
+      </div>
+    </div>
+    <div>
+      <div class="text-xs text-gray-500">VAT</div>
+      <div class="font-semibold text-gray-700">
+        {{ '{:,}'.format(sub.vat|int) if sub.vat else '-' }}원
+      </div>
+    </div>
+    <div>
+      <div class="text-xs text-gray-500">합계</div>
+      <div class="font-bold text-blue-700">
+        {{ '{:,}'.format(sub.grand_total|int) if sub.grand_total else '-' }}원
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 라인 아이템 테이블 -->
+<div class="flex items-center justify-between mb-3">
+  <h2 class="text-base font-bold text-gray-900 break-ko">라인 아이템 ({{ items|length }}개)</h2>
+  <!-- 카테고리 필터 -->
+  <select id="catFilter" onchange="filterTable()"
+          class="text-sm border border-gray-300 rounded-lg px-2 py-1.5">
+    <option value="">전체 카테고리</option>
+    {% set cats = items|map(attribute='category')|select|unique|list %}
+    {% for cat in cats %}
+    <option value="{{ cat }}">{{ cat }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+  <table class="w-full text-sm" id="itemTable">
+    <thead class="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
+      <tr>
+        <th class="text-left px-3 py-2.5">품명</th>
+        <th class="text-left px-3 py-2.5 hidden sm:table-cell">규격</th>
+        <th class="text-left px-3 py-2.5 hidden md:table-cell">카테고리</th>
+        <th class="text-right px-3 py-2.5">수량</th>
+        <th class="text-right px-3 py-2.5">단가 (원)</th>
+        <th class="text-right px-3 py-2.5">금액 (원)</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+    {% for it in items %}
+      <tr data-cat="{{ it.category or '' }}"
+          class="{% if it.depth == 0 and not it.is_header %}font-semibold{% endif %}
+                 {% if it.depth == 1 %}text-gray-700{% endif %}
+                 {% if it.depth >= 2 %}text-gray-500{% endif %}">
+        <td class="px-3 py-2 break-ko max-w-xs"
+            style="padding-left: {{ 12 + (it.depth * 16) }}px">
+          {{ it.name_normalized or it.name_raw }}
+        </td>
+        <td class="px-3 py-2 text-gray-500 text-xs hidden sm:table-cell max-w-xs">
+          {{ it.spec or '' }}
+        </td>
+        <td class="px-3 py-2 hidden md:table-cell">
+          {% if it.category %}
+          <span class="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">{{ it.category }}</span>
+          {% endif %}
+        </td>
+        <td class="px-3 py-2 text-right text-gray-700">
+          {{ it.quantity if it.quantity else '' }}
+          {% if it.unit %}<span class="text-xs text-gray-400">{{ it.unit }}</span>{% endif %}
+        </td>
+        <td class="px-3 py-2 text-right">
+          {{ '{:,}'.format(it.unit_price|int) if it.unit_price else '' }}
+        </td>
+        <td class="px-3 py-2 text-right font-semibold">
+          {{ '{:,}'.format(it.amount|int) if it.amount else '' }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterTable() {
+  const cat = document.getElementById('catFilter').value;
+  document.querySelectorAll('#itemTable tbody tr').forEach(row => {
+    row.style.display = (!cat || row.dataset.cat === cat) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

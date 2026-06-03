@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }}{% endblock %}
+
+{% block content %}
+<!-- 브레드크럼 -->
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.index') }}" class="hover:text-blue-700">프로젝트</a>
+  <span class="mx-2">›</span>
+  <span class="text-gray-900">{{ project.name }}</span>
+</nav>
+
+<!-- 프로젝트 헤더 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-start justify-between flex-wrap gap-3">
+    <div class="flex-1">
+      <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">{{ project.name }}</h1>
+      {% if project.description %}
+      <p class="text-sm text-gray-500 mt-1 break-ko">{{ project.description }}</p>
+      {% endif %}
+    </div>
+    <span class="text-xs px-2 py-1 rounded-full
+      {% if project.status=='active' %}bg-green-100 text-green-700
+      {% elif project.status=='closed' %}bg-gray-100 text-gray-600
+      {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+      {{ project.status }}
+    </span>
+  </div>
+</div>
+
+<!-- 입찰 목록 헤더 -->
+<div class="flex items-center justify-between mb-4">
+  <h2 class="text-lg font-bold text-gray-900 break-ko">입찰 목록</h2>
+  {% if has_role('manager') %}
+  <a href="{{ url_for('projects.new_bid', project_id=project.project_id) }}"
+     class="bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold
+            px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+    + 입찰 추가
+  </a>
+  {% endif %}
+</div>
+
+{% if bids %}
+<div class="space-y-3">
+  {% for bid in bids %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div class="p-4 sm:p-5">
+      <div class="flex items-start justify-between flex-wrap gap-2 mb-3">
+        <div class="flex-1">
+          <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}"
+             class="font-bold text-blue-700 hover:underline break-ko text-base">
+            {{ bid.name }}
+          </a>
+          {% if bid.due_date %}
+          <span class="ml-2 text-xs text-gray-500">마감 {{ bid.due_date }}</span>
+          {% endif %}
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded-full
+          {% if bid.status=='open' %}bg-blue-100 text-blue-700
+          {% elif bid.status=='awarded' %}bg-green-100 text-green-700
+          {% elif bid.status=='cancelled' %}bg-red-100 text-red-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ bid.status }}
+        </span>
+      </div>
+
+      <!-- 통계 + 액션 -->
+      <div class="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+        <span>제출서 <strong>{{ bid.n_submissions }}</strong></span>
+        {% if bid.min_price %}
+        <span class="text-green-700">최저 <strong>{{ '{:,}'.format(bid.min_price|int) }}원</strong></span>
+        {% endif %}
+        {% if bid.max_price and bid.min_price and bid.max_price != bid.min_price %}
+        <span class="text-red-600">최고 <strong>{{ '{:,}'.format(bid.max_price|int) }}원</strong></span>
+        {% endif %}
+
+        <div class="ml-auto flex gap-2">
+          {% if bid.n_submissions >= 2 %}
+          <a href="{{ url_for('compare.bid_compare', bid_id=bid.bid_id) }}"
+             class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
+                    px-3 py-1.5 rounded-lg transition-colors break-ko">
+            📊 비교 보기
+          </a>
+          {% endif %}
+          <a href="{{ url_for('submissions.upload', bid_id=bid.bid_id) }}"
+             class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                    px-3 py-1.5 rounded-lg transition-colors break-ko">
+            📤 업로드
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+  <p class="text-gray-500 break-ko">아직 등록된 입찰이 없습니다.</p>
+</div>
+{% endif %}
+{% endblock %}

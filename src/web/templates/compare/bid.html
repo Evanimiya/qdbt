@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}업체별 비교 · {{ bid.name }}{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}" class="hover:text-blue-700">{{ bid.project_name }}</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}" class="hover:text-blue-700 break-ko">{{ bid.name }}</a>
+  <span class="mx-2">›</span> 업체별 비교
+</nav>
+
+<div class="flex items-center justify-between mb-5">
+  <h1 class="text-xl font-bold text-gray-900 break-ko">📊 업체별 비교</h1>
+  <a href="{{ url_for('compare.bid_excel', bid_id=bid.bid_id) }}"
+     class="bg-green-700 hover:bg-green-800 text-white text-sm font-semibold
+            px-4 py-2 rounded-lg transition-colors break-ko whitespace-nowrap">
+    ⬇ Excel
+  </a>
+</div>
+
+<!-- 공급가액 요약 카드 -->
+<div class="grid gap-3 mb-6"
+     style="grid-template-columns: repeat({{ [data.vendors|length, 4]|min }}, minmax(0,1fr))">
+  {% for v in data.vendors %}
+  {% set price = data.subtotals[v] %}
+  {% set min_price = data.subtotals.values()|select|min %}
+  <div class="bg-white rounded-xl border p-4 text-center
+              {% if price and price == min_price %}border-green-400 bg-green-50{% else %}border-gray-200{% endif %}">
+    <div class="text-xs text-gray-500 break-ko mb-1">{{ v }}</div>
+    <div class="font-bold text-sm sm:text-base
+                {% if price and price == min_price %}text-green-700{% else %}text-gray-900{% endif %}">
+      {% if price %}{{ '{:,}'.format(price|int) }}{% else %}—{% endif %}원
+    </div>
+    {% if price and price == min_price %}
+    <div class="text-xs text-green-600 mt-0.5">🥇 최저가</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- 카테고리별 비교 테이블 -->
+{% set vendors = data.vendors %}
+{% for cat, rows in data.categories.items() %}
+<div class="mb-6">
+  <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wide mb-2 break-ko">
+    {{ cat }}
+    <span class="ml-2 text-xs font-normal text-gray-400">{{ rows|length }}개 항목</span>
+  </h2>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs text-gray-600 uppercase">
+        <tr>
+          <th class="text-left px-3 py-2 w-48">품명</th>
+          <th class="text-left px-3 py-2 hidden lg:table-cell text-gray-400">규격</th>
+          {% for v in vendors %}
+          <th class="text-right px-3 py-2 whitespace-nowrap">{{ v }}</th>
+          {% endfor %}
+          <th class="text-center px-3 py-2 hidden md:table-cell">최저</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+      {% for row in rows %}
+        {% set prices = [] %}
+        {% for v in vendors %}
+          {% if row.prices.get(v) %}{% set _ = prices.append(row.prices[v]) %}{% endif %}
+        {% endfor %}
+        {% set min_p = prices|min if prices else none %}
+        {% set max_p = prices|max if prices else none %}
+        <tr>
+          <td class="px-3 py-2 break-ko font-medium text-gray-900 max-w-xs">
+            {{ row.name }}
+          </td>
+          <td class="px-3 py-2 text-xs text-gray-400 hidden lg:table-cell max-w-xs">
+            {{ row.spec or '' }}
+          </td>
+          {% for v in vendors %}
+          {% set p = row.prices.get(v) %}
+          <td class="px-3 py-2 text-right whitespace-nowrap
+            {% if p and min_p and p == min_p %}text-green-700 font-semibold bg-green-50
+            {% elif p and max_p and p == max_p and min_p != max_p %}text-red-600 bg-red-50
+            {% endif %}">
+            {% if p %}{{ '{:,}'.format(p|int) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+          </td>
+          {% endfor %}
+          <td class="px-3 py-2 text-center hidden md:table-cell text-xs text-gray-500">
+            {% if min_p %}{{ '{:,}'.format(min_p|int) }}{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      <!-- 카테고리 소계 -->
+      <tr class="bg-gray-50 font-semibold text-xs">
+        <td class="px-3 py-2 text-gray-600" colspan="2">소계</td>
+        {% for v in vendors %}
+        <td class="px-3 py-2 text-right">
+          {% set total = data.category_totals.get(v, {}).get(cat, 0) %}
+          {{ '{:,}'.format(total|int) if total else '—' }}
+        </td>
+        {% endfor %}
+        <td class="hidden md:table-cell"></td>
+      </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+{% if not data.categories %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+  <p class="text-gray-500 break-ko">비교할 데이터가 없습니다.</p>
+</div>
+{% endif %}
+{% endblock %}
