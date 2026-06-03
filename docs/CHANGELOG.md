@@ -6,6 +6,33 @@
 
 ---
 
+## [v0.3.1-test] - 2026-06-04
+
+### 보안 설계 반영 (구조만, UI는 Phase 2)
+
+#### 변경 (Changed)
+- **role 4단계로 세분화** (`src/db/schema.py`, `src/auth/auth.py`)
+  - 기존: `admin / manager / viewer`
+  - 변경: `admin / manager / viewer-detail / viewer-summary`
+  - `viewer-detail`: 라인 아이템(단가/수량) 전체 조회 가능
+  - `viewer-summary`: 프로젝트/입찰 합계 데이터만 조회 가능
+- **사용자 추가 폼** role 선택지 업데이트 (`admin/user_form.html`)
+- **사용자 목록** role 배지 색상 추가 (`admin/users.html`)
+
+#### 추가 (Added)
+- **`bid_watchlist` 테이블** (`src/db/schema.py`)
+  - 입찰별 가격 이력 비교 대상 품목을 명시적으로 지정하는 테이블
+  - 전체 카탈로그 무제한 검색이 아닌, 이번 입찰의 비교 대상 품목만 검색
+  - 현재는 구조만 생성 (UI + 쿼리는 Phase 2에서 활성화)
+  - `bid_id + catalog_item_id` UNIQUE 제약으로 중복 방지
+
+#### 기술 메모
+- 실제 접근 제어 로직(화면별 role 체크)은 아직 미구현
+- Phase 2에서 `viewer-detail` vs `viewer-summary` 분기 처리 예정
+- `bid_watchlist`는 Phase 2 카탈로그 구현 시 함께 활성화
+
+---
+
 ## [v0.3.0-test] - 2026-05-27
 
 ### 전체 재설계 (목적 재정의)

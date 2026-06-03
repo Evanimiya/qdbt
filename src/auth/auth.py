@@ -14,7 +14,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from db.queries import get_user_by_email, get_user, update_user_login
 
-ROLE_LEVEL = {"admin": 3, "manager": 2, "viewer": 1}
+ROLE_LEVEL = {
+    "admin":          4,
+    "manager":        3,
+    "viewer-detail":  2,   # 라인 아이템(단가/수량) 조회 가능
+    "viewer-summary": 1,   # 프로젝트/입찰 합계만 조회
+}
 
 
 # ─── 비밀번호 ───────────────────────────────────

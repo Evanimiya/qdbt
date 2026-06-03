@@ -4,19 +4,26 @@
 설계 원칙:
 1. project → bid → submission → item 계층으로 실제 업무 흐름 반영
 2. catalog_items가 입찰 간 가격 비교의 핵심 연결고리 (Phase 2에서 활성화)
-3. 권한 관리: users + roles (admin / manager / viewer)
+3. 권한 관리: users + roles (4단계)
+   - admin          : 전체 관리 + 사용자 추가/삭제
+   - manager        : 프로젝트/입찰 생성, 파일 업로드, 전체 데이터 접근
+   - viewer-detail  : 라인 아이템 전체 조회 가능 (단가/수량 포함)
+   - viewer-summary : 프로젝트/입찰 합계만 조회 (라인 아이템 접근 불가)
 4. 모든 테이블에 created_at / updated_at 감사 컬럼
+5. bid_watchlist: 입찰별 비교 대상 자재 목록 (가격 이력 검색 범위 제한용)
+   - 전체 카탈로그 검색이 아닌, 이번 입찰에서 비교할 품목만 지정하여 검색
 
 Phase 1+3 (현재):
   - projects, bids, submissions, submission_items
-  - users (기본 세션 기반 인증)
+  - users (세션 기반 인증, 4단계 role)
+  - bid_watchlist (구조만, UI는 Phase 2에서)
   - 입찰 내 N개사 비교 쿼리
 
 Phase 2 (이후):
   - catalog_categories, catalog_items
   - submission_items.catalog_item_id 연결 활성화
   - price_history 자동 생성
-  - 입찰 간 가격 이력 쿼리
+  - bid_watchlist 기반 가격 이력 검색 (범위 제한)
 """
 
 import sqlite3
@@ -40,8 +47,11 @@ CREATE TABLE IF NOT EXISTS users (
     email       TEXT NOT NULL UNIQUE,
     name        TEXT NOT NULL,
     dept        TEXT,
-    role        TEXT NOT NULL DEFAULT 'viewer',
-                    -- admin | manager | viewer
+    role        TEXT NOT NULL DEFAULT 'viewer-summary',
+                    -- admin          : 전체 관리
+                    -- manager        : 업로드/편집, 전체 데이터 접근
+                    -- viewer-detail  : 라인 아이템(단가/수량) 조회 가능
+                    -- viewer-summary : 프로젝트/입찰 합계만 조회
     password_hash TEXT NOT NULL,
     is_active   INTEGER NOT NULL DEFAULT 1,
     last_login  TIMESTAMP,
@@ -137,6 +147,24 @@ CREATE TABLE IF NOT EXISTS submission_items (
 );
 
 -- ═══════════════════════════════════════════
+-- 입찰별 비교 대상 자재 목록 (Phase 2 준비)
+-- ═══════════════════════════════════════════
+
+-- 이번 입찰에서 가격 이력을 비교할 품목을 명시적으로 지정.
+-- 전체 카탈로그를 검색하는 게 아니라 담당자가 "이 입찰에서
+-- 비교가 필요한 품목"을 먼저 등록해두면, 가격 이력 검색이
+-- 이 목록 안에서만 동작함 → 불필요한 데이터 노출 방지.
+CREATE TABLE IF NOT EXISTS bid_watchlist (
+    watchlist_id    TEXT PRIMARY KEY,      -- UUID
+    bid_id          TEXT NOT NULL REFERENCES bids(bid_id),
+    catalog_item_id TEXT NOT NULL,         -- REFERENCES catalog_items (Phase 2)
+    note            TEXT,                  -- 지정 사유 (예: "이번 입찰 주요 자재")
+    added_by        TEXT REFERENCES users(user_id),
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (bid_id, catalog_item_id)       -- 같은 입찰에 같은 품목 중복 방지
+);
+
+-- ═══════════════════════════════════════════
 -- 품목 카탈로그 (Phase 2 - 지금은 구조만 생성)
 -- ═══════════════════════════════════════════
 
@@ -191,6 +219,8 @@ CREATE INDEX IF NOT EXISTS idx_items_catalog   ON submission_items(catalog_item_
 CREATE INDEX IF NOT EXISTS idx_items_match     ON submission_items(match_status);
 CREATE INDEX IF NOT EXISTS idx_price_catalog   ON price_history(catalog_item_id);
 CREATE INDEX IF NOT EXISTS idx_price_vendor    ON price_history(vendor_name);
+CREATE INDEX IF NOT EXISTS idx_watchlist_bid   ON bid_watchlist(bid_id);
+CREATE INDEX IF NOT EXISTS idx_users_role      ON users(role);
 
 -- ═══════════════════════════════════════════
 -- 초기 데이터: 카탈로그 기본 카테고리
