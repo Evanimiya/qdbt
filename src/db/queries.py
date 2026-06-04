@@ -470,3 +470,150 @@ def update_user_login(user_id):
     with get_conn() as c:
         c.execute("UPDATE users SET last_login = ? WHERE user_id = ?",
                   (datetime.now().isoformat(), user_id))
+
+
+# ─── 카탈로그 카테고리 ────────────────────────────
+
+def list_catalog_categories():
+    """전체 카테고리 목록 (부모→자식 순)"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT cc.*,
+                   p.name as parent_name,
+                   COUNT(ci.catalog_item_id) as n_items
+            FROM catalog_categories cc
+            LEFT JOIN catalog_categories p ON cc.parent_id = p.category_id
+            LEFT JOIN catalog_items ci ON cc.category_id = ci.category_id
+                AND ci.is_active = 1
+            GROUP BY cc.category_id
+            ORDER BY COALESCE(cc.parent_id, cc.category_id), cc.sort_order, cc.name
+        """).fetchall()
+
+
+def get_catalog_category(category_id):
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM catalog_categories WHERE category_id = ?",
+            (category_id,)
+        ).fetchone()
+
+
+def create_catalog_category(name, parent_id=None, sort_order=0):
+    cid = new_id()
+    with get_conn() as c:
+        c.execute("""
+            INSERT INTO catalog_categories (category_id, name, parent_id, sort_order)
+            VALUES (?, ?, ?, ?)
+        """, (cid, name, parent_id or None, sort_order))
+    return cid
+
+
+def update_catalog_category(category_id, **kwargs):
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    with get_conn() as c:
+        c.execute(f"UPDATE catalog_categories SET {sets} WHERE category_id = ?",
+                  list(kwargs.values()) + [category_id])
+
+
+def delete_catalog_category(category_id):
+    """카테고리 삭제 (소속 품목이 없을 때만)"""
+    with get_conn() as c:
+        n = c.execute(
+            "SELECT COUNT(*) FROM catalog_items WHERE category_id = ?",
+            (category_id,)
+        ).fetchone()[0]
+        if n > 0:
+            raise ValueError(f"소속 품목 {n}개가 있어 삭제할 수 없습니다.")
+        c.execute("DELETE FROM catalog_categories WHERE category_id = ?",
+                  (category_id,))
+
+
+# ─── 카탈로그 품목 ───────────────────────────────
+
+def list_catalog_items(category_id=None, search=None, active_only=True):
+    """품목 목록 (카테고리 필터 + 검색)"""
+    sql = """
+        SELECT ci.*,
+               cc.name as category_name,
+               cc.parent_id
+        FROM catalog_items ci
+        LEFT JOIN catalog_categories cc USING (category_id)
+        WHERE 1=1
+    """
+    params = []
+    if active_only:
+        sql += " AND ci.is_active = 1"
+    if category_id:
+        sql += " AND ci.category_id = ?"
+        params.append(category_id)
+    if search:
+        sql += " AND (ci.name_canonical LIKE ? OR ci.aliases LIKE ?)"
+        params += [f"%{search}%", f"%{search}%"]
+    sql += " ORDER BY cc.sort_order, ci.name_canonical"
+    with get_conn() as c:
+        return c.execute(sql, params).fetchall()
+
+
+def get_catalog_item(catalog_item_id):
+    with get_conn() as c:
+        return c.execute("""
+            SELECT ci.*, cc.name as category_name
+            FROM catalog_items ci
+            LEFT JOIN catalog_categories cc USING (category_id)
+            WHERE ci.catalog_item_id = ?
+        """, (catalog_item_id,)).fetchone()
+
+
+def create_catalog_item(name_canonical, category_id=None,
+                         aliases=None, spec_template=None,
+                         unit_std=None, created_by=None):
+    import json
+    cid = new_id()
+    with get_conn() as c:
+        c.execute("""
+            INSERT INTO catalog_items
+                (catalog_item_id, category_id, name_canonical,
+                 aliases, spec_template, unit_std, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (cid, category_id or None,
+              name_canonical,
+              json.dumps(aliases or [], ensure_ascii=False),
+              spec_template, unit_std, created_by))
+    return cid
+
+
+def update_catalog_item(catalog_item_id, **kwargs):
+    import json
+    if "aliases" in kwargs and isinstance(kwargs["aliases"], list):
+        kwargs["aliases"] = json.dumps(kwargs["aliases"], ensure_ascii=False)
+    kwargs["updated_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    with get_conn() as c:
+        c.execute(f"UPDATE catalog_items SET {sets} WHERE catalog_item_id = ?",
+                  list(kwargs.values()) + [catalog_item_id])
+
+
+def delete_catalog_item(catalog_item_id):
+    """소프트 삭제 (is_active = 0)"""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE catalog_items SET is_active = 0, updated_at = ?
+            WHERE catalog_item_id = ?
+        """, (datetime.now().isoformat(), catalog_item_id))
+
+
+def catalog_stats():
+    """카탈로그 전체 통계"""
+    with get_conn() as c:
+        n_items = c.execute(
+            "SELECT COUNT(*) FROM catalog_items WHERE is_active = 1"
+        ).fetchone()[0]
+        n_cats = c.execute(
+            "SELECT COUNT(*) FROM catalog_categories"
+        ).fetchone()[0]
+        n_matched = c.execute(
+            "SELECT COUNT(DISTINCT catalog_item_id) FROM submission_items "
+            "WHERE catalog_item_id IS NOT NULL AND match_status = 'confirmed'"
+        ).fetchone()[0]
+        return {"n_items": n_items, "n_categories": n_cats, "n_matched": n_matched}
+

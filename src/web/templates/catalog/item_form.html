@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{% if item %}품목 수정{% else %}품목 등록{% endif %} · 카탈로그{% endblock %}
+
+{% block content %}
+<div class="max-w-xl">
+  <nav class="text-sm mb-4 text-gray-500">
+    <a href="{{ url_for('catalog.index') }}" class="hover:text-blue-700">카탈로그</a>
+    <span class="mx-2">›</span>
+    {% if item %}
+    <a href="{{ url_for('catalog.item_detail', item_id=item.catalog_item_id) }}"
+       class="hover:text-blue-700 break-ko">{{ item.name_canonical }}</a>
+    <span class="mx-2">›</span> 수정
+    {% else %}
+    품목 등록
+    {% endif %}
+  </nav>
+
+  <h1 class="text-xl font-bold text-gray-900 mb-5 break-ko">
+    {% if item %}✏️ 품목 수정{% else %}➕ 품목 등록{% endif %}
+  </h1>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 sm:p-6">
+    <form method="POST">
+      <!-- 품목명 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          품목명 (표준) <span class="text-red-500">*</span>
+        </label>
+        <input type="text" name="name_canonical" required autofocus
+               value="{{ item.name_canonical if item else '' }}"
+               placeholder="예: 랙 서버 (2U)"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500">
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          업체마다 다르게 표기해도 이 이름으로 통일합니다.
+        </p>
+      </div>
+
+      <!-- 카테고리 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">카테고리</label>
+        <select name="category_id"
+                class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                       focus:ring-2 focus:ring-blue-500">
+          <option value="">미분류</option>
+          {% for cat in categories %}
+          <option value="{{ cat.category_id }}"
+                  {% if item and item.category_id == cat.category_id %}selected{% endif %}>
+            {% if cat.parent_id %}↳ {% endif %}{{ cat.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- 단위 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">표준 단위</label>
+        <input type="text" name="unit_std"
+               value="{{ item.unit_std if item else '' }}"
+               placeholder="예: 대, EA, 주, 식"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500">
+      </div>
+
+      <!-- 규격 템플릿 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">규격 템플릿 (선택)</label>
+        <input type="text" name="spec_template"
+               value="{{ item.spec_template if item else '' }}"
+               placeholder="예: CPU 모델, 메모리 용량, 스토리지"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500">
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          주요 스펙 항목을 쉼표로 나열하세요. LLM 매칭 힌트로 사용됩니다.
+        </p>
+      </div>
+
+      <!-- 별칭 -->
+      <div class="mb-6">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">별칭 (동의어)</label>
+        <textarea name="aliases" rows="4"
+                  placeholder="한 줄에 하나씩 입력&#10;Rack Server 2U&#10;랙서버&#10;2U Server"
+                  class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                         focus:ring-2 focus:ring-blue-500 resize-none">{% if aliases %}{{ aliases | join('\n') }}{% endif %}</textarea>
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          업체들이 자주 쓰는 다른 표기를 입력하면 LLM 매칭 정확도가 높아집니다.
+        </p>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit"
+                class="flex-1 bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                       py-2.5 rounded-lg transition-colors break-ko">
+          {% if item %}수정 저장{% else %}등록{% endif %}
+        </button>
+        <a href="{{ url_for('catalog.index') }}"
+           class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                  py-2.5 rounded-lg text-center transition-colors break-ko">
+          취소
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

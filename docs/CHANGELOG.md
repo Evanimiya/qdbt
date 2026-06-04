@@ -6,6 +6,41 @@
 
 ---
 
+## [v0.5.0-test] - 2026-06-04
+
+### Phase 2-A: 품목 카탈로그 관리
+
+#### 추가 (Added)
+- **`src/web/blueprints/catalog.py`** — 카탈로그 Blueprint
+  - `GET  /catalog/` — 품목 목록 (카테고리 필터 + 이름/별칭 검색)
+  - `GET/POST /catalog/items/new` — 품목 등록
+  - `GET  /catalog/items/<id>` — 품목 상세 (별칭 태그 표시)
+  - `GET/POST /catalog/items/<id>/edit` — 품목 수정
+  - `POST /catalog/items/<id>/delete` — 품목 소프트 삭제
+  - `GET  /catalog/categories` — 카테고리 관리 (추가/삭제)
+  - `POST /catalog/categories/new` — 카테고리 추가
+  - `POST /catalog/categories/<id>/delete` — 카테고리 삭제 (품목 없을 때만)
+- **`src/web/templates/catalog/`** — 카탈로그 HTML 4개
+  - `index.html` — 품목 목록 (모바일 카드 / 데스크톱 테이블)
+  - `item_form.html` — 등록/수정 폼 (별칭 다중 입력)
+  - `item_detail.html` — 품목 상세 + 별칭 태그
+  - `categories.html` — 카테고리 관리
+
+#### 변경 (Changed)
+- **`src/db/queries.py`** — 카탈로그 CRUD 함수 추가
+  - `list/get/create/update/delete_catalog_category()`
+  - `list/get/create/update/delete_catalog_item()`
+  - `catalog_stats()` — 품목 수, 카테고리 수, 매칭 확정 수
+- **`src/web/app.py`** — catalog Blueprint 등록 + `fromjson` Jinja2 필터 추가
+- **`src/web/templates/base.html`** — 사이드바에 📦 품목 카탈로그 메뉴 추가
+
+#### 설계 원칙
+- 별칭(aliases)을 JSON 배열로 저장 — 업체별 다른 표기를 통합
+- 소프트 삭제 (`is_active = 0`) — 이력 보존
+- Phase 2-B (LLM 매칭) 연결 준비: `submission_items.catalog_item_id` 연결 대기 중
+
+---
+
 ## [v0.4.0-test] - 2026-06-04
 
 ### LLM Provider 추상화 (Claude + GPT, 향후 확장 가능)

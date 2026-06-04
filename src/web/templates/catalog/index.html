@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}품목 카탈로그{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-5">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900 break-ko">📦 품목 카탈로그</h1>
+    <p class="text-xs text-gray-500 mt-0.5">
+      {{ stats.n_items }}개 품목 · {{ stats.n_categories }}개 카테고리 · 매칭 확정 {{ stats.n_matched }}건
+    </p>
+  </div>
+  {% if has_role('manager') %}
+  <div class="flex gap-2">
+    <a href="{{ url_for('catalog.categories') }}"
+       class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+              px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+      카테고리 관리
+    </a>
+    <a href="{{ url_for('catalog.new_item') }}"
+       class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+              px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+      + 품목 등록
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- 검색 + 카테고리 필터 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5">
+  <form method="GET" class="flex flex-col sm:flex-row gap-3">
+    <select name="category_id"
+            class="sm:w-48 px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                   focus:ring-2 focus:ring-blue-500">
+      <option value="">전체 카테고리</option>
+      {% for cat in categories %}
+      <option value="{{ cat.category_id }}"
+              {% if cat.category_id == selected_category %}selected{% endif %}>
+        {% if cat.parent_id %}↳ {% endif %}{{ cat.name }}
+        ({{ cat.n_items }})
+      </option>
+      {% endfor %}
+    </select>
+    <input type="text" name="q" value="{{ q }}"
+           placeholder="품목명 또는 별칭 검색"
+           class="flex-1 px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                  focus:ring-2 focus:ring-blue-500">
+    <button type="submit"
+            class="bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                   px-5 py-2.5 rounded-lg text-sm whitespace-nowrap">
+      검색
+    </button>
+    {% if q or selected_category %}
+    <a href="{{ url_for('catalog.index') }}"
+       class="px-4 py-2.5 text-sm text-gray-500 hover:text-gray-700">초기화</a>
+    {% endif %}
+  </form>
+</div>
+
+<!-- 품목 목록 -->
+{% if items %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <!-- 모바일: 카드 -->
+  <div class="divide-y divide-gray-100 sm:hidden">
+    {% for item in items %}
+    <a href="{{ url_for('catalog.item_detail', item_id=item.catalog_item_id) }}"
+       class="block p-4 hover:bg-gray-50">
+      <div class="flex items-start justify-between mb-1">
+        <span class="font-semibold text-gray-900 break-ko">{{ item.name_canonical }}</span>
+        {% if item.unit_std %}
+        <span class="text-xs text-gray-500 ml-2 whitespace-nowrap">/ {{ item.unit_std }}</span>
+        {% endif %}
+      </div>
+      <div class="text-xs text-gray-500">{{ item.category_name or '미분류' }}</div>
+      {% if item.spec_template %}
+      <div class="text-xs text-gray-400 mt-0.5 break-ko">{{ item.spec_template[:40] }}...</div>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  <!-- 데스크톱: 테이블 -->
+  <table class="hidden sm:table w-full text-sm">
+    <thead class="bg-gray-50 text-xs text-gray-600 uppercase">
+      <tr>
+        <th class="text-left px-4 py-3">품목명</th>
+        <th class="text-left px-4 py-3">카테고리</th>
+        <th class="text-left px-4 py-3">규격 템플릿</th>
+        <th class="text-left px-4 py-3">별칭</th>
+        <th class="text-center px-4 py-3">단위</th>
+        {% if has_role('manager') %}
+        <th class="text-center px-4 py-3">수정</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+    {% for item in items %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-4 py-3 font-semibold">
+          <a href="{{ url_for('catalog.item_detail', item_id=item.catalog_item_id) }}"
+             class="text-blue-700 hover:underline break-ko">{{ item.name_canonical }}</a>
+        </td>
+        <td class="px-4 py-3 text-gray-600 break-ko">{{ item.category_name or '—' }}</td>
+        <td class="px-4 py-3 text-xs text-gray-500 max-w-xs break-ko">
+          {{ item.spec_template or '—' }}
+        </td>
+        <td class="px-4 py-3 text-xs text-gray-500">
+          {% if item.aliases and item.aliases != '[]' %}
+            {% set alias_list = item.aliases | fromjson %}
+            {{ alias_list[:2] | join(', ') }}{% if alias_list|length > 2 %} +{{ alias_list|length - 2 }}{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="px-4 py-3 text-center text-gray-500">{{ item.unit_std or '—' }}</td>
+        {% if has_role('manager') %}
+        <td class="px-4 py-3 text-center">
+          <a href="{{ url_for('catalog.edit_item', item_id=item.catalog_item_id) }}"
+             class="text-xs text-blue-600 hover:text-blue-800">수정</a>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
+  <div class="text-4xl mb-3">📦</div>
+  <p class="text-gray-500 break-ko mb-4">
+    {% if q or selected_category %}검색 결과가 없습니다.{% else %}아직 등록된 품목이 없습니다.{% endif %}
+  </p>
+  {% if has_role('manager') and not q %}
+  <a href="{{ url_for('catalog.new_item') }}"
+     class="inline-block bg-blue-700 hover:bg-blue-800 text-white font-semibold
+            px-6 py-2.5 rounded-lg text-sm break-ko">
+    첫 품목 등록하기
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

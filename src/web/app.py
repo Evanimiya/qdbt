@@ -30,14 +30,25 @@ def create_app():
     app.permanent_session_lifetime = timedelta(hours=8)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
+    # ── 커스텀 Jinja2 필터 ─────────────────────────
+    import json as _json
+
+    @app.template_filter("fromjson")
+    def fromjson_filter(value):
+        try:
+            return _json.loads(value or "[]")
+        except Exception:
+            return []
+
     # ── Blueprint 등록 ──────────────────────────
-    from web.blueprints.auth     import bp as auth_bp
-    from web.blueprints.projects  import bp as proj_bp
-    from web.blueprints.bids      import bp as bid_bp
+    from web.blueprints.auth      import bp as auth_bp
+    from web.blueprints.projects   import bp as proj_bp
+    from web.blueprints.bids       import bp as bid_bp
     from web.blueprints.submissions import bp as sub_bp
-    from web.blueprints.compare   import bp as cmp_bp
-    from web.blueprints.admin     import bp as admin_bp
-    from web.blueprints.profile   import bp as profile_bp
+    from web.blueprints.compare    import bp as cmp_bp
+    from web.blueprints.admin      import bp as admin_bp
+    from web.blueprints.profile    import bp as profile_bp
+    from web.blueprints.catalog    import bp as catalog_bp
 
     app.register_blueprint(auth_bp,    url_prefix="/auth")
     app.register_blueprint(proj_bp,    url_prefix="/")
@@ -46,6 +57,7 @@ def create_app():
     app.register_blueprint(cmp_bp,     url_prefix="/compare")
     app.register_blueprint(admin_bp,   url_prefix="/admin")
     app.register_blueprint(profile_bp, url_prefix="/profile")
+    app.register_blueprint(catalog_bp, url_prefix="/catalog")
 
     # ── 템플릿 전역 변수 ────────────────────────
     @app.context_processor
