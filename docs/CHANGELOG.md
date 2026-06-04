@@ -6,6 +6,50 @@
 
 ---
 
+## [v0.6.0-test] - 2026-06-04
+
+### Phase 2-B: LLM 카탈로그 매칭 + 가격 이력
+
+#### 추가 (Added)
+- **`src/extractors/matcher.py`** — 카탈로그 매칭 LLM 모듈
+  - `build_match_input()` — 라인 아이템 + 카탈로그를 LLM 입력 텍스트로 구성
+  - `run_llm_matching()` — LLM으로 매칭 추천 실행 (provider 무관)
+  - `save_match_suggestions()` — 추천 결과를 DB에 저장 (match_status='suggested')
+  - `confirm_match()` — 담당자 확정 처리 → price_history 자동 생성
+- **`src/web/templates/submissions/match.html`** — 매칭 검수 화면
+  - 현황 통계 (전체/추천/확정/미매칭)
+  - 라인 아이템별 드롭다운으로 카탈로그 품목 선택/변경
+  - 신뢰도 % 표시 (색상 구분)
+  - 전체 확정 버튼 + 개별 확정
+
+#### 변경 (Changed)
+- **`src/db/queries.py`** — 매칭 관련 쿼리 추가
+  - `get_match_summary()` — 제출서 매칭 현황 (pending/suggested/confirmed/unmatched)
+  - `get_items_with_match()` — 매칭 정보 포함 라인 아이템 목록
+  - `get_price_history()` — 품목별 가격 이력 조회
+- **`src/web/blueprints/submissions.py`** — 매칭 라우트 추가
+  - `POST /submissions/<id>/match` (action=run_match) — LLM 매칭 실행
+  - `GET  /submissions/<id>/match` — 검수 화면
+  - `POST /submissions/<id>/match/confirm` — 확정 처리
+- **`src/web/templates/submissions/detail.html`** — 🔗 카탈로그 매칭 버튼 추가
+- **`src/web/blueprints/catalog.py`** — item_detail에 price_history 전달
+- **`src/web/templates/catalog/item_detail.html`** — 가격 이력 테이블 표시 (확정 후 자동)
+
+#### 전체 흐름
+```
+파일 업로드 → 추출 완료
+    ↓ "🔗 카탈로그 매칭" 버튼
+LLM이 라인 아이템 ↔ 카탈로그 품목 매칭 추천
+    ↓
+담당자가 검수 화면에서 확정/변경/거부
+    ↓
+확정 시 price_history 자동 생성
+    ↓
+카탈로그 품목 상세에서 가격 이력 확인 가능
+```
+
+---
+
 ## [v0.5.0-test] - 2026-06-04
 
 ### Phase 2-A: 품목 카탈로그 관리

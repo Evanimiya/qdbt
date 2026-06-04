@@ -113,8 +113,98 @@ def items_json(submission_id):
     return jsonify([dict(i) for i in items])
 
 
-@bp.route("/<submission_id>/delete", methods=["POST"])
+@bp.route("/<submission_id>/match", methods=["GET", "POST"])
 @require_role("manager")
+def match(submission_id):
+    """LLM 매칭 실행 + 검수 화면"""
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+
+    from db.queries import (get_items_with_match, get_match_summary,
+                             get_user_llm_settings, list_catalog_items)
+    from config import DB_PATH
+    import sqlite3
+
+    if request.method == "POST" and request.form.get("action") == "run_match":
+        # LLM 매칭 실행
+        llm = get_user_llm_settings(session.get("user_id", ""))
+        if not llm["api_key"]:
+            flash("API 키가 설정되지 않았습니다. 프로필에서 설정하세요.", "error")
+            return redirect(url_for("submissions.match", submission_id=submission_id))
+
+        try:
+            from extractors.matcher import run_llm_matching, save_match_suggestions
+            items_raw = get_items(submission_id)
+            catalog_raw = list_catalog_items()
+
+            # sqlite3.Row → dict 변환
+            items = [dict(i) for i in items_raw]
+            catalog = [dict(c) for c in catalog_raw]
+
+            matches = run_llm_matching(
+                items, catalog,
+                api_key=llm["api_key"],
+                provider_id=llm["provider"],
+                model=llm["model"],
+            )
+
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            save_match_suggestions(conn, matches)
+            conn.close()
+
+            n_matched = sum(1 for m in matches if m.get("catalog_item_id"))
+            flash(
+                f"✅ LLM 매칭 완료 — {len(matches)}개 중 {n_matched}개 매칭 추천. "
+                "아래에서 검수 후 확정하세요.",
+                "success"
+            )
+        except Exception as e:
+            flash(f"❌ 매칭 실패: {e}", "error")
+
+        return redirect(url_for("submissions.match", submission_id=submission_id))
+
+    # GET: 검수 화면
+    items = get_items_with_match(submission_id)
+    summary = get_match_summary(submission_id)
+    catalog_all = list_catalog_items()
+
+    return render_template("submissions/match.html",
+                           sub=sub, items=items,
+                           summary=summary, catalog_all=catalog_all)
+
+
+@bp.route("/<submission_id>/match/confirm", methods=["POST"])
+@require_role("manager")
+def confirm_match(submission_id):
+    """매칭 확정 처리 (담당자가 개별 또는 전체 확정)"""
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+
+    from extractors.matcher import confirm_match as do_confirm
+    from config import DB_PATH
+    import sqlite3
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # 폼 데이터: item_id별 catalog_item_id
+    confirmed_count = 0
+    form = request.form.to_dict()
+
+    for key, value in form.items():
+        if key.startswith("item_"):
+            item_id = key[5:]  # "item_" 제거
+            catalog_item_id = value if value else None
+            do_confirm(conn, item_id, catalog_item_id, submission_id)
+            confirmed_count += 1
+
+    conn.close()
+
+    flash(f"✅ {confirmed_count}개 항목 매칭이 확정되었습니다.", "success")
+    return redirect(url_for("submissions.match", submission_id=submission_id))
 def delete(submission_id):
     sub = get_submission(submission_id)
     if not sub:

@@ -86,13 +86,17 @@ def item_detail(item_id):
     item = get_catalog_item(item_id)
     if not item:
         abort(404)
-    # aliases JSON 파싱
     try:
         aliases = json.loads(item["aliases"] or "[]")
     except Exception:
         aliases = []
+
+    from db.queries import get_price_history
+    price_history = get_price_history(item_id)
+
     return render_template("catalog/item_detail.html",
-                           item=item, aliases=aliases)
+                           item=item, aliases=aliases,
+                           price_history=price_history)
 
 
 @bp.route("/items/<item_id>/edit", methods=["GET", "POST"])

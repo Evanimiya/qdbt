@@ -617,3 +617,53 @@ def catalog_stats():
         ).fetchone()[0]
         return {"n_items": n_items, "n_categories": n_cats, "n_matched": n_matched}
 
+
+# ─── 매칭 관련 ───────────────────────────────────
+
+def get_match_summary(submission_id: str) -> dict:
+    """제출서의 매칭 현황 요약"""
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT match_status, COUNT(*) as cnt
+            FROM submission_items
+            WHERE submission_id = ? AND is_header = 0
+            GROUP BY match_status
+        """, (submission_id,)).fetchall()
+    total = sum(r["cnt"] for r in rows)
+    status_map = {r["match_status"]: r["cnt"] for r in rows}
+    return {
+        "total":      total,
+        "pending":    status_map.get("pending", 0),
+        "suggested":  status_map.get("suggested", 0),
+        "confirmed":  status_map.get("confirmed", 0),
+        "unmatched":  status_map.get("unmatched", 0),
+    }
+
+
+def get_items_with_match(submission_id: str) -> list:
+    """매칭 정보 포함된 라인 아이템 목록"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT si.*,
+                   ci.name_canonical as catalog_name,
+                   ci.unit_std as catalog_unit,
+                   cc.name as catalog_category
+            FROM submission_items si
+            LEFT JOIN catalog_items ci ON si.catalog_item_id = ci.catalog_item_id
+            LEFT JOIN catalog_categories cc ON ci.category_id = cc.category_id
+            WHERE si.submission_id = ? AND si.is_header = 0
+            ORDER BY si.sort_order
+        """, (submission_id,)).fetchall()
+
+
+def get_price_history(catalog_item_id: str) -> list:
+    """품목의 가격 이력 조회"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT ph.*, s.vendor_name
+            FROM price_history ph
+            JOIN submissions s USING (submission_id)
+            WHERE ph.catalog_item_id = ?
+            ORDER BY ph.bid_date DESC, s.vendor_name
+        """, (catalog_item_id,)).fetchall()
+
