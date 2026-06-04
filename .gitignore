@@ -56,3 +56,5 @@ Thumbs.db
 .replit_cache/
 poetry.lock
 .upm/
+.DS_Store
+**/.DS_Store
