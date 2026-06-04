@@ -31,28 +31,35 @@ def create_app():
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
     # ── Blueprint 등록 ──────────────────────────
-    from web.blueprints.auth   import bp as auth_bp
-    from web.blueprints.projects import bp as proj_bp
-    from web.blueprints.bids   import bp as bid_bp
+    from web.blueprints.auth     import bp as auth_bp
+    from web.blueprints.projects  import bp as proj_bp
+    from web.blueprints.bids      import bp as bid_bp
     from web.blueprints.submissions import bp as sub_bp
-    from web.blueprints.compare import bp as cmp_bp
-    from web.blueprints.admin  import bp as admin_bp
+    from web.blueprints.compare   import bp as cmp_bp
+    from web.blueprints.admin     import bp as admin_bp
+    from web.blueprints.profile   import bp as profile_bp
 
-    app.register_blueprint(auth_bp,  url_prefix="/auth")
-    app.register_blueprint(proj_bp,  url_prefix="/")
-    app.register_blueprint(bid_bp,   url_prefix="/bids")
-    app.register_blueprint(sub_bp,   url_prefix="/submissions")
-    app.register_blueprint(cmp_bp,   url_prefix="/compare")
-    app.register_blueprint(admin_bp, url_prefix="/admin")
+    app.register_blueprint(auth_bp,    url_prefix="/auth")
+    app.register_blueprint(proj_bp,    url_prefix="/")
+    app.register_blueprint(bid_bp,     url_prefix="/bids")
+    app.register_blueprint(sub_bp,     url_prefix="/submissions")
+    app.register_blueprint(cmp_bp,     url_prefix="/compare")
+    app.register_blueprint(admin_bp,   url_prefix="/admin")
+    app.register_blueprint(profile_bp, url_prefix="/profile")
 
     # ── 템플릿 전역 변수 ────────────────────────
     @app.context_processor
     def inject_globals():
         from auth.auth import current_user, is_logged_in, has_role
+        from db.queries import get_user_llm_settings
+
+        uid = session.get("user_id", "")
+        llm = get_user_llm_settings(uid) if uid else {}
+
         return {
             "app_version":   VERSION,
             "app_status":    STATUS,
-            "api_available": bool(ANTHROPIC_API_KEY),
+            "api_available": bool(llm.get("api_key")),
             "current_user":  current_user(),
             "is_logged_in":  is_logged_in(),
             "has_role":      has_role,

@@ -43,20 +43,24 @@ PRAGMA journal_mode = WAL;
 -- ═══════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS users (
-    user_id     TEXT PRIMARY KEY,          -- UUID
-    email       TEXT NOT NULL UNIQUE,
-    name        TEXT NOT NULL,
-    dept        TEXT,
-    role        TEXT NOT NULL DEFAULT 'viewer-summary',
-                    -- admin          : 전체 관리
-                    -- manager        : 업로드/편집, 전체 데이터 접근
-                    -- viewer-detail  : 라인 아이템(단가/수량) 조회 가능
-                    -- viewer-summary : 프로젝트/입찰 합계만 조회
+    user_id       TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    dept          TEXT,
+    role          TEXT NOT NULL DEFAULT 'viewer-summary',
+                      -- admin | manager | viewer-detail | viewer-summary
     password_hash TEXT NOT NULL,
-    is_active   INTEGER NOT NULL DEFAULT 1,
-    last_login  TIMESTAMP,
-    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    -- LLM 설정: provider + 모델 + API 키 (사용자별 독립)
+    llm_provider      TEXT NOT NULL DEFAULT 'claude',
+                          -- 'claude' | 'gpt' | (향후 추가 가능)
+    llm_model         TEXT,
+                          -- NULL이면 provider 기본 모델 사용
+    llm_api_key_enc   TEXT,
+                          -- Fernet 암호화 저장, NULL이면 미설정
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    last_login    TIMESTAMP,
+    created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ═══════════════════════════════════════════
@@ -256,6 +260,50 @@ def init_db(db_path=None, reset=False):
     return path
 
 
+def migrate_db(db_path=None):
+    """
+    기존 DB를 새 스키마로 마이그레이션.
+    anthropic_api_key_enc → llm_api_key_enc 컬럼명 변경 등.
+    이미 최신이면 무시.
+    """
+    path = Path(db_path) if db_path else DB_PATH
+    if not path.exists():
+        return
+
+    conn = sqlite3.connect(path)
+    cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+
+    migrations = []
+
+    # anthropic_api_key_enc → llm_api_key_enc 마이그레이션
+    if "anthropic_api_key_enc" in cols and "llm_api_key_enc" not in cols:
+        migrations.append("ALTER TABLE users ADD COLUMN llm_api_key_enc TEXT")
+        migrations.append(
+            "UPDATE users SET llm_api_key_enc = anthropic_api_key_enc "
+            "WHERE anthropic_api_key_enc IS NOT NULL"
+        )
+
+    # llm_provider, llm_model 컬럼 추가
+    if "llm_provider" not in cols:
+        migrations.append("ALTER TABLE users ADD COLUMN llm_provider TEXT NOT NULL DEFAULT 'claude'")
+    if "llm_model" not in cols:
+        migrations.append("ALTER TABLE users ADD COLUMN llm_model TEXT")
+
+    for sql in migrations:
+        conn.execute(sql)
+        print(f"  [마이그레이션] {sql[:60]}...")
+
+    conn.commit()
+    conn.close()
+    if migrations:
+        print(f"  [완료] {len(migrations)}개 마이그레이션 적용")
+    else:
+        print("  [완료] 마이그레이션 불필요 (이미 최신)")
+
+
 if __name__ == "__main__":
-    init_db(reset="--reset" in sys.argv)
+    if "--migrate" in sys.argv:
+        migrate_db()
+    else:
+        init_db(reset="--reset" in sys.argv)
     print(f"  DB: {DB_PATH}")

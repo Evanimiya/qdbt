@@ -376,7 +376,7 @@ def cross_project_price(name_query):
 
 # ─── 사용자 ────────────────────────────────────
 
-def create_user(email, name, role="viewer", dept=None, password_hash=""):
+def create_user(email, name, role="viewer-summary", dept=None, password_hash=""):
     uid = new_id()
     with get_conn() as c:
         c.execute("""
@@ -384,6 +384,65 @@ def create_user(email, name, role="viewer", dept=None, password_hash=""):
             VALUES (?, ?, ?, ?, ?, ?)
         """, (uid, email, name, dept, role, password_hash))
     return uid
+
+
+def save_user_api_key(user_id: str, plain_key: str):
+    """사용자의 LLM API 키를 암호화하여 저장"""
+    from auth.crypto import encrypt_api_key
+    enc = encrypt_api_key(plain_key.strip()) if plain_key.strip() else ""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE users SET llm_api_key_enc = ?, updated_at = ?
+            WHERE user_id = ?
+        """, (enc or None, datetime.now().isoformat(), user_id))
+
+
+def get_user_api_key(user_id: str) -> str:
+    """사용자의 LLM API 키를 복호화하여 반환 (없으면 '')"""
+    from auth.crypto import decrypt_api_key
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT llm_api_key_enc FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    if not row or not row[0]:
+        return ""
+    return decrypt_api_key(row[0])
+
+
+def save_user_llm_settings(user_id: str, provider: str,
+                            model: str = None, plain_key: str = None):
+    """사용자의 LLM provider + model + API 키를 저장"""
+    from auth.crypto import encrypt_api_key
+    updates = {
+        "llm_provider": provider,
+        "llm_model":    model or None,
+        "updated_at":   datetime.now().isoformat(),
+    }
+    if plain_key is not None:
+        updates["llm_api_key_enc"] = (
+            encrypt_api_key(plain_key.strip()) if plain_key.strip() else None
+        )
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    with get_conn() as c:
+        c.execute(f"UPDATE users SET {sets} WHERE user_id = ?",
+                  list(updates.values()) + [user_id])
+
+
+def get_user_llm_settings(user_id: str) -> dict:
+    """사용자의 LLM 설정 전체 반환"""
+    from auth.crypto import decrypt_api_key
+    with get_conn() as c:
+        row = c.execute("""
+            SELECT llm_provider, llm_model, llm_api_key_enc
+            FROM users WHERE user_id = ?
+        """, (user_id,)).fetchone()
+    if not row:
+        return {"provider": "claude", "model": None, "api_key": ""}
+    return {
+        "provider": row[0] or "claude",
+        "model":    row[1],
+        "api_key":  decrypt_api_key(row[2]) if row[2] else "",
+    }
 
 
 def get_user_by_email(email):

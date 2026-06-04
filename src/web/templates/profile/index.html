@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}내 프로필 · QDBT{% endblock %}
+
+{% block content %}
+<div class="max-w-xl">
+  <h1 class="text-xl font-bold text-gray-900 mb-6 break-ko">⚙ 내 프로필</h1>
+
+  <!-- 기본 정보 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-5">
+    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">기본 정보</h2>
+    <div class="space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-gray-500">이름</span>
+        <span class="font-semibold">{{ user.name }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">이메일</span>
+        <span>{{ user.email }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">부서</span>
+        <span>{{ user.dept or '—' }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">권한</span>
+        <span class="px-2 py-0.5 rounded-full text-xs
+          {% if user.role=='admin' %}bg-red-100 text-red-700
+          {% elif user.role=='manager' %}bg-blue-100 text-blue-700
+          {% elif user.role=='viewer-detail' %}bg-purple-100 text-purple-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ user.role }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM 설정 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">LLM 설정</h2>
+    <p class="text-xs text-gray-500 mb-4 break-ko">
+      파일 업로드 시 자동 추출에 사용됩니다. API 키는 암호화되어 본인만 사용합니다.
+    </p>
+
+    <!-- 현재 상태 -->
+    {% if masked_key %}
+    <div class="flex items-center justify-between bg-green-50 border border-green-200
+                rounded-lg px-4 py-3 mb-5">
+      <div class="text-sm">
+        <div class="text-xs text-green-600 font-semibold mb-0.5">✅ 설정됨</div>
+        <div class="font-semibold text-gray-800">
+          {{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='name') | first | default(llm.provider) }}
+          {% if llm.model %}<span class="text-xs text-gray-500 ml-1">/ {{ llm.model }}</span>{% endif %}
+        </div>
+        <div class="font-mono text-xs text-gray-500 mt-0.5">{{ masked_key }}</div>
+      </div>
+      <form method="POST" action="{{ url_for('profile.delete_api_key') }}"
+            onsubmit="return confirm('API 키를 삭제하시겠습니까?');">
+        <button class="text-xs text-red-600 hover:text-red-800 font-semibold">삭제</button>
+      </form>
+    </div>
+    {% else %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-5">
+      <div class="text-xs text-yellow-700 font-semibold">⚠️ 미설정</div>
+      <div class="text-xs text-yellow-600 mt-0.5 break-ko">API 키를 설정해야 파일 업로드 후 자동 추출이 가능합니다.</div>
+    </div>
+    {% endif %}
+
+    <!-- 설정 폼 -->
+    <form method="POST" action="{{ url_for('profile.save_llm') }}" id="llmForm">
+
+      <!-- Provider 선택 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-2">LLM Provider</label>
+        <div class="grid grid-cols-2 gap-2" id="providerCards">
+          {% for p in providers %}
+          <label class="cursor-pointer">
+            <input type="radio" name="provider" value="{{ p.id }}"
+                   class="sr-only peer"
+                   {% if llm.provider == p.id %}checked{% endif %}
+                   onchange="onProviderChange('{{ p.id }}', '{{ p.key_prefix }}', {{ p.models | tojson }})">
+            <div class="border-2 rounded-lg p-3 text-sm text-center transition-all
+                        peer-checked:border-blue-600 peer-checked:bg-blue-50
+                        border-gray-200 hover:border-blue-300">
+              <div class="font-semibold text-gray-900">{{ p.name }}</div>
+              <div class="text-xs text-gray-500 mt-0.5">{{ p.key_prefix }}...</div>
+            </div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- 모델 선택 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          모델 <span class="text-xs font-normal text-gray-400">(선택 — 비워두면 기본값 사용)</span>
+        </label>
+        <select name="model" id="modelSelect"
+                class="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                       focus:ring-2 focus:ring-blue-500">
+          <option value="">자동 (기본값)</option>
+          {% for p in providers %}
+            {% if llm.provider == p.id %}
+              {% for model_id, model_name in p.models %}
+              <option value="{{ model_id }}"
+                      {% if llm.model == model_id %}selected{% endif %}>
+                {{ model_name }}
+              </option>
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- API 키 -->
+      <div class="mb-5">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          API 키
+          {% if masked_key %}<span class="text-xs font-normal text-gray-400">(변경 시에만 입력)</span>{% endif %}
+        </label>
+        <input type="password" name="api_key" id="apiKeyInput"
+               placeholder="{{ llm.provider | upper }} API 키 ({{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='key_prefix') | first | default('sk-') }}...)"
+               autocomplete="off"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500 font-mono text-sm">
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          키는 입력 즉시 암호화 저장됩니다.
+          <a href="https://console.anthropic.com/settings/keys" target="_blank"
+             id="keyLink" class="text-blue-600 hover:underline">키 발급 →</a>
+        </p>
+      </div>
+
+      <button type="submit"
+              class="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                     py-2.5 rounded-lg transition-colors text-sm">
+        저장
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Provider별 모델 목록 (서버에서 전달)
+const PROVIDERS = {{ providers | tojson }};
+const KEY_LINKS = {
+  'claude': 'https://console.anthropic.com/settings/keys',
+  'gpt':    'https://platform.openai.com/api-keys',
+};
+
+function onProviderChange(providerId, keyPrefix, models) {
+  // 모델 선택 드롭다운 업데이트
+  const sel = document.getElementById('modelSelect');
+  sel.innerHTML = '<option value="">자동 (기본값)</option>';
+  models.forEach(([id, name]) => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+
+  // API 키 placeholder 업데이트
+  document.getElementById('apiKeyInput').placeholder =
+    `${providerId.toUpperCase()} API 키 (${keyPrefix}...)`;
+
+  // 키 발급 링크 업데이트
+  const link = document.getElementById('keyLink');
+  if (KEY_LINKS[providerId]) link.href = KEY_LINKS[providerId];
+}
+</script>
+{% endblock %}

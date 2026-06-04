@@ -16,15 +16,24 @@ from auth.auth import hash_password
 
 
 def bootstrap():
-    """첫 실행 시 DB 초기화 + 기본 관리자 계정 생성"""
+    """첫 실행 시 DB 초기화 + 마이그레이션 + 기본 관리자 계정 생성"""
     from config import DB_PATH
+    from db.schema import init_db, migrate_db
+
     if not DB_PATH.exists():
         print("  DB 초기화 중...")
         init_db()
+    else:
+        # 기존 DB 마이그레이션 (컬럼 추가 등)
+        migrate_db()
 
         # 기본 admin 계정 (운영 전 반드시 변경)
         admin_email = os.environ.get("ADMIN_EMAIL", "admin@company.com")
-        admin_pass  = os.environ.get("ADMIN_PASSWORD", "admin1234!")
+        admin_pass  = os.environ.get("ADMIN_PASSWORD", "")
+        if not admin_pass:
+            print("  ⚠️  ADMIN_PASSWORD 환경변수를 설정하세요.")
+            print("     export ADMIN_PASSWORD=your-secure-password")
+            admin_pass = "changeme!"  # 첫 로그인 후 반드시 변경
         if not get_user_by_email(admin_email):
             create_user(
                 email=admin_email, name="관리자",

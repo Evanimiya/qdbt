@@ -6,6 +6,81 @@
 
 ---
 
+## [v0.4.0-test] - 2026-06-04
+
+### LLM Provider 추상화 (Claude + GPT, 향후 확장 가능)
+
+#### 추가 (Added)
+- **`src/extractors/llm_provider.py`** — 추상 인터페이스 (`LLMProvider`, `LLMProviderError`)
+- **`src/extractors/providers/claude.py`** — Anthropic Claude 구현
+- **`src/extractors/providers/gpt.py`** — OpenAI GPT 구현
+- **`src/extractors/providers/__init__.py`** — Provider 레지스트리 (`PROVIDERS`, `get_provider()`, `list_providers()`)
+- **`docs/LLM_PROVIDER_DESIGN.md`** — 설계 문서
+
+#### 변경 (Changed)
+- **`src/extractors/llm_extractor.py`** — provider 추상화로 완전 교체
+  - `extract_with_llm(provider_id=, model=)` 파라미터 추가
+  - provider 무관 동일 인터페이스 유지
+- **`src/extractors/pipeline.py`** — `provider_id`, `model` 파라미터 추가
+- **`src/db/schema.py`** — users 테이블 변경
+  - `anthropic_api_key_enc` → `llm_api_key_enc` (provider 무관)
+  - `llm_provider TEXT DEFAULT 'claude'` 추가
+  - `llm_model TEXT` 추가
+  - `migrate_db()` 함수 추가 (기존 DB 자동 마이그레이션)
+- **`src/db/queries.py`** — `save_user_llm_settings()`, `get_user_llm_settings()` 추가
+- **`src/web/blueprints/profile.py`** — provider 선택 UI 로직
+- **`src/web/templates/profile/index.html`** — provider 선택 카드 UI + 모델 드롭다운 (JS 동적 변경)
+- **`src/web/blueprints/submissions.py`** — LLM 설정 전체(provider+model+key) 전달
+- **`src/web/app.py`** — `get_user_llm_settings()` 기반으로 변경
+- **`main.py`** — 시작 시 `migrate_db()` 자동 실행
+- **`requirements.txt`** — `openai>=1.30.0` 추가
+
+#### 향후 모델 추가 방법
+```
+1. src/extractors/providers/gemini.py 생성
+2. GeminiProvider(LLMProvider) 구현
+3. providers/__init__.py PROVIDERS에 등록
+→ 기존 코드 수정 없음
+```
+
+---
+
+## [v0.3.2-test] - 2026-06-04
+
+### 사용자별 Anthropic API 키 관리
+
+#### 추가 (Added)
+- **`src/auth/crypto.py`** — API 키 암호화/복호화 유틸
+  - Fernet 대칭키 암호화 (cryptography 라이브러리)
+  - 없으면 base64 fallback (개발 환경용)
+  - `encrypt_api_key()`, `decrypt_api_key()`, `mask_api_key()`
+- **`src/web/blueprints/profile.py`** — 프로필 Blueprint
+  - `GET /profile/` — 내 정보 + API 키 설정 화면
+  - `POST /profile/api-key` — API 키 저장 (sk-ant- 형식 검증)
+  - `POST /profile/api-key/delete` — API 키 삭제
+- **`src/web/templates/profile/index.html`** — 프로필 화면
+  - 현재 키 상태 (설정됨/미설정) + 마스킹 표시
+  - 키 입력 폼 (암호화 저장)
+
+#### 변경 (Changed)
+- **`src/db/schema.py`** — `users` 테이블에 `anthropic_api_key_enc` 컬럼 추가
+- **`src/db/queries.py`** — `save_user_api_key()`, `get_user_api_key()` 함수 추가
+- **`src/extractors/llm_extractor.py`** — `api_key` 파라미터 추가 (사용자 키 우선)
+- **`src/extractors/pipeline.py`** — `run_extraction(api_key=)` 파라미터 추가
+- **`src/web/blueprints/submissions.py`** — 업로드 시 사용자 키 조회 후 LLM 전달
+- **`src/web/app.py`** — `api_available`을 사용자 개인 키 기준으로 변경
+- **`src/web/templates/base.html`** — 사이드바에 "⚙ 내 프로필 / API 키" 메뉴 추가
+- **`src/web/templates/submissions/upload.html`** — 키 미설정 시 프로필로 안내
+- **`requirements.txt`** — `cryptography>=42.0.0` 추가
+
+#### 설계 원칙
+- 환경변수(`ANTHROPIC_API_KEY`) 의존성 완전 제거
+- 각 사용자가 본인 키를 프로필에서 입력 → Fernet 암호화 저장
+- 파일 업로드 시 업로드한 사용자의 키로 LLM 호출
+- 키 미설정 사용자는 업로드 불가 (프로필 설정 안내)
+
+---
+
 ## [v0.3.1-test] - 2026-06-04
 
 ### 보안 설계 반영 (구조만, UI는 Phase 2)

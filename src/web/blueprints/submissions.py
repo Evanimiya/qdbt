@@ -52,11 +52,13 @@ def upload(bid_id):
 
     try:
         from extractors.pipeline import save_upload, run_extraction, PipelineError
+        from db.queries import get_user_llm_settings
 
-        # 파일 영구 저장
+        # 업로드한 사용자의 LLM 설정 조회 (provider + model + api_key)
+        llm = get_user_llm_settings(session.get("user_id", ""))
+
         saved = save_upload(tmp_path, file.filename)
 
-        # DB 레코드 생성 (pending)
         sid = create_submission(
             bid_id=bid_id,
             vendor_name=vendor_name,
@@ -66,8 +68,12 @@ def upload(bid_id):
             uploaded_by=session.get("user_id"),
         )
 
-        # 추출 실행 (동기)
-        result = run_extraction(sid, saved, vendor_name)
+        result = run_extraction(
+            sid, saved, vendor_name,
+            api_key=llm["api_key"],
+            provider_id=llm["provider"],
+            model=llm["model"],
+        )
 
         flash(
             f"✅ '{vendor_name}' 제출서가 처리되었습니다. "

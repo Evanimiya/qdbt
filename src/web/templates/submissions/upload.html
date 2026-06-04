@@ -19,10 +19,15 @@
   <!-- API 키 경고 -->
   {% if not api_available %}
   <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-5">
-    <p class="text-sm font-semibold text-red-800 break-ko">⚠️ Anthropic API 키 미설정</p>
+    <p class="text-sm font-semibold text-red-800 break-ko">⚠️ API 키 미설정</p>
     <p class="text-xs text-red-700 mt-1 break-ko">
-      Replit Secrets에 <code class="bg-red-100 px-1 rounded">ANTHROPIC_API_KEY</code>를 추가하세요.
+      파일 업로드 후 자동 추출에는 Anthropic API 키가 필요합니다.
     </p>
+    <a href="{{ url_for('profile.index') }}"
+       class="inline-block mt-2 text-xs bg-red-100 hover:bg-red-200 text-red-800
+              font-semibold px-3 py-1.5 rounded-lg transition-colors break-ko">
+      ⚙ 프로필에서 API 키 설정하기 →
+    </a>
   </div>
   {% endif %}
 

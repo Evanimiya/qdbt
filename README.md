@@ -30,13 +30,14 @@ cd qdbt
 # 2. 의존성 설치
 pip install -r requirements.txt
 
-# 3. API 키 설정
+# 3. 환경변수 설정
 export ANTHROPIC_API_KEY=sk-ant-...
+export ADMIN_EMAIL=admin@yourcompany.com
+export ADMIN_PASSWORD=your-secure-password
 
 # 4. 실행
 python main.py
 # → http://localhost:5000
-# → 초기 로그인: admin@company.com / admin1234!
 ```
 
 ## Replit에서 실행

@@ -58,27 +58,35 @@ def parse_file(file_path: Path) -> tuple[str, str]:
     return suffix.lstrip("."), parser(str(file_path))
 
 
-def run_extraction(submission_id: str, file_path: Path, vendor_name: str) -> dict:
+def run_extraction(submission_id: str, file_path: Path,
+                   vendor_name: str, api_key: str = "",
+                   provider_id: str = "claude", model: str = None) -> dict:
     """
     파일 처리 전체 실행.
 
-    submission의 extraction_status를 단계별로 업데이트:
-      pending → processing → done (또는 failed)
+    Args:
+        submission_id: DB submission ID
+        file_path:     저장된 파일 경로
+        vendor_name:   업체명
+        api_key:       사용자 API 키
+        provider_id:   LLM provider ('claude' | 'gpt' | ...)
+        model:         모델 지정 (None이면 provider 기본값)
     """
     try:
         update_submission(submission_id, extraction_status="processing")
 
-        # 파싱
         fmt, parsed_text = parse_file(file_path)
 
-        if not is_api_available():
+        if not is_api_available(api_key):
             raise PipelineError(
-                "ANTHROPIC_API_KEY가 설정되지 않았습니다. "
-                "Replit Secrets에 키를 추가하세요."
+                "API 키가 설정되지 않았습니다. "
+                "프로필(⚙ 내 프로필)에서 API 키를 입력하세요."
             )
 
-        # LLM 추출
-        extraction = extract_with_validation(parsed_text, vendor_name=vendor_name)
+        extraction = extract_with_validation(
+            parsed_text, vendor_name=vendor_name,
+            api_key=api_key, provider_id=provider_id, model=model,
+        )
 
         # 추출 JSON 저장
         ext_path = EXTRACT_DIR / f"{submission_id}.json"

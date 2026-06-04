@@ -8,8 +8,11 @@ Replit에서:
 1. 좌측 사이드바 → **Tools** → **Secrets** (자물쇠 아이콘)
 2. **New Secret** 클릭
 3. Key: `GITHUB_TOKEN`
-4. Value: `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`
+4. Value: 본인의 GitHub Personal Access Token (`ghp_...`)
 5. **Add Secret** 클릭
+
+> 토큰 발급: GitHub → Settings → Developer settings → Personal access tokens → Generate new token
+> 권한: **repo** 전체 체크
 
 ### Step 2: 첫 push (Replit Shell에서 한 번만 실행)
 

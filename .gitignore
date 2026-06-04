@@ -1,0 +1,58 @@
+# ─── 로컬 전용 스크립트 (개인 토큰/저장소 URL 포함) ──
+push.py
+gh_sync.py
+GITHUB_SETUP.md
+
+# ─── Python ───────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ─── 가상환경 ──────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ─── 환경변수 / 시크릿 ─────────────────────────
+.env
+.env.local
+*.key
+secrets/
+
+# ─── 데이터 (DB + 업로드 파일) ──────────────────
+# DB는 재생성 가능하므로 추적 안 함
+data/qdbt.db
+data/uploads/
+data/extractions/
+
+# 단, 샘플 데이터는 추적 (비어 있는 디렉토리 유지용 .gitkeep 포함)
+!data/uploads/.gitkeep
+!data/extractions/.gitkeep
+
+# ─── 생성물 ────────────────────────────────────
+output/
+*.xlsx
+*.pdf
+
+# ─── OS / IDE ──────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Replit ────────────────────────────────────
+.replit_cache/
+poetry.lock
+.upm/
