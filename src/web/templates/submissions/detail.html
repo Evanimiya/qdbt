@@ -15,24 +15,56 @@
   <div class="flex items-start justify-between flex-wrap gap-3 mb-3">
     <div>
       <h1 class="text-xl font-bold text-gray-900 break-ko">{{ sub.vendor_name }}</h1>
-      <p class="text-sm text-gray-500 break-ko">{{ sub.bid_name }} · {{ sub.file_name }}</p>
+      <p class="text-sm text-gray-500 break-ko">
+        {{ sub.bid_name }} ·
+        {% if sub.file_path %}
+        <a href="{{ url_for('submissions.download_file', submission_id=sub.submission_id) }}"
+           target="_blank" class="text-blue-600 hover:underline">{{ sub.file_name }}</a>
+        {% else %}
+        {{ sub.file_name }}
+        {% endif %}
+      </p>
     </div>
-    <div class="flex gap-2 flex-wrap">
+
+    <!-- 상태별 버튼 -->
+    <div class="flex gap-2 flex-wrap items-center">
+      {% if has_role('manager') and sub.extraction_status in ('pending', 'failed') %}
+      <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='추출 중...';">
+        <button type="submit"
+                class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
+          ▶ 추출 시작
+        </button>
+      </form>
+      {% endif %}
+
       {% if has_role('manager') and sub.extraction_status == 'done' %}
+      <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
+            onsubmit="return confirm('이미 추출된 데이터가 있습니다. 재추출하시겠습니까?') && (this.querySelector('button').disabled=true, true);">
+        <button type="submit"
+                class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
+          🔄 재추출
+        </button>
+      </form>
       <a href="{{ url_for('submissions.match', submission_id=sub.submission_id) }}"
          class="text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
                 px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
         🔗 카탈로그 매칭
       </a>
       {% endif %}
+
       <span class="text-xs px-2 py-1 rounded-full
         {% if sub.extraction_status=='done' %}bg-green-100 text-green-700
         {% elif sub.extraction_status=='failed' %}bg-red-100 text-red-700
-        {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+        {% elif sub.extraction_status=='processing' %}bg-yellow-100 text-yellow-700
+        {% else %}bg-gray-100 text-gray-500{% endif %}">
         {{ sub.extraction_status }}
       </span>
     </div>
   </div>
+
   <!-- 금액 요약 -->
   <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
     <div>
@@ -59,7 +91,6 @@
 <!-- 라인 아이템 테이블 -->
 <div class="flex items-center justify-between mb-3">
   <h2 class="text-base font-bold text-gray-900 break-ko">라인 아이템 ({{ items|length }}개)</h2>
-  <!-- 카테고리 필터 -->
   <select id="catFilter" onchange="filterTable()"
           class="text-sm border border-gray-300 rounded-lg px-2 py-1.5">
     <option value="">전체 카테고리</option>
@@ -115,6 +146,19 @@
     </tbody>
   </table>
 </div>
+
+<!-- 원본 파일 열기 -->
+{% if sub.file_path %}
+<div class="mt-4 text-right">
+  <a href="{{ url_for('submissions.download_file', submission_id=sub.submission_id) }}"
+     target="_blank"
+     class="inline-flex items-center gap-1.5 text-sm text-blue-700 hover:text-blue-900
+            bg-blue-50 hover:bg-blue-100 font-semibold px-4 py-2 rounded-lg transition-colors">
+    📄 원본 파일 열기 · {{ sub.file_name }}
+  </a>
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block scripts %}

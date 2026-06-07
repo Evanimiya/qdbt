@@ -117,11 +117,24 @@
           API 키
           {% if masked_key %}<span class="text-xs font-normal text-gray-400">(변경 시에만 입력)</span>{% endif %}
         </label>
-        <input type="password" name="api_key" id="apiKeyInput"
-               placeholder="{{ llm.provider | upper }} API 키 ({{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='key_prefix') | first | default('sk-') }}...)"
-               autocomplete="off"
-               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
-                      focus:ring-2 focus:ring-blue-500 font-mono text-sm">
+        <textarea name="api_key" id="apiKeyInput" rows="2"
+                  placeholder="{{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='key_prefix') | first | default('sk-') }}..."
+                  autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                  class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                         focus:ring-2 focus:ring-blue-500 font-mono text-xs resize-none"></textarea>
+        <div class="flex gap-2 mt-2">
+          <button type="button" onclick="pasteFromClipboard()"
+                  class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                         px-3 py-1.5 rounded-lg transition-colors">
+            📋 클립보드에서 붙여넣기
+          </button>
+          <button type="button" onclick="clearKey()"
+                  class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-500
+                         px-3 py-1.5 rounded-lg transition-colors">
+            지우기
+          </button>
+          <span id="pasteMsg" class="text-xs self-center"></span>
+        </div>
         <p class="text-xs text-gray-400 mt-1 break-ko">
           키는 입력 즉시 암호화 저장됩니다.
           <a href="https://console.anthropic.com/settings/keys" target="_blank"
@@ -141,7 +154,6 @@
 
 {% block scripts %}
 <script>
-// Provider별 모델 목록 (서버에서 전달)
 const PROVIDERS = {{ providers | tojson }};
 const KEY_LINKS = {
   'claude': 'https://console.anthropic.com/settings/keys',
@@ -149,7 +161,6 @@ const KEY_LINKS = {
 };
 
 function onProviderChange(providerId, keyPrefix, models) {
-  // 모델 선택 드롭다운 업데이트
   const sel = document.getElementById('modelSelect');
   sel.innerHTML = '<option value="">자동 (기본값)</option>';
   models.forEach(([id, name]) => {
@@ -158,14 +169,35 @@ function onProviderChange(providerId, keyPrefix, models) {
     opt.textContent = name;
     sel.appendChild(opt);
   });
-
-  // API 키 placeholder 업데이트
-  document.getElementById('apiKeyInput').placeholder =
-    `${providerId.toUpperCase()} API 키 (${keyPrefix}...)`;
-
-  // 키 발급 링크 업데이트
+  document.getElementById('apiKeyInput').placeholder = `${keyPrefix}...`;
   const link = document.getElementById('keyLink');
   if (KEY_LINKS[providerId]) link.href = KEY_LINKS[providerId];
+}
+
+async function pasteFromClipboard() {
+  const inp = document.getElementById('apiKeyInput');
+  const msg = document.getElementById('pasteMsg');
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && text.trim()) {
+      inp.value = text.trim();
+      msg.textContent = '✅ 붙여넣기 완료';
+      msg.className = 'text-xs self-center text-green-600';
+      inp.focus();
+    } else {
+      msg.textContent = '클립보드가 비어 있습니다';
+      msg.className = 'text-xs self-center text-yellow-600';
+    }
+  } catch (e) {
+    msg.textContent = '⚠️ 브라우저가 클립보드 접근을 막았습니다 — 직접 입력하세요';
+    msg.className = 'text-xs self-center text-red-600';
+  }
+}
+
+function clearKey() {
+  document.getElementById('apiKeyInput').value = '';
+  document.getElementById('apiKeyInput').focus();
+  document.getElementById('pasteMsg').textContent = '';
 }
 </script>
 {% endblock %}
