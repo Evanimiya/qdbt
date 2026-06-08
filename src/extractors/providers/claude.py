@@ -28,7 +28,7 @@ class ClaudeProvider(LLMProvider):
             client = Anthropic(api_key=api_key)
             response = client.messages.create(
                 model=self.get_model(model),
-                max_tokens=8000,
+                max_tokens=16000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": parsed_text}],
             )

@@ -19,18 +19,16 @@
         {{ sub.bid_name }} ·
         {% if sub.file_path %}
         <a href="{{ url_for('submissions.download_file', submission_id=sub.submission_id) }}"
-           target="_blank" class="text-blue-600 hover:underline">{{ sub.file_name }}</a>
+           target="_blank"
+           class="text-blue-600 hover:underline">{{ sub.file_name }}</a>
         {% else %}
         {{ sub.file_name }}
         {% endif %}
       </p>
     </div>
-
-    <!-- 상태별 버튼 -->
     <div class="flex gap-2 flex-wrap items-center">
       {% if has_role('manager') and sub.extraction_status in ('pending', 'failed') %}
-      <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
-            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='추출 중...';">
+      <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}">
         <button type="submit"
                 class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
                        px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
@@ -38,10 +36,14 @@
         </button>
       </form>
       {% endif %}
-
+      {% if has_role('manager') and sub.extraction_status == 'processing' %}
+      <span class="text-sm text-yellow-700 font-semibold px-3 py-1.5 bg-yellow-50 rounded-lg break-ko whitespace-nowrap">
+        ⏳ 추출 중...
+      </span>
+      {% endif %}
       {% if has_role('manager') and sub.extraction_status == 'done' %}
       <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
-            onsubmit="return confirm('이미 추출된 데이터가 있습니다. 재추출하시겠습니까?') && (this.querySelector('button').disabled=true, true);">
+            onsubmit="return confirm('이미 추출된 데이터가 있습니다. 재추출하시겠습니까?');">
         <button type="submit"
                 class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
                        px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
@@ -54,7 +56,16 @@
         🔗 카탈로그 매칭
       </a>
       {% endif %}
-
+      {% if has_role('manager') and sub.extraction_status in ('done', 'failed') %}
+      <form method="POST" action="{{ url_for('submissions.reset', submission_id=sub.submission_id) }}"
+            onsubmit="return confirm('추출 데이터를 초기화하시겠습니까?\n제출서 파일은 유지되며 재추출이 가능합니다.');">
+        <button type="submit"
+                class="text-sm bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap border border-amber-200">
+          🔁 추출 초기화
+        </button>
+      </form>
+      {% endif %}
       <span class="text-xs px-2 py-1 rounded-full
         {% if sub.extraction_status=='done' %}bg-green-100 text-green-700
         {% elif sub.extraction_status=='failed' %}bg-red-100 text-red-700
@@ -64,6 +75,27 @@
       </span>
     </div>
   </div>
+
+  <!-- ── 진행 표시줄 (processing 상태일 때만) ── -->
+  {% if sub.extraction_status == 'processing' %}
+  <div id="progressSection" class="mb-4">
+    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+      <span class="break-ko font-medium text-yellow-700">🤖 LLM이 견적서를 분석하고 있습니다…</span>
+      <span id="progressPct">0%</span>
+    </div>
+    <div class="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+      <div id="progressBar"
+           class="h-3 rounded-full transition-all duration-700"
+           style="width:0%; background: linear-gradient(90deg,#3b82f6,#6366f1);">
+      </div>
+    </div>
+    <div class="flex justify-between text-xs text-gray-400 mt-1 break-ko">
+      <span>📄 파일 파싱</span>
+      <span>🤖 LLM 분석</span>
+      <span>💾 DB 저장</span>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- 금액 요약 -->
   <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
@@ -91,6 +123,7 @@
 <!-- 라인 아이템 테이블 -->
 <div class="flex items-center justify-between mb-3">
   <h2 class="text-base font-bold text-gray-900 break-ko">라인 아이템 ({{ items|length }}개)</h2>
+  <!-- 카테고리 필터 -->
   <select id="catFilter" onchange="filterTable()"
           class="text-sm border border-gray-300 rounded-lg px-2 py-1.5">
     <option value="">전체 카테고리</option>
@@ -147,7 +180,6 @@
   </table>
 </div>
 
-<!-- 원본 파일 열기 -->
 {% if sub.file_path %}
 <div class="mt-4 text-right">
   <a href="{{ url_for('submissions.download_file', submission_id=sub.submission_id) }}"
@@ -158,7 +190,6 @@
   </a>
 </div>
 {% endif %}
-
 {% endblock %}
 
 {% block scripts %}
@@ -169,5 +200,69 @@ function filterTable() {
     row.style.display = (!cat || row.dataset.cat === cat) ? '' : 'none';
   });
 }
+
+/* ── 추출 진행 표시줄 ── */
+(function() {
+  const bar = document.getElementById('progressBar');
+  const pct = document.getElementById('progressPct');
+  if (!bar) return;  // processing 상태가 아니면 종료
+
+  const STATUS_URL = window.location.pathname + '/status.json' + window.location.search;
+  const POLL_INTERVAL = 2500;  // 2.5초마다 폴링
+
+  // 가짜 진행률: 시간 기반으로 천천히 증가 (90%까지만, 실제 완료 시 100%)
+  let fakeProgress = 2;
+  const STAGES = [
+    { at: 5,  label: '📄 파일 파싱 중…' },
+    { at: 20, label: '🤖 LLM에 전송 중…' },
+    { at: 35, label: '🤖 LLM이 분석 중…' },
+    { at: 60, label: '🤖 항목 구조화 중…' },
+    { at: 80, label: '💾 DB에 저장 중…' },
+    { at: 88, label: '✔ 마무리 중…' },
+  ];
+  const label = document.querySelector('#progressSection .text-yellow-700');
+
+  function updateBar(val) {
+    bar.style.width = val + '%';
+    pct.textContent = Math.round(val) + '%';
+    for (let i = STAGES.length - 1; i >= 0; i--) {
+      if (val >= STAGES[i].at) { label.textContent = STAGES[i].label; break; }
+    }
+  }
+
+  // 부드럽게 가짜 진행
+  const fakeTimer = setInterval(() => {
+    if (fakeProgress < 88) {
+      fakeProgress = Math.min(88, fakeProgress + (fakeProgress < 40 ? 1.5 : 0.4));
+      updateBar(fakeProgress);
+    }
+  }, 600);
+
+  // 실제 상태 폴링
+  function poll() {
+    fetch(STATUS_URL)
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'done') {
+          clearInterval(fakeTimer);
+          updateBar(100);
+          label.textContent = '✅ 추출 완료! 페이지를 새로고침합니다…';
+          bar.style.background = 'linear-gradient(90deg,#22c55e,#16a34a)';
+          setTimeout(() => window.location.reload(), 800);
+        } else if (data.status === 'failed') {
+          clearInterval(fakeTimer);
+          updateBar(fakeProgress);
+          label.textContent = '❌ 추출 실패 — 페이지를 새로고침합니다…';
+          bar.style.background = 'linear-gradient(90deg,#ef4444,#dc2626)';
+          setTimeout(() => window.location.reload(), 1200);
+        } else {
+          setTimeout(poll, POLL_INTERVAL);
+        }
+      })
+      .catch(() => setTimeout(poll, POLL_INTERVAL));
+  }
+
+  setTimeout(poll, POLL_INTERVAL);
+})();
 </script>
 {% endblock %}

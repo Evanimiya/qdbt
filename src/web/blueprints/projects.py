@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from auth.auth import login_required, require_role
 from db.queries import (
     list_projects, get_project, create_project, update_project,
-    list_bids, create_bid
+    list_bids, create_bid, reset_project_submissions
 )
 
 bp = Blueprint("projects", __name__)
@@ -77,4 +77,16 @@ def update_status(project_id):
     if status in ("active", "closed", "archived"):
         update_project(project_id, status=status)
         flash("프로젝트 상태가 업데이트되었습니다.", "success")
+    return redirect(url_for("projects.detail", project_id=project_id))
+
+
+@bp.route("/projects/<project_id>/reset", methods=["POST"])
+@require_role("manager")
+def reset_demo(project_id):
+    """데모용: 모든 제출서 추출 결과 초기화 → pending 상태로 되돌리기"""
+    project = get_project(project_id)
+    if not project:
+        abort(404)
+    n = reset_project_submissions(project_id)
+    flash(f"🔄 데모 초기화 완료 — {n}개 제출서가 pending 상태로 초기화되었습니다.", "success")
     return redirect(url_for("projects.detail", project_id=project_id))

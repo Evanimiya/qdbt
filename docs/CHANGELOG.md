@@ -6,6 +6,154 @@
 
 ---
 
+## [v1.0.0] - 예정 (운영 시작 시점)
+
+### 운영 전환 체크리스트
+
+#### 🔐 보안 — 세션 인증 방식 교체 (필수)
+
+**배경:**
+현재 v0.6.1-test는 Replit iframe 환경의 서드파티 쿠키 차단 문제를 우회하기 위해
+URL 토큰 방식(`?_t=<token>`)을 사용하고 있음.
+이 방식은 토큰이 URL에 노출되어 브라우저 히스토리·서버 로그·링크 공유 시 세션 정보가 유출될 위험이 있음.
+
+**교체 방법:** `SameSite=None` 쿠키 (설정 3줄 + 코드 정리)
+
+```python
+# src/web/app.py 에 추가
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+app.config["SESSION_COOKIE_SECURE"]   = True   # Replit은 HTTPS라 OK
+app.config["SESSION_COOKIE_HTTPONLY"] = True   # XSS 방어
+```
+
+**함께 제거할 코드:**
+- `src/auth/token_session.py` 전체 삭제
+- `src/auth/auth.py` — `login_user()`를 기존 `session[]` 방식으로 복원
+- `src/web/app.py` — `before_request` 토큰 복원 로직 제거
+- `src/web/blueprints/auth.py` — localStorage 저장 HTML 제거, 기존 redirect 방식 복원
+- `src/web/templates/base.html` — 토큰 자동 주입 JS 제거
+- 모든 Blueprint의 `redirect(..., _t=tok)` → `redirect(...)` 으로 정리
+
+**주의:** `SESSION_COOKIE_SECURE = True`이면 HTTP 환경(로컬 개발)에서 쿠키가 전송되지 않음.
+로컬 개발 시 별도 처리 필요:
+```python
+# 로컬 개발 환경에서는
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FLASK_ENV") == "production"
+```
+
+---
+
+#### 📦 대용량 견적서 추출 전략 고도화 (권장)
+
+**배경:**
+현재 v0.6.x는 방법 B (청크 분할)로 대용량 견적서를 처리함.
+- 150행 이하: 단일 LLM 호출
+- 150행 초과: 150행씩 청크 분할 → 청크별 LLM 호출 → 결과 합산
+- 1,000항목 기준: 약 7회 LLM 호출 필요
+
+**문제점:**
+- API 호출 횟수 비례 증가 → 비용/시간 증가
+- 청크 경계에서 카테고리 컨텍스트 일부 손실 가능
+- 각 청크의 금액 합계 검증이 복잡
+
+**v1.0.0에서 고려할 방법 D (파서 강화):**
+
+```
+현재 (방법 B):
+  파서 → 텍스트 → LLM (구조화) → DB
+
+방법 D:
+  파서 (강화) → dict 구조 (직접 추출)
+                  ↓
+              LLM (정규화만: 품목명 통일, 카테고리 분류)
+                  ↓
+              DB
+```
+
+**방법 D 구현 포인트:**
+- XLSX: 행 번호 + 들여쓰기 + 병합셀 정보로 계층 구조 직접 파악 가능
+- PDF: pdfplumber의 테이블 추출 기능으로 행 직접 파싱
+- DOCX: 테이블 셀 구조로 직접 파싱
+- LLM 역할: 전체 텍스트 구조화 → 품목명 정규화 + 카테고리 분류만
+- 효과: LLM 호출 1회 고정 (항목 수 무관), 비용 90% 절감 추정
+
+**참고 코드 위치:**
+- `src/extractors/llm_extractor.py` — `CHUNK_LINE_LIMIT`, `_split_into_chunks()`
+- `src/parsers/parse_xlsx.py` — 파서 강화 시작점
+
+#### 기타 운영 전환 항목
+- [ ] `ADMIN_PASSWORD` 환경변수 강제화 (기본값 제거)
+- [ ] `SECRET_KEY` 환경변수 강제화
+- [ ] viewer-detail / viewer-summary 접근 제어 실제 구현
+- [ ] Phase 2-C: bid_watchlist 기반 가격 이력 검색 범위 제한
+- [ ] 버전 상수 변경: `src/config.py` → `VERSION = "1.0.0"`, `STATUS = "production"`
+
+---
+
+## [v0.6.2-test] - 2026-06-08
+
+### Replit 테스트 기반 전면 동기화
+
+Replit에서 진행된 마이너 업데이트들을 Claude 코드베이스에 반영.
+이번부터 **Replit(마이너) ↔ Claude(메이저) 워크플로우** 공식 적용.
+
+#### 추가 (Added)
+- **백그라운드 추출** (`submissions.py`)
+  - `_extraction_worker()` — 별도 스레드에서 LLM 추출 실행
+  - `GET /<id>/status.json` — 추출 상태 폴링 엔드포인트 (progress bar용)
+- **소프트 삭제** (`db/queries.py`, `submissions.py`)
+  - `submissions.deleted_at` 컬럼 추가 (schema + migrate_db)
+  - `soft_delete_submission()` / `restore_submission()` DB 함수
+  - `list_deleted_submissions()` — 삭제된 목록 조회
+  - `POST /<id>/soft-delete` / `POST /<id>/restore` 라우트
+- **제출서 개별 초기화** (`submissions.py`)
+  - `reset_submission()` — 파일 유지, 추출 데이터만 삭제
+  - `POST /<id>/reset` 라우트
+- **no-cache 헤더** (`app.py`)
+  - `after_request`에서 Replit 미리보기 캐시 문제 방지
+
+#### 변경 (Changed)
+- **token_session.py** — 인터페이스 변경
+  - `create_token(dict)` → `create_token(user_id, name, role, email)`
+  - `load_token()` → `get_token_data()`
+  - 저장 경로: `data/sessions/` → `data/token_sessions/`
+- **pipeline.py** — 재추출 시 기존 items 먼저 삭제 후 재삽입, `extraction_error` 초기화
+- **app.py** — 세션 복원 시 Flask `session[]`에도 동시 저장 (하이브리드)
+- **auth.py (blueprint)** — 로그아웃 시 localStorage 정리 JS 추가
+- **비교 테이블** (`compare/bid.html`) — 소계 행 `colspan` 버그 수정 (두 개의 별도 `<td>`로 분리)
+- **`.gitignore`** — `data/token_sessions/` 제외 추가
+
+---
+
+## [v0.6.1-test] - 2026-06-07
+
+### Replit 테스트 버그픽스 + 기능 추가
+
+#### 추가 (Added)
+- **`src/auth/token_session.py`** — UUID 파일 기반 토큰 세션 (신규)
+  - Replit iframe 환경에서 서드파티 쿠키 차단 문제 우회
+  - `create_token()` / `load_token()` / `delete_token()`
+  - 만료된 토큰 자동 정리 (`_cleanup_expired`)
+- **데모 초기화 기능** (`projects.reset_demo`)
+  - 프로젝트 상세 페이지 🔄 데모 초기화 버튼
+  - 제출서를 pending 상태로 초기화 (원본 파일·구조 유지)
+  - `reset_project_submissions()` DB 함수 추가
+
+#### 변경 (Changed)
+- **세션 인증 방식 전면 교체** (쿠키 → URL 토큰)
+  - `src/auth/auth.py` — `login_user()` → 토큰 생성 + `g.auth_token` 저장
+  - `src/web/app.py` — `before_request`에서 `?_t=<token>`으로 세션 복원
+  - `src/web/blueprints/auth.py` — 로그인 성공 시 localStorage에 토큰 저장 HTML 반환
+  - `src/web/templates/base.html` — 모든 링크/폼에 `?_t=` 자동 주입 JS
+- **`src/web/blueprints/submissions.py`** 버그 수정
+  - `download_file`: `sqlite3.Row.get()` 미지원 → `dict(sub).get()` 수정
+  - `extract`: redirect에 `_t=tok` 파라미터 명시적 포함
+- **`src/web/blueprints/projects.py`** — `reset_demo` 라우트 추가
+- **`src/web/templates/projects/detail.html`** — 데모 초기화 버튼 추가
+- **`.gitignore`** — `data/sessions/` 제외 추가
+
+---
+
 ## [v0.6.0-test] - 2026-06-04
 
 ### Phase 2-B: LLM 카탈로그 매칭 + 가격 이력

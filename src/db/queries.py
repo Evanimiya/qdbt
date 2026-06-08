@@ -144,6 +144,26 @@ def update_submission(submission_id, **kwargs):
                   list(kwargs.values()) + [submission_id])
 
 
+def reset_project_submissions(project_id: str) -> int:
+    """데모용: 프로젝트의 모든 제출서를 pending 상태로 초기화 (추출 데이터 삭제)"""
+    with get_conn() as c:
+        sub_ids = [r[0] for r in c.execute(
+            "SELECT s.submission_id FROM submissions s JOIN bids b USING (bid_id) WHERE b.project_id = ?",
+            (project_id,)
+        ).fetchall()]
+        if not sub_ids:
+            return 0
+        placeholders = ",".join("?" * len(sub_ids))
+        c.execute(f"DELETE FROM submission_items WHERE submission_id IN ({placeholders})", sub_ids)
+        c.execute(f"""UPDATE submissions SET
+            extraction_status='pending',
+            subtotal_excl_vat=NULL, vat=NULL, grand_total=NULL,
+            updated_at=?
+            WHERE submission_id IN ({placeholders})""",
+            [datetime.now().isoformat()] + sub_ids)
+    return len(sub_ids)
+
+
 def get_submission(submission_id):
     with get_conn() as c:
         return c.execute("""
@@ -157,6 +177,7 @@ def get_submission(submission_id):
 
 
 def list_submissions(bid_id):
+    """활성(삭제되지 않은) 제출서 목록"""
     with get_conn() as c:
         return c.execute("""
             SELECT s.*,
@@ -165,13 +186,69 @@ def list_submissions(bid_id):
             FROM submissions s
             LEFT JOIN submission_items i USING (submission_id)
             LEFT JOIN users u ON s.uploaded_by = u.user_id
-            WHERE s.bid_id = ?
+            WHERE s.bid_id = ? AND s.deleted_at IS NULL
             GROUP BY s.submission_id
             ORDER BY s.subtotal_excl_vat NULLS LAST
         """, (bid_id,)).fetchall()
 
 
+def list_deleted_submissions(bid_id):
+    """소프트 삭제된 제출서 목록"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT s.*,
+                   COUNT(CASE WHEN i.is_header = 0 THEN 1 END) as n_items,
+                   u.name as uploaded_by_name
+            FROM submissions s
+            LEFT JOIN submission_items i USING (submission_id)
+            LEFT JOIN users u ON s.uploaded_by = u.user_id
+            WHERE s.bid_id = ? AND s.deleted_at IS NOT NULL
+            GROUP BY s.submission_id
+            ORDER BY s.deleted_at DESC
+        """, (bid_id,)).fetchall()
+
+
+def reset_submission(submission_id: str):
+    """추출 데이터만 초기화 — 제출서 레코드(파일 포함)는 유지"""
+    with get_conn() as c:
+        c.execute("DELETE FROM submission_items WHERE submission_id = ?", (submission_id,))
+        c.execute("""
+            UPDATE submissions SET
+                extraction_status = 'pending',
+                subtotal_excl_vat = NULL,
+                vat = NULL,
+                grand_total = NULL,
+                extraction_error = NULL,
+                updated_at = ?
+            WHERE submission_id = ?
+        """, (datetime.now().isoformat(), submission_id))
+
+
+def soft_delete_submission(submission_id: str):
+    """소프트 삭제 — deleted_at 타임스탬프 설정"""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE submissions SET deleted_at = ?, updated_at = ?
+            WHERE submission_id = ?
+        """, (datetime.now().isoformat(), datetime.now().isoformat(), submission_id))
+
+
+def restore_submission(submission_id: str):
+    """소프트 삭제 취소 — deleted_at 초기화"""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE submissions SET deleted_at = NULL, updated_at = ?
+            WHERE submission_id = ?
+        """, (datetime.now().isoformat(), submission_id))
+
+
 # ─── 라인 아이템 ────────────────────────────────
+
+def delete_submission_items(submission_id: str):
+    """제출서의 모든 라인 아이템 삭제 (재추출 전 호출)"""
+    with get_conn() as c:
+        c.execute("DELETE FROM submission_items WHERE submission_id = ?", (submission_id,))
+
 
 def insert_items_bulk(submission_id, items: list[dict]):
     """추출된 아이템 일괄 삽입"""

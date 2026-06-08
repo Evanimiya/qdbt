@@ -149,6 +149,56 @@ function toggleSidebar(){
   s.classList.toggle('open');
   o.classList.toggle('hidden');
 }
+
+// ── 쿠키 없는 토큰 세션 ──────────────────────────────
+(function() {
+  const KEY = 'qdbt_t';
+  let token = new URLSearchParams(window.location.search).get('_t');
+
+  // URL에 토큰이 있으면 localStorage에 저장/갱신
+  if (token) {
+    try { localStorage.setItem(KEY, token); } catch(e) {}
+  } else {
+    // URL에 없으면 localStorage에서 복원 후 현재 URL에 추가
+    try { token = localStorage.getItem(KEY); } catch(e) {}
+    if (token) {
+      const u = new URL(window.location.href);
+      u.searchParams.set('_t', token);
+      window.history.replaceState({}, '', u.toString());
+    }
+  }
+
+  if (!token) return;
+
+  function injectToken() {
+    // 모든 링크에 토큰 추가
+    document.querySelectorAll('a[href]').forEach(function(a) {
+      try {
+        const u = new URL(a.href, window.location.origin);
+        if (u.origin === window.location.origin && !u.searchParams.get('_t')) {
+          u.searchParams.set('_t', token);
+          a.href = u.toString();
+        }
+      } catch(e) {}
+    });
+    // 모든 폼에 숨김 필드 추가
+    document.querySelectorAll('form').forEach(function(form) {
+      if (!form.querySelector('input[name="_t"]')) {
+        var inp = document.createElement('input');
+        inp.type = 'hidden';
+        inp.name = '_t';
+        inp.value = token;
+        form.appendChild(inp);
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', injectToken);
+  } else {
+    injectToken();
+  }
+})();
 </script>
 {% block scripts %}{% endblock %}
 </body>

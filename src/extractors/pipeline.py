@@ -19,7 +19,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import UPLOAD_DIR, EXTRACT_DIR, ALLOWED_EXTENSIONS
-from db.queries import update_submission, insert_items_bulk
+from db.queries import update_submission, insert_items_bulk, delete_submission_items
 from parsers.parse_xlsx import parse_xlsx
 from parsers.parse_pdf  import parse_pdf
 from parsers.parse_docx import parse_docx
@@ -93,16 +93,18 @@ def run_extraction(submission_id: str, file_path: Path,
         ext_path.write_text(json.dumps(extraction, ensure_ascii=False, indent=2),
                             encoding="utf-8")
 
-        # DB 저장
+        # DB 저장 (기존 아이템 먼저 삭제 후 재삽입)
         items = extraction.get("items", [])
+        delete_submission_items(submission_id)
         insert_items_bulk(submission_id, items)
 
         n_items = sum(1 for it in items if not it.get("is_category_header"))
 
-        # submission 메타 업데이트
+        # submission 메타 업데이트 (이전 오류 메시지도 초기화)
         update_submission(
             submission_id,
             extraction_status="done",
+            extraction_error=None,
             currency=extraction.get("currency", "KRW"),
             currency_unit=extraction.get("currency_unit", "원"),
             subtotal_excl_vat=extraction.get("amount_summary", {}).get("subtotal_excl_vat"),

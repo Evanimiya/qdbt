@@ -28,7 +28,7 @@ class GPTProvider(LLMProvider):
             client = OpenAI(api_key=api_key)
             response = client.chat.completions.create(
                 model=self.get_model(model),
-                max_tokens=8000,
+                max_tokens=16000,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": parsed_text},

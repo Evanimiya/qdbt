@@ -140,10 +140,24 @@
         </td>
         <td class="px-4 py-3 text-center">
           {% if has_role('manager') %}
-          <form method="POST" action="{{ url_for('submissions.delete', submission_id=s.submission_id) }}"
-                onsubmit="return confirm('삭제하시겠습니까?');" class="inline">
-            <button type="submit" class="text-xs text-red-600 hover:text-red-800">삭제</button>
-          </form>
+          <div class="flex gap-2 justify-center">
+            {% if s.extraction_status in ('done', 'failed') %}
+            <form method="POST" action="{{ url_for('submissions.reset', submission_id=s.submission_id) }}"
+                  onsubmit="return confirm('추출 데이터를 초기화하시겠습니까?\n제출서 파일은 유지되며 재추출이 가능합니다.');">
+              <button type="submit"
+                      class="text-xs text-amber-600 hover:text-amber-800 border border-amber-300 rounded px-2 py-0.5 hover:bg-amber-50">
+                초기화
+              </button>
+            </form>
+            {% endif %}
+            <form method="POST" action="{{ url_for('submissions.soft_delete', submission_id=s.submission_id) }}"
+                  onsubmit="return confirm('숨김 처리하시겠습니까?\n하단에서 언제든 복원할 수 있습니다.');">
+              <button type="submit"
+                      class="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-0.5 hover:bg-red-50">
+                삭제
+              </button>
+            </form>
+          </div>
           {% endif %}
         </td>
       </tr>
@@ -155,5 +169,59 @@
 <div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
   <p class="text-gray-500 break-ko">아직 제출서가 없습니다.</p>
 </div>
+{% endif %}
+
+{% if deleted_submissions %}
+<details class="mt-6">
+  <summary class="cursor-pointer text-sm text-gray-400 hover:text-gray-600 select-none mb-3">
+    🗑 삭제된 제출서 {{ deleted_submissions|length }}건 (복원 가능)
+  </summary>
+  <div class="bg-white rounded-xl shadow-sm border border-dashed border-gray-300 overflow-hidden mt-2">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+        <tr>
+          <th class="text-left px-4 py-3">업체명</th>
+          <th class="text-right px-4 py-3">공급가액 (원)</th>
+          <th class="text-center px-4 py-3">상태</th>
+          <th class="text-center px-4 py-3">액션</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+      {% for s in deleted_submissions %}
+        <tr class="opacity-60">
+          <td class="px-4 py-3 font-semibold text-gray-500 break-ko line-through">{{ s.vendor_name }}</td>
+          <td class="px-4 py-3 text-right text-gray-400">
+            {{ '{:,}'.format(s.subtotal_excl_vat|int) if s.subtotal_excl_vat else '-' }}
+          </td>
+          <td class="px-4 py-3 text-center">
+            <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">
+              {{ s.extraction_status }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-center">
+            {% if has_role('manager') %}
+            <div class="flex gap-2 justify-center">
+              <form method="POST" action="{{ url_for('submissions.restore', submission_id=s.submission_id) }}">
+                <button type="submit"
+                        class="text-xs text-green-600 hover:text-green-800 border border-green-300 rounded px-2 py-0.5 hover:bg-green-50">
+                  복원
+                </button>
+              </form>
+              <form method="POST" action="{{ url_for('submissions.delete', submission_id=s.submission_id) }}"
+                    onsubmit="return confirm('영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.');">
+                <button type="submit"
+                        class="text-xs text-gray-400 hover:text-red-600 border border-gray-200 rounded px-2 py-0.5 hover:bg-red-50">
+                  완전 삭제
+                </button>
+              </form>
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
 {% endif %}
 {% endblock %}

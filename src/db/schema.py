@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     reviewed_by     TEXT REFERENCES users(user_id),
     reviewed_at     TIMESTAMP,
     uploaded_by     TEXT REFERENCES users(user_id),
+    deleted_at      TIMESTAMP,            -- 소프트 삭제 타임스탬프 (NULL = 활성)
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (bid_id, vendor_name)           -- 같은 입찰에 같은 업체 중복 방지
@@ -288,6 +289,11 @@ def migrate_db(db_path=None):
         migrations.append("ALTER TABLE users ADD COLUMN llm_provider TEXT NOT NULL DEFAULT 'claude'")
     if "llm_model" not in cols:
         migrations.append("ALTER TABLE users ADD COLUMN llm_model TEXT")
+
+    # submissions.deleted_at 컬럼 추가 (소프트 삭제)
+    sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]
+    if "deleted_at" not in sub_cols:
+        migrations.append("ALTER TABLE submissions ADD COLUMN deleted_at TIMESTAMP")
 
     for sql in migrations:
         conn.execute(sql)

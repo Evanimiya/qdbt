@@ -10,13 +10,27 @@
 </nav>
 
 <div class="flex items-center justify-between mb-5">
-  <h1 class="text-xl font-bold text-gray-900 break-ko">📊 업체별 비교</h1>
+  <div>
+    <h1 class="text-xl font-bold text-gray-900 break-ko">📊 업체별 비교</h1>
+    <p class="text-xs text-gray-400 mt-0.5">렌더링: <span id="render-ts"></span>
+      <button onclick="location.href=location.pathname+'?_t={{ request.args.get('_t','') }}&_r='+Date.now()"
+              class="ml-2 text-blue-500 hover:underline">새로고침</button>
+    </p>
+  </div>
   <a href="{{ url_for('compare.bid_excel', bid_id=bid.bid_id) }}"
      class="bg-green-700 hover:bg-green-800 text-white text-sm font-semibold
             px-4 py-2 rounded-lg transition-colors break-ko whitespace-nowrap">
     ⬇ Excel
   </a>
 </div>
+<script>
+  document.getElementById('render-ts').textContent = new Date().toLocaleTimeString('ko-KR');
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) {
+      location.href = location.pathname + '?_t={{ request.args.get("_t","") }}&_r=' + Date.now();
+    }
+  });
+</script>
 
 <!-- 공급가액 요약 카드 -->
 <div class="grid gap-3 mb-6"
@@ -56,7 +70,7 @@
           {% for v in vendors %}
           <th class="text-right px-3 py-2 whitespace-nowrap">{{ v }}</th>
           {% endfor %}
-          <th class="text-center px-3 py-2 hidden md:table-cell">최저</th>
+          <th class="text-center px-3 py-2 hidden md:table-cell" title="[알림] 현재 최저는 항목별 최저 단가의 합으로, 단일 업체 합계보다 낮을 수 있음 (Known Issue)">최저*</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-100">
@@ -90,7 +104,8 @@
       {% endfor %}
       <!-- 카테고리 소계 -->
       <tr class="bg-gray-50 font-semibold text-xs">
-        <td class="px-3 py-2 text-gray-600" colspan="2">소계</td>
+        <td class="px-3 py-2 text-gray-600">소계</td>
+        <td class="hidden lg:table-cell"></td>
         {% for v in vendors %}
         <td class="px-3 py-2 text-right">
           {% set total = data.category_totals.get(v, {}).get(cat, 0) %}

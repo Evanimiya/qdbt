@@ -17,7 +17,7 @@ from datetime import timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from flask import Flask, render_template, session, g
-from config import VERSION, STATUS, ANTHROPIC_API_KEY
+from config import VERSION, STATUS, ANTHROPIC_API_KEY, ROOT
 
 
 def create_app():
@@ -29,6 +29,26 @@ def create_app():
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
     app.permanent_session_lifetime = timedelta(hours=8)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+    # 쿠키 없는 토큰 세션 사용 — Replit iframe third-party 쿠키 차단 우회
+    # before_request 에서 ?_t= 파라미터로 세션을 매 요청마다 복원
+
+    # ── 매 요청마다 토큰으로 세션 복원 ─────────────
+    from flask import request as _req, g as _g
+    @app.before_request
+    def restore_session_from_token():
+        from auth.token_session import get_token_data
+        token = (_req.args.get('_t') or
+                 _req.form.get('_t') or
+                 _req.cookies.get('qdbt_t', ''))
+        if token:
+            data = get_token_data(token)
+            if data:
+                from flask import session as _sess
+                _sess['user_id']    = data['user_id']
+                _sess['user_name']  = data['user_name']
+                _sess['user_role']  = data['user_role']
+                _sess['user_email'] = data['user_email']
+                _g.auth_token = token
 
     # ── 커스텀 Jinja2 필터 ─────────────────────────
     import json as _json
@@ -76,6 +96,15 @@ def create_app():
             "is_logged_in":  is_logged_in(),
             "has_role":      has_role,
         }
+
+    # ── 캐시 비활성화 (Replit iframe 미리보기에서 옛 페이지 표시 방지) ──
+    @app.after_request
+    def add_no_cache_headers(resp):
+        if os.environ.get("FLASK_ENV") != "production":
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+        return resp
 
     # ── 오류 핸들러 ─────────────────────────────
     @app.errorhandler(403)

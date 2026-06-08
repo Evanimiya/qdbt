@@ -34,6 +34,8 @@ secrets/
 data/qdbt.db
 data/uploads/
 data/extractions/
+data/sessions/
+data/token_sessions/
 
 # 샘플 데이터는 포함 (더미 입찰서 — 공동작업자 테스트용)
 !data/samples/
@@ -42,6 +44,8 @@ data/extractions/
 # 빈 디렉토리 유지용
 !data/uploads/.gitkeep
 !data/extractions/.gitkeep
+!data/sessions/.gitkeep
+!data/token_sessions/.gitkeep
 
 # ─── 생성물 ────────────────────────────────────
 output/
