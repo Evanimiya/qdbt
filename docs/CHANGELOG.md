@@ -92,6 +92,13 @@ app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FLASK_ENV") == "production
 
 ## [v0.6.2-test] - 2026-06-08
 
+### 설계 원칙 확정 — 도메인 확장
+
+> **QDBT는 IT 입찰서 전용이 아닌 설비·용역·IT 전 분야 입찰서를 대상으로 한다.**
+> 현재 IT 중심으로 구현되어 있으나, 도메인 확장을 전제로 설계한다.
+> 영향 영역: 카테고리 구조, 추출 프롬프트, 카탈로그 스펙 구조.
+> 상세 내용: `docs/ROADMAP.md` 참조.
+
 ### Replit 테스트 기반 전면 동기화
 
 Replit에서 진행된 마이너 업데이트들을 Claude 코드베이스에 반영.
