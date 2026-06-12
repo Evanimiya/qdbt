@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}클러스터링 진행 중...{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto mt-10">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+
+    <div class="text-5xl mb-4" id="statusIcon">🤖</div>
+    <h1 class="text-lg font-bold text-gray-900 mb-2 break-ko" id="statusTitle">
+      LLM 클러스터링 실행 중...
+    </h1>
+    <p class="text-sm text-gray-500 break-ko mb-6" id="statusMsg">
+      품목들을 분석하고 유사 그룹을 탐색하고 있습니다.
+    </p>
+
+    <!-- 진행 표시 -->
+    <div class="mb-6" id="progressArea">
+      <div class="flex items-center gap-3 text-sm text-gray-600 justify-center mb-3">
+        <span class="animate-spin text-blue-600">⟳</span>
+        <span class="break-ko" id="progressMsg">LLM 분석 중...</span>
+      </div>
+      <div class="bg-gray-100 rounded-full h-2 overflow-hidden">
+        <div class="bg-blue-600 h-2 rounded-full transition-all duration-500"
+             id="progressBar" style="width: 30%; animation: pulse 1.5s infinite;">
+        </div>
+      </div>
+    </div>
+
+    <!-- 단계별 상태 -->
+    <div class="text-left space-y-2 mb-6" id="stepList">
+      <div class="flex items-center gap-2 text-sm" id="step1">
+        <span class="text-green-600">✅</span>
+        <span class="text-gray-600 break-ko">품목 수집 완료</span>
+      </div>
+      <div class="flex items-center gap-2 text-sm" id="step2">
+        <span class="animate-spin text-blue-600">⟳</span>
+        <span class="text-gray-700 font-semibold break-ko">LLM 유사도 분석 중...</span>
+      </div>
+      <div class="flex items-center gap-2 text-sm text-gray-400" id="step3">
+        <span>○</span>
+        <span class="break-ko">결과 저장 대기</span>
+      </div>
+    </div>
+
+    <p class="text-xs text-gray-400 break-ko">
+      품목 수에 따라 10~30초 소요될 수 있습니다.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const jobId  = '{{ job_id }}';
+const bidId  = '{{ bid_id }}';
+const tok    = '{{ request.args.get("_t", "") }}';
+const baseUrl = location.origin;
+
+let attempts = 0;
+const maxAttempts = 120; // 2분
+
+function poll() {
+  if (attempts >= maxAttempts) {
+    showError('시간 초과. 다시 시도해 주세요.');
+    return;
+  }
+  attempts++;
+
+  fetch(`${baseUrl}/catalog/clusters/status/${jobId}.json?_t=${tok}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'running') {
+        document.getElementById('progressMsg').textContent = data.message || 'LLM 분석 중...';
+        setTimeout(poll, 1500);
+
+      } else if (data.status === 'done') {
+        showDone(data.n, data.bid_id);
+
+      } else if (data.status === 'error') {
+        showError(data.message);
+
+      } else {
+        setTimeout(poll, 1500);
+      }
+    })
+    .catch(() => setTimeout(poll, 2000));
+}
+
+function showDone(n, bidId) {
+  document.getElementById('statusIcon').textContent  = n > 0 ? '✅' : 'ℹ️';
+  document.getElementById('statusTitle').textContent =
+    n > 0 ? `클러스터링 완료 — ${n}개 그룹 감지됨` : '유사 품목 없음';
+  document.getElementById('statusMsg').textContent   =
+    n > 0 ? '결과를 확인하고 클러스터를 검토하세요.' : '이번 입찰에서는 유사 품목이 발견되지 않았습니다.';
+  document.getElementById('progressArea').style.display = 'none';
+
+  document.getElementById('step2').innerHTML =
+    '<span class="text-green-600">✅</span><span class="text-gray-600 break-ko">LLM 분석 완료</span>';
+  document.getElementById('step3').innerHTML =
+    '<span class="text-green-600">✅</span><span class="text-gray-600 break-ko">결과 저장 완료</span>';
+
+  // 2초 후 결과 페이지로 이동
+  setTimeout(() => {
+    const dest = bidId
+      ? `/catalog/clusters?bid_id=${bidId}&status=pending&_t=${tok}`
+      : `/catalog/clusters?status=pending&_t=${tok}`;
+    location.href = dest;
+  }, 2000);
+}
+
+function showError(msg) {
+  document.getElementById('statusIcon').textContent  = '❌';
+  document.getElementById('statusTitle').textContent = '클러스터링 실패';
+  document.getElementById('statusMsg').textContent   = msg;
+  document.getElementById('progressArea').style.display = 'none';
+  document.getElementById('step2').innerHTML =
+    `<span class="text-red-600">✕</span><span class="text-red-600 break-ko">${msg}</span>`;
+}
+
+// 시작
+setTimeout(poll, 1000);
+</script>
+
+<style>
+@keyframes pulse {
+  0%, 100% { width: 30%; }
+  50% { width: 70%; }
+}
+</style>
+{% endblock %}

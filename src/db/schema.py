@@ -301,11 +301,12 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_item       ON catalog_suggestions(ite
 
 CREATE TABLE IF NOT EXISTS catalog_clusters (
     cluster_id              TEXT PRIMARY KEY,
-    representative_item_id  TEXT NOT NULL,
-                                -- 대표 품목 (병합 후 남길 품목)
+    bid_id                  TEXT,               -- 어느 입찰에서 생성된 클러스터
+    representative_item_id  TEXT,               -- submission_items.item_id
+    representative_name     TEXT,               -- LLM 제안 표준 품목명
     status                  TEXT NOT NULL DEFAULT 'pending',
-                                -- pending | accepted | rejected
-    similarity_summary      TEXT,   -- LLM이 제안한 유사 근거 요약
+                                -- pending | accepted | rejected | held
+    similarity_summary      TEXT,
     reviewed_by             TEXT REFERENCES users(user_id),
     reviewed_at             TIMESTAMP,
     created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -492,7 +493,9 @@ CREATE TABLE IF NOT EXISTS catalog_suggestions (
         conn.execute("""
             CREATE TABLE IF NOT EXISTS catalog_clusters (
                 cluster_id             TEXT PRIMARY KEY,
-                representative_item_id TEXT NOT NULL,
+                bid_id                 TEXT,
+                representative_item_id TEXT,
+                representative_name    TEXT,
                 status                 TEXT NOT NULL DEFAULT 'pending',
                 similarity_summary     TEXT,
                 reviewed_by            TEXT REFERENCES users(user_id),
@@ -507,7 +510,15 @@ CREATE TABLE IF NOT EXISTS catalog_suggestions (
                 similarity_score REAL,
                 PRIMARY KEY (cluster_id, catalog_item_id)
             )""")
+        conn.commit()
         migrations.append("-- catalog_clusters 테이블 생성 완료")
+    else:
+        # 기존 테이블에 컬럼 추가
+        cl_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_clusters)").fetchall()]
+        if "representative_name" not in cl_cols:
+            migrations.append("ALTER TABLE catalog_clusters ADD COLUMN representative_name TEXT")
+        if "bid_id" not in cl_cols:
+            migrations.append("ALTER TABLE catalog_clusters ADD COLUMN bid_id TEXT")
 
     for sql in migrations:
         conn.execute(sql)

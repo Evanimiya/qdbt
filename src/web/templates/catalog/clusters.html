@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}유사 품목 클러스터링 · 카탈로그{% endblock %}
+{% block title %}유사 품목 클러스터링{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl">
@@ -12,45 +12,77 @@
     <div>
       <h1 class="text-xl font-bold text-gray-900 break-ko">🔀 유사 품목 클러스터링</h1>
       <p class="text-sm text-gray-500 mt-0.5 break-ko">
-        여러 입찰서에서 다르게 등록된 같은 품목들을 LLM이 감지하여 병합을 제안합니다.
+        같은 입찰의 견적서들에서 다르게 표기된 동일 품목을 LLM이 감지하여 표준명을 제안합니다.
       </p>
     </div>
+
     {% if has_role('manager') %}
-    <div class="flex gap-2">
+    <div>
       <form method="POST" action="{{ url_for('catalog.run_clusters') }}"
-            onsubmit="return confirm('전체 카탈로그를 분석합니다. 시간이 걸릴 수 있습니다.');">
-        <select name="domain"
-                class="px-2 py-1.5 border border-gray-300 rounded-lg text-sm mr-1">
-          <option value="">전체 도메인</option>
-          {% for d in domains %}
-          <option value="{{ d.name }}">{{ d.name }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit"
-                class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
-                       px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
-          🤖 클러스터링 실행
-        </button>
+            onsubmit="return confirm('선택한 입찰의 견적 품목을 분석합니다. 계속하시겠습니까?');">
+        <div class="flex gap-2 items-center flex-wrap">
+          <select name="bid_id" required
+                  class="px-3 py-2 border border-gray-300 rounded-lg text-sm
+                         focus:ring-2 focus:ring-blue-500 min-w-[200px]">
+            <option value="">— 입찰 선택 —</option>
+            {% for b in avail_bids %}
+            <option value="{{ b.bid_id }}"
+                    {% if selected_bid == b.bid_id %}selected{% endif %}>
+              {{ b.project_name }} › {{ b.bid_name }}
+              ({{ b.n_done }}개사)
+            </option>
+            {% endfor %}
+          </select>
+          <button type="submit"
+                  class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                         px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+            🤖 클러스터링 실행
+          </button>
+        </div>
+        {% if not avail_bids %}
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          ※ 추출 완료 견적서가 2개 이상인 입찰이 없습니다.
+        </p>
+        {% endif %}
       </form>
     </div>
     {% endif %}
   </div>
 
-  <!-- 현황 통계 -->
-  <div class="grid grid-cols-3 gap-3 mb-5">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+    <div class="mb-3 px-4 py-3 rounded-lg text-sm font-medium
+      {% if cat == 'error' %}bg-red-50 text-red-700 border border-red-200
+      {% elif cat == 'success' %}bg-green-50 text-green-700 border border-green-200
+      {% elif cat == 'warning' %}bg-yellow-50 text-yellow-700 border border-yellow-200
+      {% else %}bg-blue-50 text-blue-700 border border-blue-200{% endif %}">
+      {{ msg }}
+    </div>
+    {% endfor %}
+  {% endwith %}
+
+  <!-- 현황 통계 + 필터 -->
+  <div class="flex gap-2 mb-5 flex-wrap">
     {% for label, count, color, s in [
       ('검토 대기', summary.pending, 'yellow', 'pending'),
-      ('병합 완료', summary.accepted, 'green', 'accepted'),
+      ('확정됨',   summary.accepted, 'green', 'accepted'),
       ('거부됨',   summary.rejected, 'gray',  'rejected'),
     ] %}
-    <a href="{{ url_for('catalog.clusters', status=s) }}"
-       class="bg-white rounded-lg border border-{{ color }}-200 p-3 text-center
-              hover:shadow-sm transition-shadow
+    <a href="{{ url_for('catalog.clusters', status=s, bid_id=selected_bid) }}"
+       class="flex items-center gap-2 bg-white rounded-lg border border-{{ color }}-200 px-4 py-2
+              hover:shadow-sm transition-shadow text-sm
               {% if selected_status == s %}ring-2 ring-{{ color }}-400{% endif %}">
-      <div class="text-xs text-gray-500 break-ko">{{ label }}</div>
-      <div class="text-xl font-bold text-{{ color }}-600">{{ count }}</div>
+      <span class="text-gray-500 break-ko">{{ label }}</span>
+      <span class="font-bold text-{{ color }}-600">{{ count }}</span>
     </a>
     {% endfor %}
+
+    {% if selected_bid %}
+    <a href="{{ url_for('catalog.clusters', status=selected_status) }}"
+       class="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 px-2 py-2">
+      ✕ 입찰 필터 해제
+    </a>
+    {% endif %}
   </div>
 
   {% if not clusters %}
@@ -58,12 +90,12 @@
     <div class="text-5xl mb-3">🔀</div>
     <p class="text-gray-500 break-ko mb-2">
       {% if selected_status == 'pending' %}검토 대기 중인 클러스터가 없습니다.
-      {% elif selected_status == 'accepted' %}아직 병합된 클러스터가 없습니다.
+      {% elif selected_status == 'accepted' %}아직 확정된 클러스터가 없습니다.
       {% else %}거부된 클러스터가 없습니다.{% endif %}
     </p>
     {% if selected_status == 'pending' %}
     <p class="text-sm text-gray-400 break-ko">
-      카탈로그에 품목이 충분히 쌓이면 "클러스터링 실행" 버튼으로 분석하세요.
+      위에서 입찰을 선택하고 "클러스터링 실행"을 눌러 분석하세요.
     </p>
     {% endif %}
   </div>
@@ -73,45 +105,38 @@
     {% for cl in clusters %}
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
       <div class="flex items-start justify-between gap-3 flex-wrap">
-        <div class="flex-1">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="text-xs px-2 py-0.5 rounded-full
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1 flex-wrap">
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium
               {% if cl.status == 'pending' %}bg-yellow-100 text-yellow-700
               {% elif cl.status == 'accepted' %}bg-green-100 text-green-700
               {% else %}bg-gray-100 text-gray-500{% endif %}">
               {% if cl.status == 'pending' %}검토 대기
-              {% elif cl.status == 'accepted' %}병합 완료
+              {% elif cl.status == 'accepted' %}확정됨
               {% else %}거부됨{% endif %}
             </span>
             <span class="text-xs text-gray-400">{{ cl.member_count }}개 품목</span>
           </div>
-          <div class="font-semibold text-gray-900 break-ko">
-            🏆 {{ cl.representative_name }}
-            {% if cl.representative_unit %}
-            <span class="text-xs text-gray-400 ml-1">/ {{ cl.representative_unit }}</span>
-            {% endif %}
+          <div class="font-semibold text-gray-900 break-ko text-base">
+            🏷 {{ cl.representative_name or '(제안명 없음)' }}
           </div>
-          {% if cl.representative_category %}
-          <div class="text-xs text-gray-500 mt-0.5">{{ cl.representative_category }}</div>
-          {% endif %}
           {% if cl.similarity_summary %}
-          <p class="text-xs text-gray-500 mt-1.5 break-ko">{{ cl.similarity_summary }}</p>
+          <p class="text-xs text-gray-500 mt-1 break-ko">{{ cl.similarity_summary }}</p>
           {% endif %}
         </div>
 
         {% if cl.status == 'pending' and has_role('manager') %}
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-shrink-0">
           <a href="{{ url_for('catalog.cluster_detail', cluster_id=cl.cluster_id) }}"
              class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
                     px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
-            상세 보기
+            상세 검토
           </a>
           <form method="POST"
-                action="{{ url_for('catalog.accept_cluster', cluster_id=cl.cluster_id) }}"
-                onsubmit="return confirm('병합하시겠습니까? 중복 품목이 비활성화됩니다.')">
-            <button class="text-xs bg-green-600 hover:bg-green-700 text-white font-semibold
+                action="{{ url_for('catalog.hold_cluster', cluster_id=cl.cluster_id) }}">
+            <button class="text-xs bg-yellow-50 hover:bg-yellow-100 text-yellow-700 font-semibold
                            px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
-              ✅ 병합
+              ⏸ 보류
             </button>
           </form>
           <form method="POST"
@@ -121,6 +146,12 @@
               ✕ 거부
             </button>
           </form>
+        </div>
+        {% endif %}
+
+        {% if cl.status == 'accepted' %}
+        <div class="text-xs text-gray-400 self-center">
+          {% if cl.reviewed_at %}{{ cl.reviewed_at[:10] }}{% endif %}
         </div>
         {% endif %}
       </div>

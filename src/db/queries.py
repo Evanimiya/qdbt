@@ -310,13 +310,152 @@ def compare_bid_submissions(bid_id):
               },
               ...
           ],
-          '인건비': [...],
           ...
       },
       'subtotals': {'A업체': 2289400000, ...},
-      'category_totals': {'A업체': {'자재': ..., '인건비': ...}, ...}
+      'category_totals': {'A업체': {'자재': ..., '인건비': ...}, ...},
+      'clusters': [   ← 확정된 클러스터 목록 (없으면 빈 배열)
+          {
+            'cluster_id': ...,
+            'representative_name': '랙 서버 (2U)',
+            'items': [  ← 클러스터에 속한 item_id 목록
+              {'item_id': ..., 'vendor_name': ..., 'name_raw': ...,
+               'unit_price': ..., 'quantity': ..., 'amount': ...}
+            ],
+            'min_vendor': '최저가 업체명',
+            'min_price': 최저 단가,
+          }
+      ]
     }
     """
+    with get_conn() as c:
+        vendors_rows = c.execute("""
+            SELECT submission_id, vendor_name, subtotal_excl_vat
+            FROM submissions
+            WHERE bid_id = ? AND extraction_status = 'done'
+            ORDER BY subtotal_excl_vat NULLS LAST
+        """, (bid_id,)).fetchall()
+
+        if not vendors_rows:
+            return {"vendors": [], "categories": {}, "subtotals": {},
+                    "clusters": []}
+
+        vendors = [r["vendor_name"] for r in vendors_rows]
+        subtotals = {r["vendor_name"]: r["subtotal_excl_vat"] for r in vendors_rows}
+
+        all_items = c.execute("""
+            SELECT i.*, s.vendor_name
+            FROM submission_items i
+            JOIN submissions s USING (submission_id)
+            WHERE s.bid_id = ? AND i.is_header = 0
+            ORDER BY i.category, i.name_normalized, i.sort_order
+        """, (bid_id,)).fetchall()
+
+        # 확정된 클러스터 조회
+        accepted_clusters = c.execute("""
+            SELECT cl.cluster_id, cl.representative_name
+            FROM catalog_clusters cl
+            WHERE cl.bid_id = ? AND cl.status = 'accepted'
+        """, (bid_id,)).fetchall()
+
+        # 클러스터 멤버 (item_id 기준)
+        clustered_item_ids = set()
+        clusters_data = []
+
+        for cl in accepted_clusters:
+            member_rows = c.execute("""
+                SELECT cm.catalog_item_id as item_id
+                FROM catalog_cluster_members cm
+                WHERE cm.cluster_id = ?
+            """, (cl["cluster_id"],)).fetchall()
+
+            member_ids = {r["item_id"] for r in member_rows}
+            clustered_item_ids |= member_ids
+
+            # 해당 item_id의 실제 submission_items 조회
+            cluster_items = []
+            for it in all_items:
+                if it["item_id"] in member_ids:
+                    cluster_items.append({
+                        "item_id":    it["item_id"],
+                        "vendor_name": it["vendor_name"],
+                        "name_raw":   it["name_raw"],
+                        "name_normalized": it["name_normalized"],
+                        "spec":       it["spec"],
+                        "unit":       it["unit"],
+                        "quantity":   it["quantity"],
+                        "unit_price": it["unit_price"],
+                        "amount":     it["amount"],
+                        "category":   it["category"],
+                    })
+
+            if not cluster_items:
+                continue
+
+            # 최저가 업체 계산
+            priced = [(ci["vendor_name"], ci["unit_price"])
+                      for ci in cluster_items if ci["unit_price"]]
+            min_vendor, min_price = (
+                min(priced, key=lambda x: x[1]) if priced else (None, None)
+            )
+
+            clusters_data.append({
+                "cluster_id":         cl["cluster_id"],
+                "representative_name": cl["representative_name"],
+                "members":            cluster_items,
+                "min_vendor":         min_vendor,
+                "min_price":          min_price,
+                "vendors":            vendors,
+            })
+
+        # 카테고리별 피벗 (클러스터 미포함 항목만)
+        cat_order = ["자재", "인건비", "출장비", "영업이익", "관리비"]
+        categories = {cat: {} for cat in cat_order}
+        cat_totals = {v: {cat: 0 for cat in cat_order} for v in vendors}
+
+        for it in all_items:
+            if it["item_id"] in clustered_item_ids:
+                continue  # 클러스터에 포함된 항목은 제외
+            cat = it["category"] or "기타"
+            vendor = it["vendor_name"]
+            name_key = (it["name_normalized"] or it["name_raw"] or "").strip()
+            if not name_key:
+                continue
+            if cat not in categories:
+                categories[cat] = {}
+            if name_key not in categories[cat]:
+                categories[cat][name_key] = {
+                    "name": name_key,
+                    "spec": it["spec"],
+                    "unit": it["unit"],
+                    "path": it["path"],
+                    "prices": {},
+                    "quantities": {},
+                    "amounts": {},
+                }
+            row = categories[cat][name_key]
+            row["prices"][vendor]     = it["unit_price"]
+            row["quantities"][vendor] = it["quantity"]
+            row["amounts"][vendor]    = it["amount"]
+            if cat in cat_totals[vendor]:
+                cat_totals[vendor][cat] += (it["amount"] or 0)
+
+        result_cats = {}
+        for cat in cat_order:
+            if categories.get(cat):
+                result_cats[cat] = list(categories[cat].values())
+        # 기타 카테고리
+        for cat, items_dict in categories.items():
+            if cat not in cat_order and items_dict:
+                result_cats[cat] = list(items_dict.values())
+
+        return {
+            "vendors":         vendors,
+            "categories":      result_cats,
+            "subtotals":       subtotals,
+            "category_totals": cat_totals,
+            "clusters":        clusters_data,
+        }
     with get_conn() as c:
         # 제출된 업체 목록 (완료된 것만)
         vendors_rows = c.execute("""
@@ -970,34 +1109,29 @@ def get_suggestion_summary(submission_id: str) -> dict:
 
 # ─── 카탈로그 클러스터링 (Phase 3-B) ─────────────
 
-def list_clusters(status: str = None) -> list:
+def list_clusters(status: str = None, bid_id: str = None) -> list:
     """클러스터 목록 (멤버 수 포함)"""
     sql = """
         SELECT cl.*,
-               ci_rep.name_canonical as representative_name,
-               ci_rep.unit_std       as representative_unit,
-               cc.name               as representative_category,
                COUNT(cm.catalog_item_id) as member_count
         FROM catalog_clusters cl
-        JOIN catalog_items ci_rep
-            ON cl.representative_item_id = ci_rep.catalog_item_id
-        LEFT JOIN catalog_categories cc
-            ON ci_rep.category_id = cc.category_id
-        JOIN catalog_cluster_members cm
-            ON cl.cluster_id = cm.cluster_id
+        JOIN catalog_cluster_members cm ON cl.cluster_id = cm.cluster_id
         WHERE 1=1
     """
     params = []
     if status:
         sql += " AND cl.status = ?"
         params.append(status)
+    if bid_id:
+        sql += " AND cl.bid_id = ?"
+        params.append(bid_id)
     sql += " GROUP BY cl.cluster_id ORDER BY cl.created_at DESC"
     with get_conn() as c:
         return c.execute(sql, params).fetchall()
 
 
 def get_cluster(cluster_id: str):
-    """클러스터 상세 (멤버 품목 포함)"""
+    """클러스터 상세 — 멤버는 submission_items 기반"""
     with get_conn() as c:
         cluster = c.execute(
             "SELECT * FROM catalog_clusters WHERE cluster_id = ?",
@@ -1006,35 +1140,74 @@ def get_cluster(cluster_id: str):
         if not cluster:
             return None, []
         members = c.execute("""
-            SELECT cm.*, ci.name_canonical, ci.aliases,
-                   ci.unit_std, ci.is_active,
-                   cc.name as category_name,
-                   COUNT(ph.record_id) as n_price_history,
-                   COUNT(si.item_id)   as n_submission_items
+            SELECT cm.*,
+                   si.name_raw, si.name_normalized, si.spec,
+                   si.category, si.unit, si.quantity, si.unit_price,
+                   si.item_id as si_item_id,
+                   s.vendor_name
             FROM catalog_cluster_members cm
-            JOIN catalog_items ci ON cm.catalog_item_id = ci.catalog_item_id
-            LEFT JOIN catalog_categories cc ON ci.category_id = cc.category_id
-            LEFT JOIN price_history ph ON cm.catalog_item_id = ph.catalog_item_id
-            LEFT JOIN submission_items si ON cm.catalog_item_id = si.catalog_item_id
-                AND si.match_status = 'confirmed'
+            JOIN submission_items si ON cm.catalog_item_id = si.item_id
+            JOIN submissions s ON si.submission_id = s.submission_id
             WHERE cm.cluster_id = ?
-            GROUP BY cm.catalog_item_id
             ORDER BY cm.role DESC, cm.similarity_score DESC
         """, (cluster_id,)).fetchall()
         return cluster, members
 
 
-def get_cluster_summary() -> dict:
+def get_cluster_summary(bid_id: str = None) -> dict:
     """클러스터 현황 요약"""
+    sql = """
+        SELECT status, COUNT(*) as cnt
+        FROM catalog_clusters WHERE 1=1
+    """
+    params = []
+    if bid_id:
+        sql += " AND bid_id = ?"
+        params.append(bid_id)
+    sql += " GROUP BY status"
     with get_conn() as c:
-        rows = c.execute("""
-            SELECT status, COUNT(*) as cnt
-            FROM catalog_clusters GROUP BY status
-        """).fetchall()
+        rows = c.execute(sql, params).fetchall()
     status_map = {r["status"]: r["cnt"] for r in rows}
     return {
         "total":    sum(status_map.values()),
         "pending":  status_map.get("pending", 0),
         "accepted": status_map.get("accepted", 0),
         "rejected": status_map.get("rejected", 0),
+        "held":     status_map.get("held", 0),
     }
+
+
+def list_bids_with_done_submissions() -> list:
+    """추출 완료 제출서가 2개 이상인 입찰 목록 (클러스터링 대상)"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT b.bid_id, b.name as bid_name,
+                   p.name as project_name,
+                   b.domain,
+                   COUNT(s.submission_id) as n_done
+            FROM bids b
+            JOIN projects p USING (project_id)
+            JOIN submissions s USING (bid_id)
+            WHERE s.extraction_status = 'done'
+            GROUP BY b.bid_id
+            HAVING n_done >= 2
+            ORDER BY b.created_at DESC
+        """).fetchall()
+
+
+def list_submission_items_for_clustering(bid_id: str) -> list:
+    """클러스터링 대상 submission_items (카테고리 헤더 제외)"""
+    with get_conn() as c:
+        return c.execute("""
+            SELECT si.item_id, si.name_raw, si.name_normalized,
+                   si.spec, si.category, si.unit, si.quantity,
+                   si.unit_price, si.amount,
+                   s.vendor_name, s.submission_id
+            FROM submission_items si
+            JOIN submissions s USING (submission_id)
+            WHERE s.bid_id = ?
+              AND s.extraction_status = 'done'
+              AND (si.is_header = 0 OR si.is_header IS NULL)
+              AND si.name_raw IS NOT NULL
+            ORDER BY s.vendor_name, si.sort_order
+        """, (bid_id,)).fetchall()

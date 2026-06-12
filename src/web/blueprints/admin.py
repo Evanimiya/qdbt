@@ -53,3 +53,13 @@ def init_db():
     _init(reset=request.form.get("reset") == "1")
     flash("DB가 초기화되었습니다.", "success")
     return redirect(url_for("projects.index"))
+
+
+@bp.route("/changelog")
+@require_role("manager")
+def changelog():
+    """시스템 업데이트 로그 (관리 메뉴)"""
+    from pathlib import Path
+    log_path = Path(__file__).parent.parent.parent.parent / "docs" / "CHANGELOG.md"
+    content = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    return render_template("admin/changelog.html", content=content)

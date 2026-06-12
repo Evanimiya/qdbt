@@ -327,78 +327,156 @@ def delete_domain_route(domain_id):
 @bp.route("/clusters")
 @login_required
 def clusters():
-    from db.queries import list_clusters, get_cluster_summary, list_domains
-    tok     = getattr(g, "auth_token", "") or ""
-    status  = request.args.get("status", "pending")
-    cluster_list = list_clusters(status=status if status != "all" else None)
-    summary = get_cluster_summary()
-    domains = list_domains(active_only=True)
+    from db.queries import (list_clusters, get_cluster_summary,
+                             list_bids_with_done_submissions)
+    tok           = getattr(g, "auth_token", "") or ""
+    status        = request.args.get("status", "pending")
+    bid_id_filter = request.args.get("bid_id", "")
+    cluster_list  = list_clusters(
+        bid_id=bid_id_filter or None,
+        status=status if status != "all" else None,
+    )
+    summary    = get_cluster_summary(bid_id=bid_id_filter or None)
+    avail_bids = list_bids_with_done_submissions()
     return render_template("catalog/clusters.html",
                            clusters=cluster_list, summary=summary,
-                           domains=domains, selected_status=status)
+                           avail_bids=avail_bids,
+                           selected_status=status,
+                           selected_bid=bid_id_filter)
+
+
+import threading
+_cluster_jobs = {}  # job_id → {'status': ..., 'message': ..., 'n': ...}
+
+
+def _cluster_worker(app, job_id, bid_id, items_raw, llm):
+    """백그라운드에서 LLM 클러스터링 실행"""
+    from extractors.catalog_clusterer import run_clustering, save_clusters
+    from config import DB_PATH
+    import sqlite3
+
+    _cluster_jobs[job_id] = {
+        "status": "running",
+        "message": f"품목 {len(items_raw)}개 분석 중...",
+        "n": 0,
+    }
+    try:
+        with app.app_context():
+            cluster_list = run_clustering(
+                submission_items=items_raw,
+                api_key=llm["api_key"],
+                provider_id=llm["provider"],
+                model=llm["model"],
+            )
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            n = save_clusters(conn, cluster_list, bid_id=bid_id)
+            conn.close()
+            _cluster_jobs[job_id] = {
+                "status": "done",
+                "message": f"{n}개 유사 그룹 감지됨" if n else "유사 품목 없음",
+                "n": n,
+                "bid_id": bid_id,
+            }
+    except Exception as e:
+        _cluster_jobs[job_id] = {
+            "status": "error",
+            "message": str(e),
+            "n": 0,
+        }
 
 
 @bp.route("/clusters/run", methods=["POST"])
 @require_role("manager")
 def run_clusters():
-    """LLM 클러스터링 실행"""
-    from db.queries import (list_catalog_items, list_clusters,
+    """LLM 클러스터링 — 백그라운드 실행 후 job_id 반환"""
+    import uuid as _uuid
+    from flask import current_app
+    from db.queries import (list_submission_items_for_clustering,
                              get_user_llm_settings)
-    from extractors.catalog_clusterer import run_clustering, save_clusters
-    from config import DB_PATH
-    import sqlite3
 
-    tok = getattr(g, "auth_token", "") or ""
+    tok    = getattr(g, "auth_token", "") or ""
     auth_data = getattr(g, "auth_data", None) or {}
-    uid = auth_data.get("user_id", "")
-    domain_filter = request.form.get("domain", "").strip() or None
+    uid    = auth_data.get("user_id", "")
+    bid_id = request.form.get("bid_id", "").strip()
+
+    if not bid_id:
+        flash("분석할 입찰을 선택하세요.", "error")
+        return redirect(url_for("catalog.clusters", _t=tok))
 
     llm = get_user_llm_settings(uid)
     if not llm.get("api_key"):
         flash("API 키가 설정되지 않았습니다. ⚙ 내 프로필에서 설정하세요.", "error")
         return redirect(url_for("catalog.clusters", _t=tok))
 
-    try:
-        items_raw = [dict(i) for i in list_catalog_items(active_only=True)]
-        if len(items_raw) < 2:
-            flash("카탈로그 품목이 2개 이상이어야 클러스터링이 가능합니다.", "warning")
-            return redirect(url_for("catalog.clusters", _t=tok))
+    items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
+    if len(items_raw) < 2:
+        flash("추출 완료 견적서가 2개 이상인 입찰을 선택하세요.", "warning")
+        return redirect(url_for("catalog.clusters", _t=tok))
 
-        cluster_list = run_clustering(
-            catalog_items=items_raw,
-            api_key=llm["api_key"],
-            provider_id=llm["provider"],
-            model=llm["model"],
-            domain=domain_filter,
-        )
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        n = save_clusters(conn, cluster_list)
-        conn.close()
+    job_id = str(_uuid.uuid4())
+    app = current_app._get_current_object()
+    t = threading.Thread(
+        target=_cluster_worker,
+        args=(app, job_id, bid_id, items_raw, llm),
+        daemon=True,
+    )
+    t.start()
 
-        if n:
-            flash(f"✅ 클러스터링 완료 — {n}개 유사 그룹 감지됨", "success")
-        else:
-            flash("유사 품목이 감지되지 않았습니다.", "info")
-    except Exception as e:
-        flash(f"❌ 클러스터링 실패: {e}", "error")
+    # 진행현황 페이지로 redirect
+    return redirect(url_for("catalog.cluster_progress",
+                            job_id=job_id, bid_id=bid_id, _t=tok))
 
-    return redirect(url_for("catalog.clusters", _t=tok))
+
+@bp.route("/clusters/progress/<job_id>")
+@login_required
+def cluster_progress(job_id):
+    """클러스터링 진행현황 페이지 (polling UI)"""
+    bid_id = request.args.get("bid_id", "")
+    tok    = getattr(g, "auth_token", "") or ""
+    return render_template("catalog/cluster_progress.html",
+                           job_id=job_id, bid_id=bid_id)
+
+
+@bp.route("/clusters/status/<job_id>.json")
+@login_required
+def cluster_status_json(job_id):
+    """클러스터링 상태 polling 엔드포인트"""
+    from flask import jsonify
+    job = _cluster_jobs.get(job_id, {"status": "unknown", "message": "작업을 찾을 수 없습니다.", "n": 0})
+    return jsonify(job)
 
 
 @bp.route("/clusters/<cluster_id>")
 @login_required
 def cluster_detail(cluster_id):
-    from db.queries import get_cluster, list_catalog_items
+    from db.queries import (get_cluster, list_submission_items_for_clustering)
+    from extractors.catalog_clusterer import is_high_confidence
+    from config import DB_PATH
+    import sqlite3
+
     cluster, members = get_cluster(cluster_id)
     if not cluster:
         abort(404)
-    # 대표 품목 교체용 — 전체 활성 품목 목록
-    all_items = list_catalog_items(active_only=True)
+
+    # 90% 이상 확정 버튼 활성화 여부 판단
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    high_conf = is_high_confidence(conn, cluster_id, threshold=0.9)
+
+    # 이 클러스터의 입찰에서 추가 가능한 아이템 목록
+    avail_items = []
+    if dict(cluster).get("bid_id"):
+        existing_ids = {dict(m)["catalog_item_id"] for m in members}
+        all_items = list_submission_items_for_clustering(dict(cluster)["bid_id"])
+        avail_items = [dict(i) for i in all_items
+                       if i["item_id"] not in existing_ids]
+    conn.close()
+
     tok = getattr(g, "auth_token", "") or ""
     return render_template("catalog/cluster_detail.html",
                            cluster=cluster, members=members,
-                           all_items=all_items)
+                           high_conf=high_conf, avail_items=avail_items)
 
 
 @bp.route("/clusters/<cluster_id>/accept", methods=["POST"])
@@ -408,24 +486,40 @@ def accept_cluster(cluster_id):
     from config import DB_PATH
     import sqlite3
 
-    tok = getattr(g, "auth_token", "") or ""
+    tok  = getattr(g, "auth_token", "") or ""
     auth_data = getattr(g, "auth_data", None) or {}
-    uid = auth_data.get("user_id", "")
-    representative_id = request.form.get("representative_id", "").strip() or None
+    uid  = auth_data.get("user_id", "")
+    rep_name = request.form.get("representative_name", "").strip() or None
 
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        result = do_accept(conn, cluster_id, uid, representative_id)
+        result = do_accept(conn, cluster_id, uid, rep_name)
         conn.close()
-        flash(
-            f"✅ 병합 완료 — 대표 품목으로 {result['merged_count']}개 통합, "
-            f"별칭 {result['aliases_added']}개",
-            "success"
-        )
+        flash(f"✅ 확정 — 대표 품목명: '{result['representative_name']}'", "success")
     except Exception as e:
-        flash(f"❌ 병합 실패: {e}", "error")
+        flash(f"❌ 확정 실패: {e}", "error")
 
+    return redirect(url_for("catalog.clusters", _t=tok))
+
+
+@bp.route("/clusters/<cluster_id>/hold", methods=["POST"])
+@require_role("manager")
+def hold_cluster(cluster_id):
+    """클러스터 보류 (5-3)"""
+    from extractors.catalog_clusterer import hold_cluster as do_hold
+    from config import DB_PATH
+    import sqlite3
+
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    do_hold(conn, cluster_id, uid)
+    conn.close()
+    flash("클러스터가 보류 처리되었습니다.", "info")
     return redirect(url_for("catalog.clusters", _t=tok))
 
 
@@ -446,3 +540,47 @@ def reject_cluster(cluster_id):
     conn.close()
     flash("제안이 거부되었습니다.", "info")
     return redirect(url_for("catalog.clusters", _t=tok))
+
+
+@bp.route("/clusters/<cluster_id>/remove-member", methods=["POST"])
+@require_role("manager")
+def remove_cluster_member(cluster_id):
+    """클러스터에서 특정 아이템 제외 (5-1)"""
+    from extractors.catalog_clusterer import remove_member
+    from config import DB_PATH
+    import sqlite3
+
+    tok     = getattr(g, "auth_token", "") or ""
+    item_id = request.form.get("item_id", "").strip()
+
+    if item_id:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        remove_member(conn, cluster_id, item_id)
+        conn.close()
+        flash("항목이 제외되었습니다.", "info")
+
+    return redirect(url_for("catalog.cluster_detail",
+                            cluster_id=cluster_id, _t=tok))
+
+
+@bp.route("/clusters/<cluster_id>/add-member", methods=["POST"])
+@require_role("manager")
+def add_cluster_member(cluster_id):
+    """클러스터에 아이템 수동 추가 (5-2)"""
+    from extractors.catalog_clusterer import add_member
+    from config import DB_PATH
+    import sqlite3
+
+    tok     = getattr(g, "auth_token", "") or ""
+    item_id = request.form.get("item_id", "").strip()
+
+    if item_id:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        add_member(conn, cluster_id, item_id)
+        conn.close()
+        flash("항목이 추가되었습니다.", "success")
+
+    return redirect(url_for("catalog.cluster_detail",
+                            cluster_id=cluster_id, _t=tok))
