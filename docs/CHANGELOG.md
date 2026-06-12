@@ -409,3 +409,142 @@ LLM이 라인 아이템 ↔ 카탈로그 품목 매칭 추천
 
 - Round 1~4: 9개 업체 추출 100%, 매칭 F1=1.0 검증
 - 통합 데모: 9개 업체 → DB → Excel 비교 보고서 2건
+
+## [v0.7.0-test] - 2026-06-09
+
+### Phase 3-A: 카탈로그 자동 제안
+
+#### 추가 (Added)
+- **`src/extractors/catalog_suggester.py`** — 신규/유사 품목 자동 감지 LLM 모듈
+  - `run_catalog_suggestion()` — 추출된 아이템 vs 카탈로그 LLM 비교
+  - `save_suggestions()` — 제안 DB 저장
+  - `accept_suggestion()` — 수락 처리 (new_item: 카탈로그 생성, similar: 연결)
+  - `reject_suggestion()` — 거부 처리
+- **`src/web/templates/submissions/suggestions.html`** — 제안 검토 화면
+  - 유형별 구분 (🆕 신규 등록 / 🔗 유사 연결)
+  - 신뢰도 표시, 표준명 수정 입력, 수락/거부 버튼
+  - 처리 완료 목록 별도 표시
+
+#### 변경 (Changed)
+- **`src/db/schema.py`** — `catalog_suggestions` 테이블 추가 + migrate_db 반영
+- **`src/db/queries.py`** — `get_suggestions()`, `get_suggestion_summary()` 추가
+- **`src/extractors/pipeline.py`** — 추출 완료 후 카탈로그 제안 자동 실행
+- **`src/web/blueprints/submissions.py`** — 제안 관련 라우트 4개 추가
+  - `GET  /<id>/suggestions` — 제안 검토 화면
+  - `POST /<id>/suggestions/run` — 제안 재생성
+  - `POST /<id>/suggestions/<sid>/accept` — 수락
+  - `POST /<id>/suggestions/<sid>/reject` — 거부
+  - `detail()` 라우트에 `suggestion_summary` 전달
+- **`src/web/templates/submissions/detail.html`** — 📋 카탈로그 제안 버튼 추가
+  (대기 중인 제안 수 배지 표시)
+
+#### 전체 흐름
+```
+파일 업로드 → 추출 완료
+    ↓ 자동 실행
+LLM이 각 아이템을 카탈로그와 비교
+  → 유사 품목 있음: 'similar' 제안 (신뢰도 표시)
+  → 유사 품목 없음: 'new_item' 제안 (표준명 생성)
+    ↓
+담당자가 📋 카탈로그 제안 버튼 클릭
+  → 수락: 카탈로그 자동 생성/연결 + price_history 연결
+  → 거부: 무시
+```
+
+## [v0.7.1-test] - 2026-06-11
+
+### Phase 3-D: 도메인 확장 대응 (IT / 설비 / 용역 / 기타)
+
+#### 추가 (Added)
+- **도메인별 기본 카테고리** (총 18개 자동 생성)
+  - IT (5개): 자재 / 인건비 / 출장비 / 영업이익 / 관리비
+  - 설비 (6개): 자재 / 설치비 / 시운전 / 감리비 / 유지보수 / 철거
+  - 용역 (4개): 직접인건비 / 제경비 / 기술료 / 기타경비
+  - 기타 (3개): 자재 / 인건비 / 기타경비
+- **`db/queries.py`** — `toggle_catalog_category()`, `get_bid_domain()`, `DOMAIN_LIST` 추가
+- **카테고리 비활성화/활성화** (`/catalog/categories/<id>/toggle`)
+  - 삭제 대신 비활성화 권장 (이력 보존)
+
+#### 변경 (Changed)
+- **`src/db/schema.py`**
+  - `bids.domain TEXT DEFAULT 'IT'` 추가
+  - `catalog_categories`: `domain`, `is_active`, `description`, `updated_at` 컬럼 추가
+  - migrate_db에 자동 마이그레이션 추가
+- **`src/db/queries.py`**
+  - `create_bid(domain=)` 파라미터 추가
+  - `list_catalog_categories(domain=, active_only=)` 도메인 필터 지원
+  - `create_catalog_category(domain=, description=)` 파라미터 추가
+  - `update_catalog_category()` updated_at 자동 갱신
+- **`src/web/blueprints/projects.py`** — 입찰 생성 시 도메인 선택 처리
+- **`src/web/blueprints/catalog.py`** — 카테고리 비활성화/활성화 라우트 추가
+- **`src/web/templates/projects/bid_form.html`** — 도메인 선택 카드 UI 추가
+- **`src/web/templates/catalog/categories.html`** — 도메인 탭 필터 + 비활성화 관리 UI
+- **`src/web/templates/bids/detail.html`** — 도메인 배지 표시
+
+## [v0.7.2-test] - 2026-06-11
+
+### 도메인 CRUD + 연쇄 업데이트 대응
+
+#### 추가 (Added)
+- **`domains` 테이블** — 도메인을 DB에서 관리 (기존 하드코딩 대체)
+  - 기본 4개 자동 생성: IT / 설비 / 용역 / 기타
+- **도메인 관리 화면** (`/catalog/domains`)
+  - 도메인 추가 / 수정 / 활성화·비활성화 / 삭제
+- **도메인 수정 화면** (`/catalog/domains/<id>/edit`)
+  - 이름 변경 전 연쇄 영향도 표시 (입찰 N개, 카테고리 M개)
+  - 연쇄 업데이트 포함 저장 (확인 팝업)
+- **`db/queries.py`**
+  - `list_domains()`, `get_domain()`, `get_domain_by_name()`
+  - `create_domain()`, `update_domain()` — 이름 변경 시 bids/categories 연쇄 업데이트
+  - `toggle_domain()` — 비활성화 (기존 데이터 유지, 신규 생성 차단)
+  - `delete_domain()` — 연결 데이터 없을 때만 삭제 허용
+  - `get_domain_impact()` — 변경 전 영향도 미리 조회
+
+#### 변경 (Changed)
+- **입찰 생성 폼** — 도메인 목록을 DB에서 동적으로 조회 (비활성 도메인 자동 제외)
+- **카테고리 관리 화면** — 도메인 관리 링크 추가
+- **`src/db/schema.py`** — `migrate_db()`에 domains 테이블 자동 생성 추가
+
+#### 데이터 안전성
+| 변경 유형 | 처리 |
+|---------|------|
+| 도메인 이름 수정 | bids.domain, catalog_categories.domain 연쇄 업데이트 |
+| 도메인 비활성화 | 기존 데이터 유지, 신규 입찰 생성만 차단 |
+| 도메인 삭제 | 연결된 입찰/카테고리 있으면 ValueError 발생 |
+
+## [v0.7.3-test] - 2026-06-11
+
+### Phase 3-B: 유사 품목 클러스터링
+
+#### 추가 (Added)
+- **`src/extractors/catalog_clusterer.py`** — 유사 품목 감지 + 병합 LLM 모듈
+  - `run_clustering()` — 전체 카탈로그 분석, 유사 품목 그룹 감지
+  - `save_clusters()` — 클러스터 DB 저장
+  - `accept_cluster()` — 병합 확정 처리
+    - 중복 품목 aliases → 대표 품목에 자동 통합
+    - price_history → 대표 품목으로 재연결
+    - submission_items → 대표 품목으로 재연결
+    - 중복 품목 비활성화 (데이터 보존)
+  - `reject_cluster()` — 별개 품목으로 유지
+- **DB 테이블 2개 추가**
+  - `catalog_clusters` — 클러스터 제안 (status: pending/accepted/rejected)
+  - `catalog_cluster_members` — 클러스터 멤버 (role: representative/duplicate)
+- **화면 2개 추가**
+  - `/catalog/clusters` — 클러스터 목록 (도메인별 실행, 상태 탭 필터)
+  - `/catalog/clusters/<id>` — 상세 (대표 품목 선택 가능, 멤버별 이력/연결 수 표시)
+- **사이드바** — 🔀 유사 품목 클러스터링 메뉴 추가
+
+#### 전체 흐름
+```
+카탈로그에 품목이 충분히 쌓임
+    ↓
+🤖 클러스터링 실행 (도메인 선택 가능)
+    ↓
+LLM이 유사 품목 그룹 제안
+  예: "랙 서버 (2U)", "Rack Server 2U", "랙형 서버(2U)" → 같은 그룹
+    ↓
+담당자가 대표 품목 선택 → ✅ 병합
+  → 중복 품목 aliases 통합
+  → 가격 이력/매칭 아이템 재연결
+  → 중복 품목 비활성화
+```

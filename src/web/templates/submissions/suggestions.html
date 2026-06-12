@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}카탈로그 제안 · {{ sub.vendor_name }}{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.detail', project_id=sub.project_id) }}" class="hover:text-blue-700 break-ko">{{ sub.project_name }}</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('bids.detail', bid_id=sub.bid_id) }}" class="hover:text-blue-700 break-ko">{{ sub.bid_name }}</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('submissions.detail', submission_id=sub.submission_id) }}" class="hover:text-blue-700">{{ sub.vendor_name }}</a>
+  <span class="mx-2">›</span> 카탈로그 제안
+</nav>
+
+<!-- 헤더 -->
+<div class="flex items-start justify-between flex-wrap gap-3 mb-5">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900 break-ko">📋 카탈로그 제안 — {{ sub.vendor_name }}</h1>
+    <p class="text-sm text-gray-500 mt-0.5 break-ko">
+      추출된 품목 중 카탈로그에 없거나 유사한 품목을 시스템이 자동 감지했습니다.
+    </p>
+  </div>
+  {% if has_role('manager') %}
+  <form method="POST" action="{{ url_for('submissions.run_suggestions', submission_id=sub.submission_id) }}"
+        onsubmit="return confirm('제안을 다시 생성합니다. 기존 대기 중인 제안이 초기화됩니다.');">
+    <button type="submit"
+            class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                   px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+      🤖 제안 재생성
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+<!-- 현황 통계 -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+  {% set stat_items = [
+    ('전체', summary.total, 'gray'),
+    ('검토 대기', summary.pending, 'yellow'),
+    ('수락됨', summary.accepted + summary.modified, 'green'),
+    ('거부됨', summary.rejected, 'red'),
+  ] %}
+  {% for label, count, color in stat_items %}
+  <div class="bg-white rounded-lg border border-{{ color }}-200 p-3 text-center
+              {% if color != 'gray' %}bg-{{ color }}-50{% endif %}">
+    <div class="text-xs text-gray-500 break-ko">{{ label }}</div>
+    <div class="text-xl font-bold text-{{ color }}-700">{{ count }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if not suggestions %}
+<!-- 제안 없음 -->
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
+  <div class="text-5xl mb-3">📋</div>
+  <p class="text-gray-500 break-ko mb-2">아직 카탈로그 제안이 없습니다.</p>
+  <p class="text-sm text-gray-400 break-ko mb-5">
+    추출 완료 후 자동으로 생성되거나, 위의 "제안 재생성" 버튼으로 실행할 수 있습니다.
+  </p>
+  {% if not api_available %}
+  <p class="text-xs text-red-500 break-ko">
+    ⚠️ API 키 미설정.
+    <a href="{{ url_for('profile.index') }}" class="underline">프로필에서 설정</a>하세요.
+  </p>
+  {% endif %}
+</div>
+
+{% else %}
+<!-- 제안 목록 -->
+
+<!-- pending 먼저 -->
+{% set pending_list = suggestions | selectattr('status', 'eq', 'pending') | list %}
+{% set done_list    = suggestions | rejectattr('status', 'eq', 'pending') | list %}
+
+{% if pending_list %}
+<h2 class="text-sm font-bold text-gray-700 mb-3 break-ko">
+  🔔 검토 대기 ({{ pending_list | length }}건)
+</h2>
+<div class="space-y-3 mb-8">
+{% for s in pending_list %}
+<div class="bg-white rounded-xl shadow-sm border-l-4
+            {% if s.suggestion_type == 'new_item' %}border-blue-500{% else %}border-purple-500{% endif %}
+            border border-gray-200 p-4">
+  <div class="flex items-start justify-between flex-wrap gap-3">
+    <div class="flex-1">
+      <!-- 배지 + 품목명 -->
+      <div class="flex items-center gap-2 mb-1 flex-wrap">
+        <span class="text-xs px-2 py-0.5 rounded-full font-semibold
+          {% if s.suggestion_type == 'new_item' %}bg-blue-100 text-blue-700
+          {% else %}bg-purple-100 text-purple-700{% endif %}">
+          {% if s.suggestion_type == 'new_item' %}🆕 신규 등록{% else %}🔗 유사 연결{% endif %}
+        </span>
+        <span class="font-semibold text-gray-900 break-ko">
+          {{ s.name_normalized or s.name_raw }}
+        </span>
+      </div>
+
+      <!-- 규격 -->
+      {% if s.spec %}
+      <p class="text-xs text-gray-500 mb-2 break-ko">{{ s.spec }}</p>
+      {% endif %}
+
+      <!-- 제안 내용 -->
+      {% if s.suggestion_type == 'new_item' %}
+      <div class="bg-blue-50 rounded-lg p-3 text-sm">
+        <div class="text-xs text-blue-600 font-semibold mb-1">제안 표준명</div>
+        <div class="font-semibold text-blue-800 break-ko">{{ s.suggested_name or '(미정)' }}</div>
+        {% if s.suggested_spec %}
+        <div class="text-xs text-blue-600 mt-1">스펙: {{ s.suggested_spec }}</div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="bg-purple-50 rounded-lg p-3 text-sm">
+        <div class="text-xs text-purple-600 font-semibold mb-1">
+          유사 품목 (신뢰도 {{ (s.similarity_score * 100) | int }}%)
+        </div>
+        <div class="font-semibold text-purple-800 break-ko">
+          {{ s.matched_catalog_name or '알 수 없음' }}
+        </div>
+        {% if s.similarity_reason %}
+        <div class="text-xs text-purple-600 mt-1 break-ko">{{ s.similarity_reason }}</div>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- 액션 버튼 -->
+    {% if has_role('manager') %}
+    <div class="flex flex-col gap-2 min-w-fit">
+
+      <!-- 수락 -->
+      <form method="POST"
+            action="{{ url_for('submissions.accept_suggestion',
+                               submission_id=sub.submission_id,
+                               suggestion_id=s.suggestion_id) }}">
+        {% if s.suggestion_type == 'new_item' %}
+        <!-- 이름 수정 입력 (선택) -->
+        <input type="text" name="override_name"
+               value="{{ s.suggested_name or '' }}"
+               placeholder="표준명 수정 (선택)"
+               class="w-full mb-1 px-2 py-1.5 border border-gray-300 rounded text-xs
+                      focus:ring-1 focus:ring-blue-500 break-ko">
+        {% endif %}
+        <button type="submit"
+                class="w-full text-xs bg-green-600 hover:bg-green-700 text-white
+                       font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
+          ✅ 수락{% if s.suggestion_type == 'new_item' %} (카탈로그 추가){% else %} (연결){% endif %}
+        </button>
+      </form>
+
+      <!-- 거부 -->
+      <form method="POST"
+            action="{{ url_for('submissions.reject_suggestion',
+                               submission_id=sub.submission_id,
+                               suggestion_id=s.suggestion_id) }}">
+        <button type="submit"
+                class="w-full text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
+                       font-semibold px-3 py-1.5 rounded-lg transition-colors">
+          ✕ 거부
+        </button>
+      </form>
+
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+<!-- 처리 완료 목록 -->
+{% if done_list %}
+<details class="bg-white rounded-xl border border-gray-200">
+  <summary class="px-4 py-3 text-sm font-semibold text-gray-600 cursor-pointer
+                  hover:bg-gray-50 rounded-xl break-ko">
+    처리 완료 ({{ done_list | length }}건) 펼치기
+  </summary>
+  <div class="divide-y divide-gray-100">
+  {% for s in done_list %}
+  <div class="px-4 py-3 flex items-center gap-3">
+    <span class="text-xs px-2 py-0.5 rounded-full
+      {% if s.status == 'accepted' or s.status == 'modified' %}bg-green-100 text-green-700
+      {% else %}bg-gray-100 text-gray-500{% endif %}">
+      {% if s.status == 'accepted' %}✅ 수락
+      {% elif s.status == 'modified' %}✏️ 수정 수락
+      {% else %}✕ 거부{% endif %}
+    </span>
+    <span class="text-sm text-gray-700 break-ko">
+      {{ s.name_normalized or s.name_raw }}
+    </span>
+    {% if s.suggested_name %}
+    <span class="text-xs text-gray-400 break-ko">→ {{ s.suggested_name }}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from auth.auth import login_required, require_role
-from db.queries import get_bid, list_submissions, update_submission
+from db.queries import get_bid, list_submissions, list_deleted_submissions, update_submission
 
 bp = Blueprint("bids", __name__)
 
@@ -15,7 +15,10 @@ def detail(bid_id):
     if not bid:
         abort(404)
     submissions = list_submissions(bid_id)
-    return render_template("bids/detail.html", bid=bid, submissions=submissions)
+    deleted_submissions = list_deleted_submissions(bid_id)
+    return render_template("bids/detail.html", bid=bid,
+                           submissions=submissions,
+                           deleted_submissions=deleted_submissions)
 
 
 @bp.route("/<bid_id>/status", methods=["POST"])

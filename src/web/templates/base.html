@@ -84,8 +84,13 @@
       </a>
       <a href="{{ url_for('catalog.index') }}"
          class="flex items-center gap-3 px-4 py-2.5 hover:bg-navy-700 rounded-lg mx-2 text-sm break-ko
-                {% if request.endpoint and 'catalog' in request.endpoint %}bg-navy-700{% endif %}">
+                {% if request.endpoint and 'catalog' in request.endpoint and 'cluster' not in (request.endpoint or '') %}bg-navy-700{% endif %}">
         <span>📦</span> 품목 카탈로그
+      </a>
+      <a href="{{ url_for('catalog.clusters') }}"
+         class="flex items-center gap-3 px-4 py-2.5 hover:bg-navy-700 rounded-lg mx-2 text-sm break-ko
+                {% if request.endpoint and 'cluster' in (request.endpoint or '') %}bg-navy-700{% endif %}">
+        <span>🔀</span> 유사 품목 클러스터링
       </a>
       {% if has_role('admin') %}
       <div class="mt-3 px-4 text-xs text-navy-100 opacity-50 uppercase">관리</div>

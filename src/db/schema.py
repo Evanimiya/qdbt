@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- ═══════════════════════════════════════════
+-- 도메인 관리 (추가/수정/비활성화 가능)
+-- ═══════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS domains (
+    domain_id   TEXT PRIMARY KEY,          -- UUID
+    name        TEXT NOT NULL UNIQUE,      -- 'IT', '설비', '용역', '기타'
+    description TEXT,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+                    -- 0이면 신규 입찰 생성 차단 (기존 데이터는 유지)
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ═══════════════════════════════════════════
 -- 프로젝트 → 입찰 → 제출 계층
 -- ═══════════════════════════════════════════
 
@@ -85,6 +100,9 @@ CREATE TABLE IF NOT EXISTS bids (
     name            TEXT NOT NULL,         -- 예: "1차 입찰", "재입찰"
     due_date        DATE,
     description     TEXT,
+    domain          TEXT NOT NULL DEFAULT 'IT',
+                        -- 'IT' | '설비' | '용역' | '기타'
+                        -- 도메인에 따라 기본 카테고리 세트 자동 적용
     status          TEXT NOT NULL DEFAULT 'open',
                         -- open | closed | awarded | cancelled
     created_by      TEXT REFERENCES users(user_id),
@@ -116,7 +134,6 @@ CREATE TABLE IF NOT EXISTS submissions (
     reviewed_by     TEXT REFERENCES users(user_id),
     reviewed_at     TIMESTAMP,
     uploaded_by     TEXT REFERENCES users(user_id),
-    deleted_at      TIMESTAMP,            -- 소프트 삭제 타임스탬프 (NULL = 활성)
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (bid_id, vendor_name)           -- 같은 입찰에 같은 업체 중복 방지
@@ -176,9 +193,14 @@ CREATE TABLE IF NOT EXISTS bid_watchlist (
 CREATE TABLE IF NOT EXISTS catalog_categories (
     category_id     TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
+    description     TEXT,                  -- 카테고리 설명
+    domain          TEXT NOT NULL DEFAULT 'IT',
+                        -- 'IT' | '설비' | '용역' | '기타' | 'ALL' (전 도메인 공통)
     parent_id       TEXT REFERENCES catalog_categories(category_id),
     sort_order      INTEGER DEFAULT 0,
-    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    is_active       INTEGER NOT NULL DEFAULT 1,  -- 0이면 비활성화 (숨김)
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS catalog_items (
@@ -228,16 +250,117 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_bid   ON bid_watchlist(bid_id);
 CREATE INDEX IF NOT EXISTS idx_users_role      ON users(role);
 
 -- ═══════════════════════════════════════════
+-- 카탈로그 제안 (Phase 3-A)
+-- 추출 완료 시 LLM이 신규/유사 품목을 자동 감지하여 제안
+-- 담당자가 수락/거부/수정 후 확정
+-- ═══════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS catalog_suggestions (
+    suggestion_id   TEXT PRIMARY KEY,           -- UUID
+    submission_id   TEXT NOT NULL REFERENCES submissions(submission_id),
+    item_id         TEXT NOT NULL REFERENCES submission_items(item_id),
+
+    -- 제안 유형
+    suggestion_type TEXT NOT NULL,
+                        -- 'new_item'   : 카탈로그에 없는 신규 품목 → 추가 제안
+                        -- 'similar'    : 기존 카탈로그 품목과 유사 → 연결 제안
+
+    -- 신규 품목 제안 시
+    suggested_name  TEXT,                       -- LLM이 제안하는 표준 품목명
+    suggested_category_id TEXT,                 -- 제안 카테고리
+    suggested_aliases TEXT,                     -- 제안 별칭 (JSON 배열)
+    suggested_spec  TEXT,                       -- 제안 규격 템플릿
+
+    -- 유사 품목 연결 제안 시
+    matched_catalog_item_id TEXT,               -- 연결 제안할 기존 카탈로그 품목
+    similarity_score REAL,                      -- 유사도 (0~1)
+    similarity_reason TEXT,                     -- 유사 판단 근거
+
+    -- 처리 상태
+    status          TEXT NOT NULL DEFAULT 'pending',
+                        -- pending  : 담당자 검토 대기
+                        -- accepted : 수락 (카탈로그 생성/연결됨)
+                        -- rejected : 거부
+                        -- modified : 수정 후 수락
+
+    reviewed_by     TEXT REFERENCES users(user_id),
+    reviewed_at     TIMESTAMP,
+    review_note     TEXT,                       -- 거부/수정 사유
+
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_suggestions_submission ON catalog_suggestions(submission_id);
+CREATE INDEX IF NOT EXISTS idx_suggestions_status     ON catalog_suggestions(status);
+CREATE INDEX IF NOT EXISTS idx_suggestions_item       ON catalog_suggestions(item_id);
+
+-- ═══════════════════════════════════════════
+-- 유사 품목 클러스터링 (Phase 3-B)
+-- 여러 입찰서에서 등록된 유사 품목들을 하나로 묶는 제안
+-- ═══════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS catalog_clusters (
+    cluster_id              TEXT PRIMARY KEY,
+    representative_item_id  TEXT NOT NULL,
+                                -- 대표 품목 (병합 후 남길 품목)
+    status                  TEXT NOT NULL DEFAULT 'pending',
+                                -- pending | accepted | rejected
+    similarity_summary      TEXT,   -- LLM이 제안한 유사 근거 요약
+    reviewed_by             TEXT REFERENCES users(user_id),
+    reviewed_at             TIMESTAMP,
+    created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS catalog_cluster_members (
+    cluster_id      TEXT NOT NULL REFERENCES catalog_clusters(cluster_id),
+    catalog_item_id TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'duplicate',
+                        -- 'representative' | 'duplicate'
+    similarity_score REAL,
+    PRIMARY KEY (cluster_id, catalog_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_status  ON catalog_clusters(status);
+CREATE INDEX IF NOT EXISTS idx_cluster_members ON catalog_cluster_members(catalog_item_id);
+
+-- ═══════════════════════════════════════════
 -- 초기 데이터: 카탈로그 기본 카테고리
 -- ═══════════════════════════════════════════
 
-INSERT OR IGNORE INTO catalog_categories (category_id, name, sort_order)
+-- 기본 도메인 (INSERT OR IGNORE — 중복 무시)
+INSERT OR IGNORE INTO domains (domain_id, name, description, sort_order)
 VALUES
-    ('CAT-001', '자재',   1),
-    ('CAT-002', '인건비', 2),
-    ('CAT-003', '출장비', 3),
-    ('CAT-004', '영업이익', 4),
-    ('CAT-005', '관리비', 5);
+    ('DOM-001', 'IT',   'IT 시스템, 서버, 네트워크, SW 등',    1),
+    ('DOM-002', '설비', '기계설비, 전기설비, 배관, 공조 등',  2),
+    ('DOM-003', '용역', '컨설팅, 감리, 유지관리 서비스 등',  3),
+    ('DOM-004', '기타', '복합 도메인 또는 미분류',            4);
+
+-- 도메인별 기본 카테고리 (INSERT OR IGNORE — 중복 무시)
+INSERT OR IGNORE INTO catalog_categories
+    (category_id, name, domain, sort_order, is_active, description)
+VALUES
+    -- IT
+    ('CAT-IT-001', '자재',     'IT', 1, 1, '서버, 네트워크 장비, SW 라이선스 등'),
+    ('CAT-IT-002', '인건비',   'IT', 2, 1, 'PM, SE, 개발자 등 투입 인력'),
+    ('CAT-IT-003', '출장비',   'IT', 3, 1, '현장 출장, 교통, 숙박'),
+    ('CAT-IT-004', '영업이익', 'IT', 4, 1, '업체 마진'),
+    ('CAT-IT-005', '관리비',   'IT', 5, 1, '간접 관리 비용'),
+    -- 설비
+    ('CAT-FA-001', '자재',     '설비', 1, 1, '기계, 전기, 배관 자재 등'),
+    ('CAT-FA-002', '설치비',   '설비', 2, 1, '설비 설치 및 공사비'),
+    ('CAT-FA-003', '시운전',   '설비', 3, 1, '시운전 및 테스트'),
+    ('CAT-FA-004', '감리비',   '설비', 4, 1, '감리 및 감독'),
+    ('CAT-FA-005', '유지보수', '설비', 5, 1, '유지보수 및 A/S'),
+    ('CAT-FA-006', '철거',     '설비', 6, 1, '기존 설비 철거'),
+    -- 용역
+    ('CAT-SV-001', '직접인건비', '용역', 1, 1, '직접 투입 인력 인건비'),
+    ('CAT-SV-002', '제경비',     '용역', 2, 1, '4대보험, 퇴직금 등'),
+    ('CAT-SV-003', '기술료',     '용역', 3, 1, '기술 사용료 및 지식재산'),
+    ('CAT-SV-004', '기타경비',   '용역', 4, 1, '여비, 인쇄, 소모품 등'),
+    -- 기타 (도메인 미정 또는 복합)
+    ('CAT-ETC-001', '자재',   '기타', 1, 1, NULL),
+    ('CAT-ETC-002', '인건비', '기타', 2, 1, NULL),
+    ('CAT-ETC-003', '기타경비', '기타', 3, 1, NULL);
 """
 
 
@@ -290,10 +413,101 @@ def migrate_db(db_path=None):
     if "llm_model" not in cols:
         migrations.append("ALTER TABLE users ADD COLUMN llm_model TEXT")
 
-    # submissions.deleted_at 컬럼 추가 (소프트 삭제)
+    # domains 테이블 추가 (도메인 관리)
+    tables = [t[0] for t in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()]
+    if "domains" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS domains (
+                domain_id   TEXT PRIMARY KEY,
+                name        TEXT NOT NULL UNIQUE,
+                description TEXT,
+                is_active   INTEGER NOT NULL DEFAULT 1,
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO domains (domain_id, name, description, sort_order)
+            VALUES
+                ('DOM-001', 'IT',   'IT 시스템, 서버, 네트워크, SW 등',   1),
+                ('DOM-002', '설비', '기계설비, 전기설비, 배관, 공조 등', 2),
+                ('DOM-003', '용역', '컨설팅, 감리, 유지관리 서비스 등', 3),
+                ('DOM-004', '기타', '복합 도메인 또는 미분류',           4)
+        """)
+        migrations.append("-- domains 테이블 생성 완료")
+
+    # bids.domain 컬럼 추가 (도메인별 카테고리 분리)
+    bid_cols = [c[1] for c in conn.execute("PRAGMA table_info(bids)").fetchall()]
+    if "domain" not in bid_cols:
+        migrations.append("ALTER TABLE bids ADD COLUMN domain TEXT NOT NULL DEFAULT 'IT'")
+
+    # catalog_categories 컬럼 추가
+    cat_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_categories)").fetchall()]
+    if "domain" not in cat_cols:
+        migrations.append("ALTER TABLE catalog_categories ADD COLUMN domain TEXT NOT NULL DEFAULT 'IT'")
+    if "is_active" not in cat_cols:
+        migrations.append("ALTER TABLE catalog_categories ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    if "description" not in cat_cols:
+        migrations.append("ALTER TABLE catalog_categories ADD COLUMN description TEXT")
+    if "updated_at" not in cat_cols:
+        migrations.append("ALTER TABLE catalog_categories ADD COLUMN updated_at TIMESTAMP")
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]
     if "deleted_at" not in sub_cols:
         migrations.append("ALTER TABLE submissions ADD COLUMN deleted_at TIMESTAMP")
+
+    # catalog_suggestions 테이블 추가 (Phase 3-A)
+    tables = [t[0] for t in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()]
+    if "catalog_suggestions" not in tables:
+        migrations.append("""
+CREATE TABLE IF NOT EXISTS catalog_suggestions (
+    suggestion_id   TEXT PRIMARY KEY,
+    submission_id   TEXT NOT NULL REFERENCES submissions(submission_id),
+    item_id         TEXT NOT NULL REFERENCES submission_items(item_id),
+    suggestion_type TEXT NOT NULL,
+    suggested_name  TEXT,
+    suggested_category_id TEXT,
+    suggested_aliases TEXT,
+    suggested_spec  TEXT,
+    matched_catalog_item_id TEXT,
+    similarity_score REAL,
+    similarity_reason TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by     TEXT REFERENCES users(user_id),
+    reviewed_at     TIMESTAMP,
+    review_note     TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)""")
+        migrations.append(
+            "CREATE INDEX IF NOT EXISTS idx_suggestions_submission "
+            "ON catalog_suggestions(submission_id)"
+        )
+
+    # catalog_clusters 테이블 추가 (Phase 3-B)
+    if "catalog_clusters" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS catalog_clusters (
+                cluster_id             TEXT PRIMARY KEY,
+                representative_item_id TEXT NOT NULL,
+                status                 TEXT NOT NULL DEFAULT 'pending',
+                similarity_summary     TEXT,
+                reviewed_by            TEXT REFERENCES users(user_id),
+                reviewed_at            TIMESTAMP,
+                created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS catalog_cluster_members (
+                cluster_id       TEXT NOT NULL,
+                catalog_item_id  TEXT NOT NULL,
+                role             TEXT NOT NULL DEFAULT 'duplicate',
+                similarity_score REAL,
+                PRIMARY KEY (cluster_id, catalog_item_id)
+            )""")
+        migrations.append("-- catalog_clusters 테이블 생성 완료")
 
     for sql in migrations:
         conn.execute(sql)

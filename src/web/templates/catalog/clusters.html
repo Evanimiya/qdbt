@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}유사 품목 클러스터링 · 카탈로그{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <nav class="text-sm mb-4 text-gray-500">
+    <a href="{{ url_for('catalog.index') }}" class="hover:text-blue-700">카탈로그</a>
+    <span class="mx-2">›</span> 유사 품목 클러스터링
+  </nav>
+
+  <div class="flex items-start justify-between flex-wrap gap-3 mb-2">
+    <div>
+      <h1 class="text-xl font-bold text-gray-900 break-ko">🔀 유사 품목 클러스터링</h1>
+      <p class="text-sm text-gray-500 mt-0.5 break-ko">
+        여러 입찰서에서 다르게 등록된 같은 품목들을 LLM이 감지하여 병합을 제안합니다.
+      </p>
+    </div>
+    {% if has_role('manager') %}
+    <div class="flex gap-2">
+      <form method="POST" action="{{ url_for('catalog.run_clusters') }}"
+            onsubmit="return confirm('전체 카탈로그를 분석합니다. 시간이 걸릴 수 있습니다.');">
+        <select name="domain"
+                class="px-2 py-1.5 border border-gray-300 rounded-lg text-sm mr-1">
+          <option value="">전체 도메인</option>
+          {% for d in domains %}
+          <option value="{{ d.name }}">{{ d.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit"
+                class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                       px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+          🤖 클러스터링 실행
+        </button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 현황 통계 -->
+  <div class="grid grid-cols-3 gap-3 mb-5">
+    {% for label, count, color, s in [
+      ('검토 대기', summary.pending, 'yellow', 'pending'),
+      ('병합 완료', summary.accepted, 'green', 'accepted'),
+      ('거부됨',   summary.rejected, 'gray',  'rejected'),
+    ] %}
+    <a href="{{ url_for('catalog.clusters', status=s) }}"
+       class="bg-white rounded-lg border border-{{ color }}-200 p-3 text-center
+              hover:shadow-sm transition-shadow
+              {% if selected_status == s %}ring-2 ring-{{ color }}-400{% endif %}">
+      <div class="text-xs text-gray-500 break-ko">{{ label }}</div>
+      <div class="text-xl font-bold text-{{ color }}-600">{{ count }}</div>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if not clusters %}
+  <div class="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
+    <div class="text-5xl mb-3">🔀</div>
+    <p class="text-gray-500 break-ko mb-2">
+      {% if selected_status == 'pending' %}검토 대기 중인 클러스터가 없습니다.
+      {% elif selected_status == 'accepted' %}아직 병합된 클러스터가 없습니다.
+      {% else %}거부된 클러스터가 없습니다.{% endif %}
+    </p>
+    {% if selected_status == 'pending' %}
+    <p class="text-sm text-gray-400 break-ko">
+      카탈로그에 품목이 충분히 쌓이면 "클러스터링 실행" 버튼으로 분석하세요.
+    </p>
+    {% endif %}
+  </div>
+
+  {% else %}
+  <div class="space-y-3">
+    {% for cl in clusters %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div class="flex-1">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs px-2 py-0.5 rounded-full
+              {% if cl.status == 'pending' %}bg-yellow-100 text-yellow-700
+              {% elif cl.status == 'accepted' %}bg-green-100 text-green-700
+              {% else %}bg-gray-100 text-gray-500{% endif %}">
+              {% if cl.status == 'pending' %}검토 대기
+              {% elif cl.status == 'accepted' %}병합 완료
+              {% else %}거부됨{% endif %}
+            </span>
+            <span class="text-xs text-gray-400">{{ cl.member_count }}개 품목</span>
+          </div>
+          <div class="font-semibold text-gray-900 break-ko">
+            🏆 {{ cl.representative_name }}
+            {% if cl.representative_unit %}
+            <span class="text-xs text-gray-400 ml-1">/ {{ cl.representative_unit }}</span>
+            {% endif %}
+          </div>
+          {% if cl.representative_category %}
+          <div class="text-xs text-gray-500 mt-0.5">{{ cl.representative_category }}</div>
+          {% endif %}
+          {% if cl.similarity_summary %}
+          <p class="text-xs text-gray-500 mt-1.5 break-ko">{{ cl.similarity_summary }}</p>
+          {% endif %}
+        </div>
+
+        {% if cl.status == 'pending' and has_role('manager') %}
+        <div class="flex gap-2">
+          <a href="{{ url_for('catalog.cluster_detail', cluster_id=cl.cluster_id) }}"
+             class="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
+                    px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
+            상세 보기
+          </a>
+          <form method="POST"
+                action="{{ url_for('catalog.accept_cluster', cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('병합하시겠습니까? 중복 품목이 비활성화됩니다.')">
+            <button class="text-xs bg-green-600 hover:bg-green-700 text-white font-semibold
+                           px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
+              ✅ 병합
+            </button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('catalog.reject_cluster', cluster_id=cl.cluster_id) }}">
+            <button class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600
+                           px-3 py-1.5 rounded-lg transition-colors">
+              ✕ 거부
+            </button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

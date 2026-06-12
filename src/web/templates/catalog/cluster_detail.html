@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}클러스터 상세{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <nav class="text-sm mb-4 text-gray-500">
+    <a href="{{ url_for('catalog.index') }}" class="hover:text-blue-700">카탈로그</a>
+    <span class="mx-2">›</span>
+    <a href="{{ url_for('catalog.clusters') }}" class="hover:text-blue-700">클러스터링</a>
+    <span class="mx-2">›</span> 상세
+  </nav>
+
+  <h1 class="text-xl font-bold text-gray-900 mb-2 break-ko">🔀 유사 품목 그룹 상세</h1>
+  {% if cluster.similarity_summary %}
+  <p class="text-sm text-gray-500 mb-5 break-ko">{{ cluster.similarity_summary }}</p>
+  {% endif %}
+
+  <!-- 멤버 품목 목록 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-5">
+    <div class="bg-gray-50 px-4 py-3 text-xs font-semibold text-gray-600 uppercase">
+      그룹 내 품목 ({{ members | length }}개)
+    </div>
+    <div class="divide-y divide-gray-100">
+    {% for m in members %}
+    <div class="p-4 {% if m.role == 'representative' %}bg-blue-50{% endif %}">
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1">
+          <div class="flex items-center gap-2 mb-1">
+            {% if m.role == 'representative' %}
+            <span class="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full font-semibold">
+              🏆 현재 대표
+            </span>
+            {% else %}
+            <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+              중복 ({{ (m.similarity_score * 100) | int }}% 유사)
+            </span>
+            {% endif %}
+            {% if not m.is_active %}
+            <span class="text-xs text-red-500">비활성</span>
+            {% endif %}
+          </div>
+          <div class="font-semibold text-gray-900 break-ko">{{ m.name_canonical }}</div>
+          <div class="text-xs text-gray-500 mt-0.5">{{ m.category_name or '미분류' }}</div>
+
+          <!-- 연결 데이터 수 -->
+          <div class="flex gap-3 mt-1.5 text-xs text-gray-400">
+            {% if m.n_price_history %}
+            <span>📈 가격 이력 {{ m.n_price_history }}건</span>
+            {% endif %}
+            {% if m.n_submission_items %}
+            <span>🔗 연결 아이템 {{ m.n_submission_items }}건</span>
+            {% endif %}
+          </div>
+
+          <!-- 별칭 -->
+          {% if m.aliases and m.aliases != '[]' %}
+          <div class="flex flex-wrap gap-1 mt-2">
+            {% set alias_list = m.aliases | fromjson %}
+            {% for alias in alias_list[:4] %}
+            <span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded break-ko">
+              {{ alias }}
+            </span>
+            {% endfor %}
+            {% if alias_list | length > 4 %}
+            <span class="text-xs text-gray-400">+{{ alias_list | length - 4 }}</span>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    </div>
+  </div>
+
+  <!-- 병합 설명 -->
+  <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-5 text-sm">
+    <div class="font-semibold text-yellow-800 mb-1 break-ko">병합 시 처리 내용</div>
+    <ul class="text-yellow-700 text-xs space-y-0.5 break-ko">
+      <li>• 중복 품목의 이름이 대표 품목의 <strong>별칭(aliases)</strong>으로 자동 추가</li>
+      <li>• 중복 품목의 <strong>가격 이력</strong>이 대표 품목으로 재연결</li>
+      <li>• 중복 품목의 <strong>매칭된 아이템</strong>이 대표 품목으로 재연결</li>
+      <li>• 중복 품목은 <strong>비활성화</strong> (데이터는 보존)</li>
+    </ul>
+  </div>
+
+  <!-- 병합 액션 -->
+  {% if cluster.status == 'pending' and has_role('manager') %}
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-bold text-gray-700 mb-4 break-ko">대표 품목 선택 후 병합</h2>
+
+    <form method="POST"
+          action="{{ url_for('catalog.accept_cluster', cluster_id=cluster.cluster_id) }}"
+          onsubmit="return confirm('선택한 대표 품목으로 병합합니다. 계속하시겠습니까?')">
+
+      <div class="mb-4">
+        <label class="block text-xs font-semibold text-gray-600 mb-1">
+          대표 품목 선택 (변경하려면 선택)
+        </label>
+        <select name="representative_id"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+                       focus:ring-2 focus:ring-blue-500 break-ko">
+          <option value="">기본값 유지 ({{ cluster.representative_item_id[:8] }}...)</option>
+          {% for m in members %}
+          <option value="{{ m.catalog_item_id }}">
+            {{ m.name_canonical }}
+            {% if m.n_price_history or m.n_submission_items %}
+            (이력 {{ m.n_price_history }}건, 연결 {{ m.n_submission_items }}건)
+            {% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit"
+                class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold
+                       py-2.5 rounded-lg transition-colors break-ko">
+          ✅ 병합 확정
+        </button>
+        <form method="POST"
+              action="{{ url_for('catalog.reject_cluster', cluster_id=cluster.cluster_id) }}"
+              class="flex-1">
+          <button type="submit"
+                  class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                         py-2.5 rounded-lg transition-colors break-ko">
+            ✕ 거부 (별개 품목으로 유지)
+          </button>
+        </form>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

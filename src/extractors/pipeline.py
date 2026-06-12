@@ -114,9 +114,43 @@ def run_extraction(submission_id: str, file_path: Path,
         )
 
         warnings = extraction.get("validation", {}).get("warnings", [])
+
+        # ── Phase 3-A: 카탈로그 자동 제안 ──────────────
+        n_suggestions = 0
+        try:
+            from extractors.catalog_suggester import (
+                run_catalog_suggestion, save_suggestions
+            )
+            from db.queries import list_catalog_items, get_items
+            import sqlite3
+            from config import DB_PATH
+
+            items_for_suggest = [dict(i) for i in get_items(submission_id)]
+            catalog_for_suggest = [dict(c) for c in list_catalog_items()]
+
+            suggestions = run_catalog_suggestion(
+                submission_id=submission_id,
+                items=items_for_suggest,
+                catalog_items=catalog_for_suggest,
+                api_key=api_key,
+                provider_id=provider_id,
+                model=model,
+            )
+
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            n_suggestions = save_suggestions(conn, suggestions)
+            conn.close()
+
+        except Exception as e:
+            # 제안 실패는 추출 성공에 영향 없음 — 경고만 기록
+            warnings.append(f"카탈로그 제안 생성 실패 (추출은 성공): {e}")
+        # ─────────────────────────────────────────────────
+
         return {
             "status": "success",
             "n_items": n_items,
+            "n_suggestions": n_suggestions,
             "subtotal": extraction.get("amount_summary", {}).get("subtotal_excl_vat"),
             "warnings": warnings,
         }

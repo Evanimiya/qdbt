@@ -85,13 +85,15 @@ def update_project(project_id, **kwargs):
 
 # ─── 입찰 ──────────────────────────────────────
 
-def create_bid(project_id, name, due_date=None, description="", created_by=None):
+def create_bid(project_id, name, due_date=None, description="",
+               created_by=None, domain="IT"):
     bid_id = new_id()
     with get_conn() as c:
         c.execute("""
-            INSERT INTO bids (bid_id, project_id, name, due_date, description, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (bid_id, project_id, name, due_date, description, created_by))
+            INSERT INTO bids
+                (bid_id, project_id, name, due_date, description, domain, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (bid_id, project_id, name, due_date, description, domain, created_by))
     return bid_id
 
 
@@ -551,20 +553,27 @@ def update_user_login(user_id):
 
 # ─── 카탈로그 카테고리 ────────────────────────────
 
-def list_catalog_categories():
-    """전체 카테고리 목록 (부모→자식 순)"""
+def list_catalog_categories(domain: str = None, active_only: bool = True):
+    """카테고리 목록 (도메인 필터 + 활성 필터)"""
+    sql = """
+        SELECT cc.*,
+               p.name as parent_name,
+               COUNT(ci.catalog_item_id) as n_items
+        FROM catalog_categories cc
+        LEFT JOIN catalog_categories p ON cc.parent_id = p.category_id
+        LEFT JOIN catalog_items ci ON cc.category_id = ci.category_id
+            AND ci.is_active = 1
+        WHERE 1=1
+    """
+    params = []
+    if active_only:
+        sql += " AND cc.is_active = 1"
+    if domain:
+        sql += " AND (cc.domain = ? OR cc.domain = 'ALL')"
+        params.append(domain)
+    sql += " GROUP BY cc.category_id ORDER BY cc.domain, cc.sort_order, cc.name"
     with get_conn() as c:
-        return c.execute("""
-            SELECT cc.*,
-                   p.name as parent_name,
-                   COUNT(ci.catalog_item_id) as n_items
-            FROM catalog_categories cc
-            LEFT JOIN catalog_categories p ON cc.parent_id = p.category_id
-            LEFT JOIN catalog_items ci ON cc.category_id = ci.category_id
-                AND ci.is_active = 1
-            GROUP BY cc.category_id
-            ORDER BY COALESCE(cc.parent_id, cc.category_id), cc.sort_order, cc.name
-        """).fetchall()
+        return c.execute(sql, params).fetchall()
 
 
 def get_catalog_category(category_id):
@@ -575,34 +584,206 @@ def get_catalog_category(category_id):
         ).fetchone()
 
 
-def create_catalog_category(name, parent_id=None, sort_order=0):
+def create_catalog_category(name, domain='IT', parent_id=None,
+                             sort_order=0, description=None):
     cid = new_id()
     with get_conn() as c:
         c.execute("""
-            INSERT INTO catalog_categories (category_id, name, parent_id, sort_order)
-            VALUES (?, ?, ?, ?)
-        """, (cid, name, parent_id or None, sort_order))
+            INSERT INTO catalog_categories
+                (category_id, name, domain, parent_id, sort_order,
+                 description, is_active, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        """, (cid, name, domain, parent_id or None,
+              sort_order, description, datetime.now().isoformat()))
     return cid
 
 
 def update_catalog_category(category_id, **kwargs):
+    kwargs["updated_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in kwargs)
     with get_conn() as c:
         c.execute(f"UPDATE catalog_categories SET {sets} WHERE category_id = ?",
                   list(kwargs.values()) + [category_id])
 
 
+def toggle_catalog_category(category_id, is_active: bool):
+    """카테고리 활성/비활성화 (소프트 삭제 대신)"""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE catalog_categories
+            SET is_active = ?, updated_at = ?
+            WHERE category_id = ?
+        """, (1 if is_active else 0, datetime.now().isoformat(), category_id))
+
+
 def delete_catalog_category(category_id):
-    """카테고리 삭제 (소속 품목이 없을 때만)"""
+    """카테고리 삭제 (소속 활성 품목이 없을 때만 — 비활성화 권장)"""
     with get_conn() as c:
         n = c.execute(
-            "SELECT COUNT(*) FROM catalog_items WHERE category_id = ?",
+            "SELECT COUNT(*) FROM catalog_items WHERE category_id = ? AND is_active = 1",
             (category_id,)
         ).fetchone()[0]
         if n > 0:
-            raise ValueError(f"소속 품목 {n}개가 있어 삭제할 수 없습니다.")
+            raise ValueError(f"소속 활성 품목 {n}개가 있어 삭제할 수 없습니다. 비활성화를 권장합니다.")
         c.execute("DELETE FROM catalog_categories WHERE category_id = ?",
                   (category_id,))
+
+
+# ─── 도메인 관련 ─────────────────────────────────
+
+DOMAIN_LIST = ['IT', '설비', '용역', '기타']
+
+def get_bid_domain(bid_id: str) -> str:
+    """입찰의 도메인 반환 (없으면 'IT')"""
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)
+        ).fetchone()
+    return (row["domain"] if row and row["domain"] else "IT")
+
+
+# ─── 도메인 관리 ─────────────────────────────────
+
+def list_domains(active_only: bool = False) -> list:
+    """도메인 목록"""
+    sql = "SELECT * FROM domains"
+    if active_only:
+        sql += " WHERE is_active = 1"
+    sql += " ORDER BY sort_order, name"
+    with get_conn() as c:
+        return c.execute(sql).fetchall()
+
+
+def get_domain(domain_id: str):
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM domains WHERE domain_id = ?", (domain_id,)
+        ).fetchone()
+
+
+def get_domain_by_name(name: str):
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM domains WHERE name = ?", (name,)
+        ).fetchone()
+
+
+def create_domain(name: str, description: str = None, sort_order: int = 0) -> str:
+    """도메인 생성"""
+    did = new_id()
+    with get_conn() as c:
+        c.execute("""
+            INSERT INTO domains (domain_id, name, description, sort_order, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (did, name, description, sort_order, datetime.now().isoformat()))
+    return did
+
+
+def update_domain(domain_id: str, old_name: str = None, **kwargs) -> dict:
+    """
+    도메인 수정. 이름 변경 시 연쇄 업데이트 처리.
+
+    Returns:
+        {'cascaded': {'bids': N, 'categories': M}} — 연쇄 업데이트 건수
+    """
+    kwargs["updated_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    cascaded = {"bids": 0, "categories": 0}
+
+    with get_conn() as c:
+        c.execute(f"UPDATE domains SET {sets} WHERE domain_id = ?",
+                  list(kwargs.values()) + [domain_id])
+
+        # 이름 변경 시 연쇄 업데이트
+        new_name = kwargs.get("name")
+        if new_name and old_name and old_name != new_name:
+            r1 = c.execute(
+                "UPDATE bids SET domain = ? WHERE domain = ?",
+                (new_name, old_name)
+            )
+            r2 = c.execute(
+                "UPDATE catalog_categories SET domain = ?, updated_at = ? WHERE domain = ?",
+                (new_name, datetime.now().isoformat(), old_name)
+            )
+            cascaded["bids"]       = r1.rowcount
+            cascaded["categories"] = r2.rowcount
+
+    return cascaded
+
+
+def toggle_domain(domain_id: str, is_active: bool):
+    """도메인 활성/비활성화 (기존 데이터 유지, 신규 입찰 생성만 차단)"""
+    with get_conn() as c:
+        c.execute("""
+            UPDATE domains SET is_active = ?, updated_at = ?
+            WHERE domain_id = ?
+        """, (1 if is_active else 0, datetime.now().isoformat(), domain_id))
+
+
+def delete_domain(domain_id: str) -> dict:
+    """
+    도메인 삭제. 연결된 입찰/카테고리가 있으면 삭제 불가.
+    삭제 불가 시 ValueError 발생.
+
+    Returns:
+        {'deleted': True} 또는 ValueError
+    """
+    with get_conn() as c:
+        domain = c.execute(
+            "SELECT name FROM domains WHERE domain_id = ?", (domain_id,)
+        ).fetchone()
+        if not domain:
+            raise ValueError("도메인을 찾을 수 없습니다.")
+
+        name = domain["name"]
+        n_bids = c.execute(
+            "SELECT COUNT(*) FROM bids WHERE domain = ?", (name,)
+        ).fetchone()[0]
+        n_cats = c.execute(
+            "SELECT COUNT(*) FROM catalog_categories WHERE domain = ?", (name,)
+        ).fetchone()[0]
+
+        if n_bids > 0 or n_cats > 0:
+            raise ValueError(
+                f"'{name}' 도메인에 연결된 입찰 {n_bids}개, "
+                f"카테고리 {n_cats}개가 있어 삭제할 수 없습니다. "
+                f"비활성화를 권장합니다."
+            )
+        c.execute("DELETE FROM domains WHERE domain_id = ?", (domain_id,))
+    return {"deleted": True}
+
+
+def get_domain_impact(domain_id: str) -> dict:
+    """도메인 변경/삭제 시 영향도 미리 조회"""
+    domain = get_domain(domain_id)
+    if not domain:
+        return {}
+    name = domain["name"]
+    with get_conn() as c:
+        n_bids = c.execute(
+            "SELECT COUNT(*) FROM bids WHERE domain = ?", (name,)
+        ).fetchone()[0]
+        n_cats = c.execute(
+            "SELECT COUNT(*) FROM catalog_categories WHERE domain = ? AND is_active = 1",
+            (name,)
+        ).fetchone()[0]
+        n_items = c.execute("""
+            SELECT COUNT(*) FROM catalog_items ci
+            JOIN catalog_categories cc USING (category_id)
+            WHERE cc.domain = ? AND ci.is_active = 1
+        """, (name,)).fetchone()[0]
+        n_submissions = c.execute("""
+            SELECT COUNT(*) FROM submissions s
+            JOIN bids b USING (bid_id)
+            WHERE b.domain = ?
+        """, (name,)).fetchone()[0]
+    return {
+        "domain_name":   name,
+        "n_bids":        n_bids,
+        "n_categories":  n_cats,
+        "n_items":       n_items,
+        "n_submissions": n_submissions,
+    }
 
 
 # ─── 카탈로그 품목 ───────────────────────────────
@@ -744,3 +925,116 @@ def get_price_history(catalog_item_id: str) -> list:
             ORDER BY ph.bid_date DESC, s.vendor_name
         """, (catalog_item_id,)).fetchall()
 
+
+# ─── 카탈로그 제안 (Phase 3-A) ──────────────────
+
+def get_suggestions(submission_id: str, status: str = None) -> list:
+    """제출서의 카탈로그 제안 목록 조회"""
+    sql = """
+        SELECT cs.*,
+               si.name_raw, si.name_normalized, si.spec,
+               si.category, si.unit, si.quantity, si.unit_price,
+               ci.name_canonical as matched_catalog_name
+        FROM catalog_suggestions cs
+        JOIN submission_items si ON cs.item_id = si.item_id
+        LEFT JOIN catalog_items ci ON cs.matched_catalog_item_id = ci.catalog_item_id
+        WHERE cs.submission_id = ?
+    """
+    params = [submission_id]
+    if status:
+        sql += " AND cs.status = ?"
+        params.append(status)
+    sql += " ORDER BY cs.suggestion_type DESC, cs.similarity_score DESC"
+    with get_conn() as c:
+        return c.execute(sql, params).fetchall()
+
+
+def get_suggestion_summary(submission_id: str) -> dict:
+    """제출서의 제안 현황 요약"""
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT status, COUNT(*) as cnt
+            FROM catalog_suggestions
+            WHERE submission_id = ?
+            GROUP BY status
+        """, (submission_id,)).fetchall()
+    total = sum(r["cnt"] for r in rows)
+    status_map = {r["status"]: r["cnt"] for r in rows}
+    return {
+        "total":    total,
+        "pending":  status_map.get("pending", 0),
+        "accepted": status_map.get("accepted", 0),
+        "rejected": status_map.get("rejected", 0),
+        "modified": status_map.get("modified", 0),
+    }
+
+# ─── 카탈로그 클러스터링 (Phase 3-B) ─────────────
+
+def list_clusters(status: str = None) -> list:
+    """클러스터 목록 (멤버 수 포함)"""
+    sql = """
+        SELECT cl.*,
+               ci_rep.name_canonical as representative_name,
+               ci_rep.unit_std       as representative_unit,
+               cc.name               as representative_category,
+               COUNT(cm.catalog_item_id) as member_count
+        FROM catalog_clusters cl
+        JOIN catalog_items ci_rep
+            ON cl.representative_item_id = ci_rep.catalog_item_id
+        LEFT JOIN catalog_categories cc
+            ON ci_rep.category_id = cc.category_id
+        JOIN catalog_cluster_members cm
+            ON cl.cluster_id = cm.cluster_id
+        WHERE 1=1
+    """
+    params = []
+    if status:
+        sql += " AND cl.status = ?"
+        params.append(status)
+    sql += " GROUP BY cl.cluster_id ORDER BY cl.created_at DESC"
+    with get_conn() as c:
+        return c.execute(sql, params).fetchall()
+
+
+def get_cluster(cluster_id: str):
+    """클러스터 상세 (멤버 품목 포함)"""
+    with get_conn() as c:
+        cluster = c.execute(
+            "SELECT * FROM catalog_clusters WHERE cluster_id = ?",
+            (cluster_id,)
+        ).fetchone()
+        if not cluster:
+            return None, []
+        members = c.execute("""
+            SELECT cm.*, ci.name_canonical, ci.aliases,
+                   ci.unit_std, ci.is_active,
+                   cc.name as category_name,
+                   COUNT(ph.record_id) as n_price_history,
+                   COUNT(si.item_id)   as n_submission_items
+            FROM catalog_cluster_members cm
+            JOIN catalog_items ci ON cm.catalog_item_id = ci.catalog_item_id
+            LEFT JOIN catalog_categories cc ON ci.category_id = cc.category_id
+            LEFT JOIN price_history ph ON cm.catalog_item_id = ph.catalog_item_id
+            LEFT JOIN submission_items si ON cm.catalog_item_id = si.catalog_item_id
+                AND si.match_status = 'confirmed'
+            WHERE cm.cluster_id = ?
+            GROUP BY cm.catalog_item_id
+            ORDER BY cm.role DESC, cm.similarity_score DESC
+        """, (cluster_id,)).fetchall()
+        return cluster, members
+
+
+def get_cluster_summary() -> dict:
+    """클러스터 현황 요약"""
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT status, COUNT(*) as cnt
+            FROM catalog_clusters GROUP BY status
+        """).fetchall()
+    status_map = {r["status"]: r["cnt"] for r in rows}
+    return {
+        "total":    sum(status_map.values()),
+        "pending":  status_map.get("pending", 0),
+        "accepted": status_map.get("accepted", 0),
+        "rejected": status_map.get("rejected", 0),
+    }

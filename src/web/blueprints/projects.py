@@ -53,21 +53,33 @@ def new_bid(project_id):
     if not project:
         abort(404)
 
+    from db.queries import list_domains
+    tok = getattr(g, "auth_token", "") or ""
+    active_domains = list_domains(active_only=True)
+
     if request.method == "POST":
         name     = request.form.get("name", "").strip()
         due_date = request.form.get("due_date", "").strip() or None
         desc     = request.form.get("description", "").strip()
+        domain   = request.form.get("domain", "IT").strip()
+
         if not name:
             flash("입찰명을 입력하세요.", "error")
-            return render_template("projects/bid_form.html", project=project)
+            return render_template("projects/bid_form.html",
+                                   project=project, domains=active_domains)
 
-        from flask import session
+        valid_names = [dict(d)["name"] for d in active_domains]
+        if domain not in valid_names:
+            domain = valid_names[0] if valid_names else "IT"
+
         bid_id = create_bid(project_id, name, due_date, desc,
-                            created_by=session.get("user_id"))
-        flash(f"입찰 '{name}'이 생성되었습니다.", "success")
-        return redirect(url_for("bids.detail", bid_id=bid_id))
+                            created_by=g.auth_data.get("user_id") if g.auth_data else None,
+                            domain=domain)
+        flash(f"입찰 '{name}' ({domain})이 생성되었습니다.", "success")
+        return redirect(url_for("bids.detail", bid_id=bid_id, _t=tok))
 
-    return render_template("projects/bid_form.html", project=project)
+    return render_template("projects/bid_form.html",
+                           project=project, domains=active_domains)
 
 
 @bp.route("/projects/<project_id>/status", methods=["POST"])

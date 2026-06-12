@@ -105,7 +105,13 @@ def detail(submission_id):
     if not sub:
         abort(404)
     items = get_items(submission_id)
-    return render_template("submissions/detail.html", sub=sub, items=items)
+
+    from db.queries import get_suggestion_summary
+    suggestion_summary = get_suggestion_summary(submission_id)
+
+    return render_template("submissions/detail.html",
+                           sub=sub, items=items,
+                           suggestion_summary=suggestion_summary)
 
 
 @bp.route("/<submission_id>/file")
@@ -355,3 +361,124 @@ def delete(submission_id):
 
     flash(f"'{sub['vendor_name']}' 제출서가 완전히 삭제되었습니다.", "info")
     return redirect(url_for("bids.detail", bid_id=bid_id, _t=tok))
+
+
+# ─── Phase 3-A: 카탈로그 제안 ─────────────────────
+
+@bp.route("/<submission_id>/suggestions")
+@login_required
+def suggestions(submission_id):
+    """카탈로그 제안 검토 화면"""
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+
+    from db.queries import (get_suggestions, get_suggestion_summary,
+                             list_catalog_categories, list_catalog_items)
+    items     = get_suggestions(submission_id)
+    summary   = get_suggestion_summary(submission_id)
+    cats      = list_catalog_categories()
+    cat_items = list_catalog_items()
+
+    return render_template(
+        "submissions/suggestions.html",
+        sub=sub, suggestions=items,
+        summary=summary, categories=cats, catalog_all=cat_items,
+    )
+
+
+@bp.route("/<submission_id>/suggestions/run", methods=["POST"])
+@require_role("manager")
+def run_suggestions(submission_id):
+    """카탈로그 제안 재실행"""
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    tok = getattr(g, "auth_token", "") or ""
+
+    from db.queries import get_user_llm_settings, list_catalog_items, get_items
+    from extractors.catalog_suggester import run_catalog_suggestion, save_suggestions
+    from config import DB_PATH
+    import sqlite3
+
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+    llm = get_user_llm_settings(uid)
+
+    if not llm.get("api_key"):
+        flash("API 키가 설정되지 않았습니다. ⚙ 내 프로필에서 먼저 설정하세요.", "error")
+        return redirect(url_for("submissions.suggestions",
+                                submission_id=submission_id, _t=tok))
+    try:
+        items_raw   = [dict(i) for i in get_items(submission_id)]
+        catalog_raw = [dict(c) for c in list_catalog_items()]
+        sug_list = run_catalog_suggestion(
+            submission_id=submission_id,
+            items=items_raw,
+            catalog_items=catalog_raw,
+            api_key=llm["api_key"],
+            provider_id=llm["provider"],
+            model=llm["model"],
+        )
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        n = save_suggestions(conn, sug_list)
+        conn.close()
+        flash(f"✅ 카탈로그 제안 완료 — {n}개 제안 생성", "success")
+    except Exception as e:
+        flash(f"❌ 제안 생성 실패: {e}", "error")
+
+    return redirect(url_for("submissions.suggestions",
+                            submission_id=submission_id, _t=tok))
+
+
+@bp.route("/<submission_id>/suggestions/<suggestion_id>/accept", methods=["POST"])
+@require_role("manager")
+def accept_suggestion(submission_id, suggestion_id):
+    """제안 수락 — new_item이면 카탈로그 생성, similar면 연결"""
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+    override_name = request.form.get("override_name", "").strip() or None
+
+    from extractors.catalog_suggester import accept_suggestion as do_accept
+    from config import DB_PATH
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        catalog_item_id = do_accept(conn, suggestion_id, uid, override_name)
+        conn.close()
+        flash("✅ 제안이 수락되었습니다.", "success")
+    except Exception as e:
+        flash(f"❌ 수락 실패: {e}", "error")
+
+    return redirect(url_for("submissions.suggestions",
+                            submission_id=submission_id, _t=tok))
+
+
+@bp.route("/<submission_id>/suggestions/<suggestion_id>/reject", methods=["POST"])
+@require_role("manager")
+def reject_suggestion(submission_id, suggestion_id):
+    """제안 거부"""
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+    note = request.form.get("note", "").strip()
+
+    from extractors.catalog_suggester import reject_suggestion as do_reject
+    from config import DB_PATH
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        do_reject(conn, suggestion_id, uid, note)
+        conn.close()
+        flash("제안이 거부되었습니다.", "info")
+    except Exception as e:
+        flash(f"❌ 거부 실패: {e}", "error")
+
+    return redirect(url_for("submissions.suggestions",
+                            submission_id=submission_id, _t=tok))

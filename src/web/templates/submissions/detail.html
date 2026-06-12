@@ -55,6 +55,21 @@
                 px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
         🔗 카탈로그 매칭
       </a>
+      {% set sug_summary = suggestion_summary %}
+      <a href="{{ url_for('submissions.suggestions', submission_id=sub.submission_id) }}"
+         class="text-sm font-semibold px-3 py-1.5 rounded-lg transition-colors
+                break-ko whitespace-nowrap
+                {% if sug_summary and sug_summary.pending > 0 %}
+                bg-yellow-100 hover:bg-yellow-200 text-yellow-800
+                {% else %}
+                bg-gray-100 hover:bg-gray-200 text-gray-700
+                {% endif %}">
+        📋 카탈로그 제안
+        {% if sug_summary and sug_summary.pending > 0 %}
+        <span class="ml-1 bg-yellow-500 text-white text-xs rounded-full
+                     px-1.5 py-0.5">{{ sug_summary.pending }}</span>
+        {% endif %}
+      </a>
       {% endif %}
       {% if has_role('manager') and sub.extraction_status in ('done', 'failed') %}
       <form method="POST" action="{{ url_for('submissions.reset', submission_id=sub.submission_id) }}"
