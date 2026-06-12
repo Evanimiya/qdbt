@@ -82,3 +82,103 @@ def search():
     return render_template("compare/search.html",
                            q=q, project_id=project_id,
                            results=results, projects=projects)
+
+
+# ─── 비교 페이지 클러스터 액션 ───────────────────
+
+@bp.route("/bid/<bid_id>/cluster/run", methods=["POST"])
+def run_cluster_from_compare(bid_id):
+    """비교 페이지에서 직접 클러스터링 실행"""
+    from flask import g, session, current_app
+    from auth.auth import require_role
+    import threading, uuid as _uuid
+    from db.queries import list_submission_items_for_clustering, get_user_llm_settings
+    from web.blueprints.catalog import _cluster_worker, _cluster_jobs
+
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+
+    llm = get_user_llm_settings(uid)
+    if not llm.get("api_key"):
+        flash("API 키가 설정되지 않았습니다. ⚙ 내 프로필에서 설정하세요.", "error")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
+    if len(items_raw) < 2:
+        flash("추출 완료 견적서가 2개 이상 필요합니다.", "warning")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    job_id = str(_uuid.uuid4())
+    app = current_app._get_current_object()
+    threading.Thread(
+        target=_cluster_worker,
+        args=(app, job_id, bid_id, items_raw, llm),
+        daemon=True,
+    ).start()
+
+    return redirect(url_for("catalog.cluster_progress",
+                            job_id=job_id, bid_id=bid_id,
+                            return_to=bid_id, _t=tok))
+
+
+@bp.route("/bid/<bid_id>/cluster/<cluster_id>/accept", methods=["POST"])
+def accept_cluster_from_compare(bid_id, cluster_id):
+    from flask import g
+    from extractors.catalog_clusterer import accept_cluster as do_accept
+    from config import DB_PATH
+    import sqlite3
+
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+    rep_name = request.form.get("representative_name", "").strip() or None
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        result = do_accept(conn, cluster_id, uid, rep_name)
+        conn.close()
+        flash(f"✅ '{result['representative_name']}' 확정됨", "success")
+    except Exception as e:
+        flash(f"❌ 확정 실패: {e}", "error")
+
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+
+@bp.route("/bid/<bid_id>/cluster/<cluster_id>/hold", methods=["POST"])
+def hold_cluster_from_compare(bid_id, cluster_id):
+    from flask import g
+    from extractors.catalog_clusterer import hold_cluster as do_hold
+    from config import DB_PATH
+    import sqlite3
+
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    do_hold(conn, cluster_id, uid)
+    conn.close()
+    flash("클러스터가 보류 처리되었습니다.", "info")
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+
+@bp.route("/bid/<bid_id>/cluster/<cluster_id>/reject", methods=["POST"])
+def reject_cluster_from_compare(bid_id, cluster_id):
+    from flask import g
+    from extractors.catalog_clusterer import reject_cluster as do_reject
+    from config import DB_PATH
+    import sqlite3
+
+    tok = getattr(g, "auth_token", "") or ""
+    auth_data = getattr(g, "auth_data", None) or {}
+    uid = auth_data.get("user_id", "")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    do_reject(conn, cluster_id, uid)
+    conn.close()
+    flash("거부 처리되었습니다.", "info")
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))

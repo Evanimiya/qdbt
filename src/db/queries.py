@@ -352,17 +352,19 @@ def compare_bid_submissions(bid_id):
         """, (bid_id,)).fetchall()
 
         # 확정된 클러스터 조회
-        accepted_clusters = c.execute("""
-            SELECT cl.cluster_id, cl.representative_name
+        # accepted + pending 클러스터 모두 표시
+        bid_clusters = c.execute("""
+            SELECT cl.cluster_id, cl.representative_name, cl.status
             FROM catalog_clusters cl
-            WHERE cl.bid_id = ? AND cl.status = 'accepted'
+            WHERE cl.bid_id = ? AND cl.status IN ('accepted', 'pending', 'held')
+            ORDER BY cl.status DESC, cl.created_at
         """, (bid_id,)).fetchall()
 
         # 클러스터 멤버 (item_id 기준)
         clustered_item_ids = set()
         clusters_data = []
 
-        for cl in accepted_clusters:
+        for cl in bid_clusters:
             member_rows = c.execute("""
                 SELECT cm.catalog_item_id as item_id
                 FROM catalog_cluster_members cm
@@ -377,35 +379,51 @@ def compare_bid_submissions(bid_id):
             for it in all_items:
                 if it["item_id"] in member_ids:
                     cluster_items.append({
-                        "item_id":    it["item_id"],
-                        "vendor_name": it["vendor_name"],
-                        "name_raw":   it["name_raw"],
+                        "item_id":         it["item_id"],
+                        "vendor_name":     it["vendor_name"],
+                        "name_raw":        it["name_raw"],
                         "name_normalized": it["name_normalized"],
-                        "spec":       it["spec"],
-                        "unit":       it["unit"],
-                        "quantity":   it["quantity"],
-                        "unit_price": it["unit_price"],
-                        "amount":     it["amount"],
-                        "category":   it["category"],
+                        "spec":            it["spec"],
+                        "unit":            it["unit"],
+                        "quantity":        it["quantity"],
+                        "unit_price":      it["unit_price"],
+                        "amount":          it["amount"],
+                        "category":        it["category"],
                     })
 
             if not cluster_items:
                 continue
 
-            # 최저가 업체 계산
+            # 업체별 단가/품목명 맵 (안 A 렌더링용)
+            vendor_map = {}  # vendor_name → {name_raw, unit_price, amount}
+            for ci in cluster_items:
+                vendor_map[ci["vendor_name"]] = {
+                    "name_raw":   ci["name_raw"],
+                    "unit_price": ci["unit_price"],
+                    "amount":     ci["amount"],
+                }
+
+            # 최저/최고가 업체
             priced = [(ci["vendor_name"], ci["unit_price"])
                       for ci in cluster_items if ci["unit_price"]]
             min_vendor, min_price = (
                 min(priced, key=lambda x: x[1]) if priced else (None, None)
             )
+            max_vendor, max_price = (
+                max(priced, key=lambda x: x[1]) if len(priced) > 1 else (None, None)
+            )
 
             clusters_data.append({
-                "cluster_id":         cl["cluster_id"],
+                "cluster_id":          cl["cluster_id"],
                 "representative_name": cl["representative_name"],
-                "members":            cluster_items,
-                "min_vendor":         min_vendor,
-                "min_price":          min_price,
-                "vendors":            vendors,
+                "status":              cl["status"],
+                "members":             cluster_items,
+                "vendor_map":          vendor_map,   # 업체별 단가/품목명
+                "min_vendor":          min_vendor,
+                "min_price":           min_price,
+                "max_vendor":          max_vendor,
+                "max_price":           max_price,
+                "vendors":             vendors,
             })
 
         # 카테고리별 피벗 (클러스터 미포함 항목만)
