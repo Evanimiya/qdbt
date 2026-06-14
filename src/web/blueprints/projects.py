@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, abort, g, session
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -28,7 +28,6 @@ def new_project():
             flash("프로젝트명을 입력하세요.", "error")
             return render_template("projects/form.html")
 
-        from flask import session
         pid = create_project(name, desc, owner_id=session.get("user_id"))
         flash(f"프로젝트 '{name}'이 생성되었습니다.", "success")
         return redirect(url_for("projects.detail", project_id=pid))
@@ -73,7 +72,7 @@ def new_bid(project_id):
             domain = valid_names[0] if valid_names else "IT"
 
         bid_id = create_bid(project_id, name, due_date, desc,
-                            created_by=g.auth_data.get("user_id") if g.auth_data else None,
+                            created_by=session.get("user_id"),
                             domain=domain)
         flash(f"입찰 '{name}' ({domain})이 생성되었습니다.", "success")
         return redirect(url_for("bids.detail", bid_id=bid_id, _t=tok))
