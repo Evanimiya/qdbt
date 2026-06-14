@@ -1,0 +1,44 @@
+{% macro model_selector(id_prefix='ms') %}
+{%- set _llm = current_llm or {} -%}
+<div class="flex items-center gap-1.5 flex-wrap">
+  <span class="text-xs text-gray-400 whitespace-nowrap">모델:</span>
+  <select name="provider_id" id="{{ id_prefix }}_prov"
+          class="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-white
+                 focus:ring-2 focus:ring-blue-400 cursor-pointer">
+    {% for p in providers %}
+    <option value="{{ p.id }}"
+            data-models="{{ p.models | tojson | e }}"
+            {% if _llm.provider == p.id %}selected{% endif %}>
+      {{ p.name }}
+    </option>
+    {% endfor %}
+  </select>
+  <select name="model" id="{{ id_prefix }}_model"
+          class="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-white
+                 focus:ring-2 focus:ring-blue-400 min-w-[150px] cursor-pointer">
+    <option value="">기본 모델</option>
+    {% for p in providers %}{% if _llm.provider == p.id %}
+      {% for mid, mname in p.models %}
+      <option value="{{ mid }}" {% if _llm.model == mid %}selected{% endif %}>{{ mname }}</option>
+      {% endfor %}
+    {% endif %}{% endfor %}
+  </select>
+</div>
+<script>
+(function(){
+  var pSel = document.getElementById('{{ id_prefix }}_prov');
+  var mSel = document.getElementById('{{ id_prefix }}_model');
+  if (!pSel || !mSel) return;
+  pSel.addEventListener('change', function() {
+    var opt = pSel.options[pSel.selectedIndex];
+    var models = JSON.parse(opt.getAttribute('data-models') || '[]');
+    mSel.innerHTML = '<option value="">기본 모델</option>';
+    models.forEach(function(m) {
+      var o = document.createElement('option');
+      o.value = m[0]; o.textContent = m[1];
+      mSel.appendChild(o);
+    });
+  });
+})();
+</script>
+{% endmacro %}

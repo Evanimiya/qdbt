@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{{ item.name_canonical }} · 카탈로그{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('catalog.index') }}" class="hover:text-blue-700">카탈로그</a>
+  <span class="mx-2">›</span>
+  <span class="text-gray-900 break-ko">{{ item.name_canonical }}</span>
+</nav>
+
+<div class="max-w-2xl">
+  <!-- 헤더 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-5">
+    <div class="flex items-start justify-between flex-wrap gap-3 mb-3">
+      <div>
+        <h1 class="text-xl font-bold text-gray-900 break-ko">{{ item.name_canonical }}</h1>
+        <p class="text-sm text-gray-500 mt-0.5">{{ item.category_name or '미분류' }}</p>
+      </div>
+      {% if has_role('manager') %}
+      <div class="flex gap-2">
+        <a href="{{ url_for('catalog.edit_item', item_id=item.catalog_item_id) }}"
+           class="text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
+                  px-3 py-1.5 rounded-lg transition-colors">수정</a>
+        <form method="POST" action="{{ url_for('catalog.delete_item', item_id=item.catalog_item_id) }}"
+              onsubmit="return confirm('\'{{ item.name_canonical }}\' 품목을 삭제하시겠습니까?\n소프트 삭제로 처리되며, 연결된 가격 이력은 유지됩니다.');">
+          <button class="text-sm bg-red-50 hover:bg-red-100 text-red-700 font-semibold
+                         px-3 py-1.5 rounded-lg transition-colors">삭제</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- 상세 정보 -->
+    <div class="grid grid-cols-2 gap-3 text-sm">
+      <div>
+        <div class="text-xs text-gray-500 mb-0.5">표준 단위</div>
+        <div class="font-semibold">{{ item.unit_std or '—' }}</div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-500 mb-0.5">상태</div>
+        <span class="text-xs px-2 py-0.5 rounded-full
+          {% if item.is_active %}bg-green-100 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
+          {% if item.is_active %}활성{% else %}비활성{% endif %}
+        </span>
+      </div>
+      {% if item.spec_template %}
+      <div class="col-span-2">
+        <div class="text-xs text-gray-500 mb-0.5">규격 템플릿</div>
+        <div class="text-gray-700 break-ko">{{ item.spec_template }}</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- 별칭 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-5">
+    <h2 class="text-sm font-bold text-gray-700 mb-3">별칭 (동의어)</h2>
+    {% if aliases %}
+    <div class="flex flex-wrap gap-2">
+      {% for alias in aliases %}
+      <span class="text-sm bg-blue-50 text-blue-700 px-3 py-1 rounded-full break-ko">
+        {{ alias }}
+      </span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400 break-ko">
+      등록된 별칭이 없습니다.
+      {% if has_role('manager') %}
+      <a href="{{ url_for('catalog.edit_item', item_id=item.catalog_item_id) }}"
+         class="text-blue-600 hover:underline">수정에서 추가</a>
+      {% endif %}
+    </p>
+    {% endif %}
+    <p class="text-xs text-gray-400 mt-3 break-ko">
+      별칭을 많이 등록할수록 LLM이 업체별 다른 표기를 정확하게 매칭합니다.
+    </p>
+  </div>
+
+  <!-- 가격 이력 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-bold text-gray-700 mb-3 break-ko">📈 가격 이력</h2>
+    {% if price_history %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-600 uppercase">
+          <tr>
+            <th class="text-left px-3 py-2">프로젝트</th>
+            <th class="text-left px-3 py-2">입찰일</th>
+            <th class="text-left px-3 py-2">업체</th>
+            <th class="text-left px-3 py-2 hidden sm:table-cell">규격</th>
+            <th class="text-right px-3 py-2">수량</th>
+            <th class="text-right px-3 py-2">단가 (원)</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+        {% for ph in price_history %}
+          <tr class="hover:bg-gray-50">
+            <td class="px-3 py-2 text-xs break-ko">{{ ph.project_name }}</td>
+            <td class="px-3 py-2 text-xs text-gray-500">{{ ph.bid_date or '—' }}</td>
+            <td class="px-3 py-2 font-semibold">{{ ph.vendor_name }}</td>
+            <td class="px-3 py-2 text-xs text-gray-500 hidden sm:table-cell">
+              {{ ph.spec_snapshot or '—' }}
+            </td>
+            <td class="px-3 py-2 text-right text-gray-600">
+              {{ ph.quantity if ph.quantity else '—' }}
+              {% if ph.unit %}<span class="text-xs">{{ ph.unit }}</span>{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right font-semibold text-blue-700">
+              {{ '{:,}'.format(ph.unit_price|int) if ph.unit_price else '—' }}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400 break-ko">
+      아직 가격 이력이 없습니다.<br>
+      제출서에서 카탈로그 매칭을 확정하면 여기에 이력이 쌓입니다.
+    </p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

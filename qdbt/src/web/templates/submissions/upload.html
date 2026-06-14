@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}제출서 업로드 · {{ bid.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-xl">
+  <nav class="text-sm mb-4 text-gray-500">
+    <a href="{{ url_for('projects.index') }}" class="hover:text-blue-700">프로젝트</a>
+    <span class="mx-2">›</span>
+    <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}"
+       class="hover:text-blue-700 break-ko">{{ bid.project_name }}</a>
+    <span class="mx-2">›</span>
+    <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}"
+       class="hover:text-blue-700 break-ko">{{ bid.name }}</a>
+    <span class="mx-2">›</span> 업로드
+  </nav>
+
+  <h1 class="text-xl font-bold text-gray-900 mb-5 break-ko">📤 제출서 업로드</h1>
+
+  <!-- API 키 경고 -->
+  {% if not api_available %}
+  <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-5">
+    <p class="text-sm font-semibold text-red-800 break-ko">⚠️ API 키 미설정</p>
+    <p class="text-xs text-red-700 mt-1 break-ko">
+      파일 업로드 후 자동 추출에는 Anthropic API 키가 필요합니다.
+    </p>
+    <a href="{{ url_for('profile.index') }}"
+       class="inline-block mt-2 text-xs bg-red-100 hover:bg-red-200 text-red-800
+              font-semibold px-3 py-1.5 rounded-lg transition-colors break-ko">
+      ⚙ 프로필에서 API 키 설정하기 →
+    </a>
+  </div>
+  {% endif %}
+
+  <!-- 처리 흐름 -->
+  <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-5 text-sm break-ko">
+    <strong class="text-blue-900">자동 처리 흐름</strong>
+    <ol class="mt-2 space-y-1 text-blue-800 text-xs">
+      <li>① 파일 업로드 → 형식 감지 (XLSX / PDF / DOCX)</li>
+      <li>② 파싱 → 텍스트 추출</li>
+      <li>③ Claude API → 구조화 데이터 추출</li>
+      <li>④ 검증 (항목 합계 vs 공급가액)</li>
+      <li>⑤ DB 저장 (라인 아이템 전체)</li>
+    </ol>
+    <p class="mt-2 text-xs text-blue-600">⏱ 약 30~60초 소요</p>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 sm:p-6">
+    <form method="POST" enctype="multipart/form-data" id="uploadForm">
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          업체명 <span class="text-red-500">*</span>
+        </label>
+        <input type="text" name="vendor_name" required autofocus
+               placeholder="예: A테크놀로지"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+        <p class="text-xs text-gray-500 mt-1">같은 업체를 재업로드하면 기존 데이터를 덮어씁니다.</p>
+      </div>
+
+      <div class="mb-6">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          견적서 파일 <span class="text-red-500">*</span>
+        </label>
+        <input type="file" name="file" required id="fileInput"
+               accept=".xlsx,.pdf,.docx"
+               class="w-full text-sm text-gray-700 border border-gray-300 rounded-lg
+                      file:mr-3 file:py-2 file:px-3 file:rounded-l-lg file:border-0
+                      file:bg-blue-700 file:text-white file:font-semibold file:cursor-pointer
+                      hover:file:bg-blue-800 cursor-pointer p-1">
+        <p class="text-xs text-gray-500 mt-1">XLSX, PDF, DOCX — 최대 50MB</p>
+      </div>
+
+      <!-- 상태 표시 영역 (제출 후 표시) -->
+      <div id="statusBox" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <div class="flex items-center gap-3">
+          <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-700 shrink-0"></div>
+          <div>
+            <p class="text-sm font-semibold text-gray-900" id="statusText">업로드 중...</p>
+            <p class="text-xs text-gray-500 break-ko">창을 닫지 마세요.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit" id="submitBtn"
+                class="flex-1 bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                       py-2.5 rounded-lg transition-colors break-ko
+                       disabled:bg-gray-400 disabled:cursor-not-allowed">
+          🚀 업로드 및 자동 추출
+        </button>
+        <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}"
+           class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                  py-2.5 rounded-lg text-center transition-colors break-ko">
+          취소
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const STEPS = [
+  '📄 파일 업로드 중...',
+  '🔍 파일 파싱 중...',
+  '🤖 Claude API로 추출 중...',
+  '✅ 검증 및 저장 중...',
+];
+document.getElementById('uploadForm').addEventListener('submit', function() {
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('statusBox').classList.remove('hidden');
+  let i = 0;
+  setInterval(() => {
+    document.getElementById('statusText').textContent = STEPS[i % STEPS.length];
+    i++;
+  }, 10000);
+});
+document.getElementById('fileInput').addEventListener('change', function() {
+  const f = this.files[0];
+  if (f && f.size > 50*1024*1024) {
+    alert('파일이 너무 큽니다 (최대 50MB)');
+    this.value = '';
+  }
+});
+</script>
+{% endblock %}

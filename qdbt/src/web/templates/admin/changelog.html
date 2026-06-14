@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}시스템 업데이트 로그{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <nav class="text-sm mb-4 text-gray-500">
+    <a href="{{ url_for('admin.users') }}" class="hover:text-blue-700">관리</a>
+    <span class="mx-2">›</span> 업데이트 로그
+  </nav>
+
+  <div class="flex items-center justify-between mb-5">
+    <h1 class="text-xl font-bold text-gray-900 break-ko">📋 시스템 업데이트 로그</h1>
+    <span class="text-xs text-gray-400">현재 버전: {{ app_version }}</span>
+  </div>
+
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <div class="prose prose-sm max-w-none text-gray-700 break-ko"
+         id="changelog-content">
+      {% set lines = content.split('\n') %}
+      {% set in_block = namespace(val=false) %}
+      {% for line in lines %}
+        {% if line.startswith('## ') %}
+        <h2 class="text-base font-bold text-gray-900 mt-6 mb-2 pb-1
+                   border-b border-gray-200 break-ko">
+          {{ line[3:] }}
+        </h2>
+        {% elif line.startswith('### ') %}
+        <h3 class="text-sm font-bold text-gray-700 mt-4 mb-1 break-ko">
+          {{ line[4:] }}
+        </h3>
+        {% elif line.startswith('#### ') %}
+        <h4 class="text-xs font-bold text-gray-600 mt-3 mb-1 uppercase tracking-wide break-ko">
+          {{ line[5:] }}
+        </h4>
+        {% elif line.startswith('- ') or line.startswith('* ') %}
+        <p class="text-sm text-gray-600 pl-3 mb-0.5 break-ko">
+          • {{ line[2:] }}
+        </p>
+        {% elif line.startswith('  - ') %}
+        <p class="text-xs text-gray-500 pl-6 mb-0.5 break-ko">
+          · {{ line[4:] }}
+        </p>
+        {% elif line.startswith('```') %}
+          {% if not in_block.val %}
+          <div class="bg-gray-50 rounded-lg p-3 my-2 text-xs font-mono text-gray-600 overflow-x-auto">
+          {% set in_block.val = true %}
+          {% else %}
+          </div>
+          {% set in_block.val = false %}
+          {% endif %}
+        {% elif in_block.val %}
+        <div class="whitespace-pre break-all">{{ line }}</div>
+        {% elif line.startswith('> ') %}
+        <p class="text-xs text-gray-500 pl-3 border-l-2 border-gray-300 my-1 break-ko">
+          {{ line[2:] }}
+        </p>
+        {% elif line.strip() == '---' %}
+        <hr class="my-4 border-gray-200">
+        {% elif line.strip() %}
+        <p class="text-sm text-gray-600 mb-1 break-ko">{{ line }}</p>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

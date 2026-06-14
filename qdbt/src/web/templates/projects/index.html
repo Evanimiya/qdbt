@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}프로젝트{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">프로젝트</h1>
+  {% if has_role('manager') %}
+  <a href="{{ url_for('projects.new_project') }}"
+     class="bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold
+            px-4 py-2 rounded-lg transition-colors whitespace-nowrap">
+    + 새 프로젝트
+  </a>
+  {% endif %}
+</div>
+
+{% if projects %}
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+  {% for p in projects %}
+  <a href="{{ url_for('projects.detail', project_id=p.project_id) }}"
+     class="hover-lift bg-white rounded-xl shadow-sm border border-gray-200 p-5 block">
+    <div class="flex items-start justify-between mb-3">
+      <h2 class="font-bold text-gray-900 break-ko text-base leading-snug flex-1 pr-2">
+        {{ p.name }}
+      </h2>
+      <span class="text-xs px-2 py-0.5 rounded-full whitespace-nowrap
+        {% if p.status=='active' %}bg-green-100 text-green-700
+        {% elif p.status=='closed' %}bg-gray-100 text-gray-600
+        {% else %}bg-yellow-100 text-yellow-700{% endif %}">
+        {{ p.status }}
+      </span>
+    </div>
+    {% if p.description %}
+    <p class="text-sm text-gray-500 break-ko mb-3 line-clamp-2">{{ p.description }}</p>
+    {% endif %}
+    <div class="flex gap-4 text-sm text-gray-600 pt-3 border-t border-gray-100">
+      <span>입찰 <strong>{{ p.n_bids }}</strong></span>
+      <span>제출서 <strong>{{ p.n_submissions }}</strong></span>
+      {% if p.owner_name %}
+      <span class="ml-auto text-xs text-gray-400">{{ p.owner_name }}</span>
+      {% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
+  <div class="text-5xl mb-3">📂</div>
+  <p class="text-gray-500 break-ko mb-4">아직 프로젝트가 없습니다.</p>
+  {% if has_role('manager') %}
+  <a href="{{ url_for('projects.new_project') }}"
+     class="inline-block bg-blue-700 hover:bg-blue-800 text-white font-semibold
+            px-6 py-2.5 rounded-lg text-sm break-ko">
+    첫 프로젝트 만들기
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,833 @@
+{% extends "base.html" %}
+{% block title %}업체별 비교 · {{ bid.name }}{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}" class="hover:text-blue-700">{{ bid.project_name }}</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}" class="hover:text-blue-700 break-ko">{{ bid.name }}</a>
+  <span class="mx-2">›</span> 업체별 비교
+</nav>
+
+<!-- 상단 헤더 -->
+<div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+  <div>
+    <h1 class="text-xl font-bold text-gray-900 break-ko">📊 업체별 비교</h1>
+    <p class="text-xs text-gray-400 mt-0.5">
+      렌더링: <span id="render-ts"></span>
+      <button onclick="location.href=location.pathname+'?_t={{ request.args.get('_t','') }}&_r='+Date.now()"
+              class="ml-2 text-blue-500 hover:underline">새로고침</button>
+    </p>
+  </div>
+  <div class="flex gap-2 flex-wrap">
+    {% from '_model_selector.html' import model_selector %}
+    <form method="POST"
+          action="{{ url_for('compare.run_cluster_from_compare', bid_id=bid.bid_id) }}"
+          onsubmit="return confirm('이 입찰의 견적 품목을 분석합니다. 계속하시겠습니까?')"
+          class="flex items-center gap-2 flex-wrap">
+      {{ model_selector('cmp') }}
+      <button type="submit"
+              class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                     px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+        🤖 클러스터 실행
+      </button>
+    </form>
+    <a href="{{ url_for('catalog.clusters', bid_id=bid.bid_id) }}"
+       class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+              px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+      🔀 클러스터 관리
+    </a>
+    {% if data.clusters %}
+    <form method="POST"
+          action="{{ url_for('compare.reset_clusters_from_compare', bid_id=bid.bid_id) }}"
+          onsubmit="return confirm('모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')">
+      <button type="submit"
+              class="text-sm bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
+                     font-semibold px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+        🗑 클러스터 리셋
+      </button>
+    </form>
+    {% endif %}
+    <a href="{{ url_for('compare.bid_excel', bid_id=bid.bid_id) }}"
+       class="text-sm bg-green-700 hover:bg-green-800 text-white font-semibold
+              px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+      ⬇ Excel
+    </a>
+  </div>
+</div>
+
+<script>
+  document.getElementById('render-ts').textContent = new Date().toLocaleTimeString('ko-KR');
+  window.addEventListener('pageshow', function(e) {
+    if (e.persisted) location.href = location.pathname + '?_t={{ request.args.get("_t","") }}&_r=' + Date.now();
+  });
+</script>
+
+<!-- 공급가액 카드 (Bug2: USD 환율 배지) -->
+<div class="grid gap-3 mb-4"
+     style="grid-template-columns: repeat({{ [data.vendors|length, 5]|min }}, minmax(0,1fr))">
+  {% for v in data.vendors %}
+  {% set price = data.subtotals[v] %}
+  {% set min_price = data.subtotals.values()|select|min %}
+  {% set fx = data.fx_rates.get(v) if data.fx_rates else none %}
+  {% set is_min = price and price == min_price %}
+  <div class="rounded-xl border p-2.5
+              {% if is_min %}border-green-400 bg-green-50{% else %}border-gray-200 bg-white{% endif %}">
+    <div class="text-xs font-semibold break-ko mb-0.5
+                {% if is_min %}text-green-700{% else %}text-gray-600{% endif %}">
+      {{ v }}{% if is_min %} 🥇{% endif %}
+    </div>
+    <div class="font-bold text-sm mb-1
+                {% if is_min %}text-green-700{% else %}text-gray-900{% endif %}">
+      {% if price %}{{ '{:,}'.format(price|int) }}{% else %}—{% endif %}
+    </div>
+    {% if fx %}<div class="text-xs text-blue-500 mb-1">💱 {{ '{:,}'.format(fx|int) }}원/USD</div>{% endif %}
+    {# 카테고리 소계 #}
+    {% set cat_order = ['자재','인건비','출장비','영업이익','관리비'] %}
+    {% set has_any = namespace(v=false) %}
+    {% for cat in cat_order %}
+      {% if data.category_totals.get(v, {}).get(cat, 0) %}{% set has_any.v = true %}{% endif %}
+    {% endfor %}
+    {% if has_any.v %}
+    <div class="border-t pt-1.5 space-y-0.5"
+         style="border-color: {% if is_min %}#BBF7D0{% else %}#E2E8F0{% endif %}">
+      {% for cat in cat_order %}
+      {% set t = data.category_totals.get(v, {}).get(cat, 0) %}
+      {% if t %}
+      <div class="flex justify-between" style="font-size:9px;">
+        <span class="text-gray-400 truncate">{{ cat }}</span>
+        <span class="text-gray-700 font-medium ml-1 whitespace-nowrap">{{ '{:,}'.format(t|int) }}</span>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ═══ 메인 비교 테이블 ═══ -->
+{% set vendors = data.vendors %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+<table class="w-full border-collapse text-xs" id="compareTable">
+  <thead>
+    <!-- 액션바 행 (sticky, 선택 시 표시) -->
+    <tr id="selectionBarRow"
+        style="display:none; position:sticky; top:0; z-index:40;
+               background:#EFF6FF; border-bottom:1px solid #BFDBFE;">
+      <td colspan="{{ vendors|length + 4 }}" style="padding:5px 10px;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span id="selectionCount" style="font-size:11px; font-weight:600; color:#1D4ED8;"></span>
+          <div style="display:flex; gap:4px; align-items:center; margin-left:auto; flex-wrap:wrap;">
+            <!-- 이동 폼 -->
+            <form id="moveForm" method="POST"
+                  action="{{ url_for('compare.move_items_to_cluster', bid_id=bid.bid_id) }}"
+                  style="display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
+              <input type="hidden" name="item_ids_json" id="selectedItemsJson">
+              <input type="hidden" name="category" id="selectedCategory">
+              <select name="cluster_id" id="clusterSelect" required
+                      onchange="onClusterChange(this)"
+                      style="font-size:10px; padding:3px 7px; border-radius:6px;
+                             border:0.5px solid #93C5FD; background:white; color:#1D4ED8;">
+                <option value="">클러스터 선택...</option>
+                {% for cl in data.clusters %}
+                {% if cl.status in ['pending', 'held'] %}
+                <option value="{{ cl.cluster_id }}"
+                        data-cat="{{ cl.cat }}">
+                  {{ cl.cat }} › {{ cl.representative_name }}
+                </option>
+                {% endif %}
+                {% endfor %}
+                <option value="new">+ 새 클러스터 만들기</option>
+              </select>
+              <!-- 새 클러스터 이름 -->
+              <input type="text" name="representative_name" id="newClusterName"
+                     placeholder="클러스터 이름"
+                     style="display:none; font-size:10px; padding:3px 8px; border-radius:6px;
+                            border:0.5px solid #93C5FD; width:100px;">
+              <!-- 새 클러스터 카테고리 선택 -->
+              <div id="catSelectWrap" style="display:none; align-items:center; gap:2px;">
+                <span style="font-size:9px; color:#64748B; white-space:nowrap;">카테고리:</span>
+                <select name="category" id="catSelect"
+                        style="font-size:10px; padding:3px 7px; border-radius:6px;
+                               border:0.5px solid #93C5FD; background:white; color:#1D4ED8;">
+                  <option value="자재">자재</option>
+                  <option value="인건비">인건비</option>
+                  <option value="출장비">출장비</option>
+                  <option value="영업이익">영업이익</option>
+                  <option value="관리비">관리비</option>
+                  <option value="기타">기타</option>
+                </select>
+                <span id="autoCatHint" style="font-size:8px; color:#60A5FA; white-space:nowrap;">✨자동제안</span>
+              </div>
+              <button type="submit" onclick="return prepareMove()"
+                      style="font-size:10px; padding:3px 10px; border-radius:6px;
+                             border:none; background:#2563EB; color:white; font-weight:600;
+                             cursor:pointer; white-space:nowrap;">이동</button>
+            </form>
+            <!-- 제외 폼 -->
+            <form id="excludeForm" method="POST"
+                  action="{{ url_for('compare.exclude_items_from_cluster', bid_id=bid.bid_id) }}"
+                  style="display:inline;">
+              <input type="hidden" name="item_ids_json" id="excludeItemsJson">
+              <button type="submit" onclick="return prepareExclude()"
+                      style="font-size:10px; padding:3px 10px; border-radius:6px;
+                             border:0.5px solid #EF4444; background:#FEF2F2;
+                             color:#DC2626; font-weight:600; cursor:pointer; white-space:nowrap;">
+                제외
+              </button>
+            </form>
+            <button type="button" onclick="clearSelection()"
+                    style="font-size:10px; padding:3px 10px; border-radius:6px;
+                           border:0.5px solid #93C5FD; background:white; color:#1D4ED8;
+                           cursor:pointer;">취소</button>
+          </div>
+        </div>
+      </td>
+    </tr>
+    <!-- 클러스터 병합 액션바 (클러스터 체크 시 표시) -->
+    <tr id="clusterBarRow"
+        style="display:none; position:sticky; top:0; z-index:41;
+               background:#F5F3FF; border-bottom:1px solid #DDD6FE;">
+      <td colspan="{{ vendors|length + 4 }}" style="padding:5px 10px;">
+        <form id="clusterMergeForm" method="POST"
+              action="{{ url_for('compare.merge_clusters_from_compare', bid_id=bid.bid_id) }}"
+              style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <input type="hidden" name="cluster_ids_json" id="mergeClusterIdsJson">
+          <input type="hidden" name="target_cluster_id" id="mergeTargetIdCmp">
+          <span id="clusterSelCount" style="font-size:11px; font-weight:600; color:#6D28D9;"></span>
+          <div style="display:flex; gap:4px; align-items:center; margin-left:auto; flex-wrap:wrap;">
+            <span style="font-size:10px; color:#7C3AED; white-space:nowrap;">병합 대상:</span>
+            <select id="mergeTargetSelCmp"
+                    style="font-size:10px; padding:3px 7px; border-radius:6px;
+                           border:0.5px solid #C4B5FD; background:white; color:#6D28D9;
+                           max-width:160px;">
+              <option value="">— 선택 —</option>
+            </select>
+            <button type="button" onclick="doClusterMergeCmp()"
+                    style="font-size:10px; padding:3px 10px; border-radius:6px;
+                           border:none; background:#7C3AED; color:white; font-weight:600;
+                           cursor:pointer; white-space:nowrap;">🔀 병합</button>
+            <button type="button" onclick="clearClusterSelCmp()"
+                    style="font-size:10px; padding:3px 10px; border-radius:6px;
+                           border:0.5px solid #C4B5FD; background:white; color:#6D28D9;
+                           cursor:pointer;">취소</button>
+          </div>
+        </form>
+      </td>
+    </tr>
+    <!-- 컬럼 헤더 (액션바 바로 아래 sticky) -->
+    <tr id="colHeader" class="bg-gray-50"
+        style="position:sticky; top:0; z-index:20; border-top:0.5px solid #E2E8F0;">
+      <th class="px-2 py-2 w-8 text-center">
+        <input type="checkbox" id="selectAllUnclustered"
+               onchange="toggleAllUnclustered(this)"
+               class="cursor-pointer accent-blue-600" title="미분류 전체 선택">
+      </th>
+      <th class="text-left px-2 py-2 font-semibold text-gray-500"
+          style="min-width:130px; max-width:160px;">클러스터</th>
+      <th class="text-left px-2 py-2 font-semibold text-gray-500"
+          style="min-width:110px;">품명</th>
+      {% for v in vendors %}
+      <th class="text-center px-2 py-2 font-semibold text-gray-700 whitespace-nowrap"
+          style="min-width:85px;">{{ v }}</th>
+      {% endfor %}
+      <th class="text-right px-3 py-2 font-semibold text-gray-500 whitespace-nowrap
+                 border-l border-gray-200" style="min-width:95px;"
+          title="최저가 · 과거 입찰 평균 대비 편차율">최저 / 과거대비</th>
+    </tr>
+  </thead>
+  <tbody>
+
+  {# ─── 클러스터 그룹 (카테고리 순 정렬, rowspan) ─── #}
+  {% if data.clusters %}
+  {% set cat_colors = {
+    '자재':   ('bg-yellow-100 text-yellow-800', '#FFFBEB'),
+    '인건비': ('bg-purple-100 text-purple-800', '#FAF5FF'),
+    '출장비': ('bg-blue-100 text-blue-800',     '#EFF6FF'),
+    '영업이익':('bg-red-100 text-red-800',      '#FFF1F2'),
+    '관리비': ('bg-green-100 text-green-800',   '#F0FDF4'),
+  } %}
+  {% set last_cat = namespace(v='') %}
+  {% for cl in data.clusters %}
+  {% set groups = cl.groups %}
+  {% set row_count = groups|length %}
+  {% if row_count > 0 %}
+
+  {# 카테고리 구분 헤더 (카테고리가 바뀔 때만) #}
+  {% if cl.cat != last_cat.v %}
+  {% set last_cat.v = cl.cat %}
+  {% set cat_hbg = cat_colors.get(cl.cat, ('bg-gray-100 text-gray-600', '#F8FAFC'))[1] %}
+  {% set cat_cls = cat_colors.get(cl.cat, ('bg-gray-100 text-gray-600', '#F8FAFC'))[0] %}
+  <tr style="border-top:1px solid #E2E8F0; background:{{ cat_hbg }};">
+    <td colspan="{{ vendors|length + 4 }}" style="padding:3px 10px;">
+      <span class="text-xs font-bold uppercase tracking-wider {{ cat_cls }}"
+            style="letter-spacing:0.06em;">{{ cl.cat }}</span>
+    </td>
+  </tr>
+  {% endif %}
+
+  {% set bg_cl = 'bg-green-50' if cl.status == 'accepted'
+                 else 'bg-gray-50' if cl.status == 'held'
+                 else 'bg-yellow-50' %}
+  {% set border_cl = 'border-green-400' if cl.status == 'accepted'
+                     else 'border-gray-400' if cl.status == 'held'
+                     else 'border-yellow-400' %}
+  {% set border_color = '#16A34A' if cl.status == 'accepted'
+                        else '#94A3B8' if cl.status == 'held'
+                        else '#EAB308' %}
+  {% set inner_border = '#BBF7D0' if cl.status == 'accepted'
+                        else '#E2E8F0' if cl.status == 'held'
+                        else '#FDE68A' %}
+  {% set badge_txt = '✅ 확정' if cl.status == 'accepted'
+                     else '⏸ 보류' if cl.status == 'held'
+                     else '검토 대기' %}
+  {% set badge_cls = 'bg-green-200 text-green-800' if cl.status == 'accepted'
+                     else 'bg-gray-200 text-gray-600' if cl.status == 'held'
+                     else 'bg-yellow-200 text-yellow-800' %}
+
+  {% for gi, grp in groups|enumerate %}
+  {% set is_first = (gi == 0) %}
+  {% set is_last  = (gi == row_count - 1) %}
+
+  {# 상태별 내부 구분선 색상 #}
+  {% set inner_border = '#FDE68A' if cl.status == 'pending'
+                        else '#BBF7D0' if cl.status == 'accepted'
+                        else '#E2E8F0' %}
+
+  <tr class="{{ bg_cl }}"
+      style="{% if is_first %}border-top:2px solid {{ border_color }};{% else %}border-top:0.5px dashed {{ inner_border }};{% endif %}
+             {% if is_last %}border-bottom:2px solid {{ border_color }};{% endif %}">
+
+    {# 첫 번째 행만: 체크박스 + 클러스터명 (rowspan) #}
+    {% if gi == 0 %}
+    <td rowspan="{{ row_count }}"
+        class="px-2 py-2 text-center align-middle border-l-4 {{ border_cl }}">
+      <input type="checkbox"
+             class="cluster-sel-chk cursor-pointer accent-purple-600"
+             value="{{ cl.cluster_id }}"
+             data-name="{{ cl.representative_name }}"
+             onchange="onClusterSelCmp(this)"
+             title="클러스터 선택(병합)">
+    </td>
+    <td rowspan="{{ row_count }}"
+        class="px-2 py-2 align-middle {{ bg_cl }}"
+        style="min-width:130px; max-width:170px; border-right:1.5px solid {{ border_color }};">
+      <div class="flex flex-col gap-1.5">
+        <!-- 클러스터명 -->
+        <div class="font-semibold text-gray-900 break-ko leading-tight"
+             style="font-size:11px;">
+          📦 {{ cl.representative_name }}
+        </div>
+        <!-- 줄 1: 카테고리배지 + 🔍상세 + 상태배지 (한 줄) -->
+        <div style="display:flex; align-items:center; gap:3px; flex-wrap:nowrap; overflow:hidden;">
+          {# 카테고리 배지 #}
+          {% set cat_badge = cat_colors.get(cl.cat, ('bg-gray-100 text-gray-600', '#F8FAFC'))[0] %}
+          <span class="rounded {{ cat_badge }} font-semibold flex-shrink-0"
+                style="font-size:8px; padding:1px 4px; white-space:nowrap;">{{ cl.cat }}</span>
+          <a href="{{ url_for('catalog.cluster_detail', cluster_id=cl.cluster_id) }}?return_bid_id={{ bid.bid_id }}&_t={{ request.args.get('_t','') }}"
+             class="flex-shrink-0 border border-gray-300 rounded bg-white text-gray-500
+                    hover:text-blue-600 whitespace-nowrap"
+             style="font-size:9px; padding:1px 4px;">🔍 상세</a>
+          <span class="rounded whitespace-nowrap flex-shrink-0 {{ badge_cls }}"
+                style="font-size:8px; padding:1px 4px;">
+            {{ badge_txt }} · {{ row_count }}개
+          </span>
+        </div>
+        <!-- 줄 2: 상태별 액션 버튼 -->
+        {% if cl.status != 'accepted' %}
+        <div style="display:flex; gap:2px; flex-wrap:nowrap;">
+          <form method="POST"
+                action="{{ url_for('compare.accept_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('확정하시겠습니까?\n카탈로그에 자동 등록됩니다.')" class="inline">
+            <input type="hidden" name="representative_name" value="{{ cl.representative_name }}">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #16A34A; background:#DCFCE7;
+                           color:#15803D; cursor:pointer; font-weight:500;
+                           white-space:nowrap;">✅ 확정</button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('compare.hold_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}" class="inline">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #CA8A04; background:#FEF9C3;
+                           color:#A16207; cursor:pointer;
+                           white-space:nowrap;">⏸ 보류</button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('compare.reject_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('거부하시겠습니까?')" class="inline">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #E2E8F0; background:#F8FAFC;
+                           color:#64748B; cursor:pointer;
+                           white-space:nowrap;">✕ 거부</button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('compare.delete_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('삭제하시겠습니까?')" class="inline">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #FCA5A5; background:#FEF2F2;
+                           color:#DC2626; cursor:pointer;
+                           white-space:nowrap;">🗑</button>
+          </form>
+        </div>
+        {% else %}
+        {# 확정됨 — 재검토 / 삭제 #}
+        <div style="display:flex; gap:2px; flex-wrap:nowrap;">
+          <form method="POST"
+                action="{{ url_for('compare.reopen_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('재검토 대기로 되돌리시겠습니까?\n카탈로그 항목이 삭제됩니다.')" class="inline">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #CA8A04; background:#FEF9C3;
+                           color:#A16207; cursor:pointer; font-weight:500;
+                           white-space:nowrap;">↩ 재검토</button>
+          </form>
+          <form method="POST"
+                action="{{ url_for('compare.delete_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
+                onsubmit="return confirm('삭제하시겠습니까?\n카탈로그 항목도 함께 삭제됩니다.')" class="inline">
+            <button style="font-size:9px; padding:1px 5px; border-radius:3px;
+                           border:0.5px solid #FCA5A5; background:#FEF2F2;
+                           color:#DC2626; cursor:pointer;
+                           white-space:nowrap;">🗑 삭제</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </td>
+    {% endif %}
+
+    {# 품목명 셀 (체크박스 포함) #}
+    <td class="px-2 py-2" style="min-width:110px; border-left:0.5px solid {{ inner_border }};">
+      <div class="flex items-center gap-1.5">
+        <input type="checkbox"
+               class="grp-checkbox cursor-pointer accent-blue-600 flex-shrink-0"
+               data-group-key="{{ cl.cluster_id }}::{{ grp.group_name }}"
+               onchange="onGrpCheck(this)">
+        <span class="text-xs text-gray-600 break-ko">{{ grp.group_name }}</span>
+      </div>
+    </td>
+
+    {# 업체별 단가 셀 #}
+    {% for v in vendors %}
+    {% set cell = grp.cells.get(v) %}
+    {% if cell and cell.unit_price %}
+      {% set is_min = cell.unit_price == grp.min_price %}
+      {% set is_max = grp.max_price and cell.unit_price == grp.max_price and grp.min_price != grp.max_price %}
+      <td class="px-2 py-2 text-center vendor-cell
+                 {% if is_min %}bg-green-50{% elif is_max %}bg-red-50{% endif %}"
+          data-item-id="{{ cell.item_id }}"
+          data-group="{{ cl.cluster_id }}::{{ grp.group_name }}"
+          data-category="{{ cl.cat }}"
+          onclick="toggleCell(this)"
+          style="cursor:pointer;">
+        <div class="text-xs break-ko leading-tight mb-0.5
+                    {% if is_min %}text-green-700{% elif is_max %}text-red-700{% else %}text-gray-500{% endif %}">
+          {{ cell.name_normalized or cell.name_raw or '' }}
+        </div>
+        <div class="font-semibold whitespace-nowrap
+                    {% if is_min %}text-green-700{% elif is_max %}text-red-700{% else %}text-gray-900{% endif %}">
+          {{ '{:,}'.format(cell.unit_price|int) }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}
+        </div>
+      </td>
+    {% else %}
+      <td class="px-2 py-2 text-center text-gray-300">—</td>
+    {% endif %}
+    {% endfor %}
+
+    {# 최저 + 과거대비 통합 셀 #}
+    <td class="px-3 py-2 text-right border-l border-gray-200 align-middle">
+      {% if grp.min_price %}
+      <div class="font-semibold text-green-700 whitespace-nowrap"
+           style="font-size:10px;">
+        {{ '{:,}'.format(grp.min_price|int) }}
+      </div>
+      <div class="text-gray-400 break-ko" style="font-size:9px;">{{ grp.min_vendor }}</div>
+      {% endif %}
+      {# 과거 대비 배지 — 확정된 클러스터 + benchmark 있을 때 #}
+      {% if cl.benchmark and grp.min_price %}
+        {% set bm = cl.benchmark %}
+        {% set diff_pct = ((grp.min_price - bm.avg) / bm.avg * 100) | round(1) %}
+        {% if diff_pct > 20 %}
+          {% set badge_bg = 'background:#FEF2F2; border:0.5px solid #FECACA;' %}
+          {% set badge_tc = 'color:#DC2626;' %}
+        {% elif diff_pct > 5 %}
+          {% set badge_bg = 'background:#FFF7ED; border:0.5px solid #FED7AA;' %}
+          {% set badge_tc = 'color:#EA580C;' %}
+        {% elif diff_pct < -20 %}
+          {% set badge_bg = 'background:#EFF6FF; border:0.5px solid #93C5FD;' %}
+          {% set badge_tc = 'color:#1D4ED8;' %}
+        {% elif diff_pct < -5 %}
+          {% set badge_bg = 'background:#EFF6FF; border:0.5px solid #BFDBFE;' %}
+          {% set badge_tc = 'color:#2563EB;' %}
+        {% else %}
+          {% set badge_bg = 'background:#F1F5F9; border:0.5px solid #E2E8F0;' %}
+          {% set badge_tc = 'color:#64748B;' %}
+        {% endif %}
+        <div style="margin-top:2px; display:inline-flex; align-items:center;
+                    {{ badge_bg }} border-radius:3px; padding:1px 5px;">
+          <span style="font-size:9px; font-weight:600; {{ badge_tc }}">
+            {% if diff_pct > 0 %}+{% endif %}{{ diff_pct }}%
+          </span>
+        </div>
+        <div style="font-size:8px; color:#94A3B8; margin-top:1px; white-space:nowrap;">
+          평균 {{ '{:,}'.format(bm.avg|int) }}
+        </div>
+      {% elif cl.status != 'accepted' %}
+        <div style="font-size:8px; color:#CBD5E1; margin-top:2px;">확정 후 표시</div>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}{# end groups #}
+
+  {% endif %}{# end row_count > 0 #}
+  {% endfor %}{# end clusters #}
+
+  {# 미분류 구분 #}
+  {% if data.categories %}
+  <tr>
+    <td colspan="{{ vendors|length + 3 }}"
+        class="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase
+               tracking-wider bg-gray-50 border-t border-gray-200">
+      미분류 항목
+    </td>
+  </tr>
+  {% endif %}
+  {% endif %}
+
+  {# ─── 미분류 항목 ─── #}
+  {% for cat, rows in data.categories.items() %}
+  <tr class="bg-gray-50 border-t border-gray-200">
+    <td class="px-2 py-1.5"></td>
+    <td colspan="{{ vendors|length + 3 }}"
+        class="px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+      {{ cat }} · {{ rows|length }}개
+    </td>
+  </tr>
+
+  {% for row in rows %}
+  {% set prices = [] %}
+  {% for v in vendors %}
+    {% if row.prices.get(v) %}{% set _ = prices.append(row.prices[v]) %}{% endif %}
+  {% endfor %}
+  {% set min_p = prices|min if prices else none %}
+  {% set max_p = prices|max if prices else none %}
+  {% set item_map = row.item_ids if row.item_ids is defined else {} %}
+
+  <tr class="border-t border-gray-100 unclustered-row">
+    <td class="px-2 py-2 text-center border-l-4 border-gray-200"
+        id="bar_{{ loop.index }}_{{ cat }}">
+      <input type="checkbox" class="row-checkbox cursor-pointer accent-blue-600"
+             data-row="{{ loop.index }}_{{ cat }}" onchange="onRowCheck(this)">
+    </td>
+    <!-- 카테고리 열 (미분류는 비움) -->
+    <td class="px-2 py-2 text-xs text-gray-400 border-r border-gray-100"
+        style="min-width:130px; max-width:160px;">—</td>
+    <!-- 품목명 열 -->
+    <td class="px-2 py-2 text-xs text-gray-600 break-ko">{{ row.name }}</td>
+
+    {% for v in vendors %}
+    {% set p = row.prices.get(v) %}
+    {% set item_id = item_map.get(v, '') %}
+    {% set is_min = p and min_p and p == min_p %}
+    {% set is_max = p and max_p and p == max_p and min_p != max_p %}
+    <td class="px-2 py-2 text-center vendor-cell
+               {% if is_min %}bg-green-50{% elif is_max %}bg-red-50{% endif %}"
+        data-item-id="{{ item_id }}"
+        data-row="{{ loop.index }}_{{ cat }}"
+        data-vendor="{{ v }}"
+        data-category="{{ cat }}"
+        onclick="{% if item_id %}toggleCell(this){% endif %}"
+        style="{% if item_id %}cursor:pointer;{% endif %}">
+      {% if p %}
+      <div class="text-xs break-ko leading-tight mb-0.5
+                  {% if is_min %}text-green-700{% elif is_max %}text-red-700{% else %}text-gray-500{% endif %}">
+        {{ row.name }}
+      </div>
+      <div class="font-semibold whitespace-nowrap
+                  {% if is_min %}text-green-700{% elif is_max %}text-red-700{% else %}text-gray-900{% endif %}">
+        {{ '{:,}'.format(p|int) }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}
+      </div>
+      {% else %}
+      <span class="text-gray-300">—</span>
+      {% endif %}
+    </td>
+    {% endfor %}
+
+    <td class="px-3 py-2 text-right border-l border-gray-200 align-middle">
+      {# 최저가 #}
+      {% if min_p %}
+      <div class="font-semibold text-green-700 whitespace-nowrap" style="font-size:10px;">
+        {{ '{:,}'.format(min_p|int) }}
+      </div>
+      {% endif %}
+      {# 과거대비 배지 #}
+      {% if row.benchmark and min_p %}
+        {% set bm = row.benchmark %}
+        {% set diff_pct = ((min_p - bm.avg) / bm.avg * 100) | round(1) %}
+        {% if diff_pct > 20 %}
+          {% set badge_bg = 'background:#FEF2F2; border:0.5px solid #FECACA;' %}
+          {% set badge_tc = 'color:#DC2626;' %}
+        {% elif diff_pct > 5 %}
+          {% set badge_bg = 'background:#FFF7ED; border:0.5px solid #FED7AA;' %}
+          {% set badge_tc = 'color:#EA580C;' %}
+        {% elif diff_pct < -20 %}
+          {% set badge_bg = 'background:#EFF6FF; border:0.5px solid #93C5FD;' %}
+          {% set badge_tc = 'color:#1D4ED8;' %}
+        {% elif diff_pct < -5 %}
+          {% set badge_bg = 'background:#EFF6FF; border:0.5px solid #BFDBFE;' %}
+          {% set badge_tc = 'color:#2563EB;' %}
+        {% else %}
+          {% set badge_bg = 'background:#F1F5F9; border:0.5px solid #E2E8F0;' %}
+          {% set badge_tc = 'color:#64748B;' %}
+        {% endif %}
+        <div style="margin-top:2px; display:inline-flex; align-items:center;
+                    {{ badge_bg }} border-radius:3px; padding:1px 5px;">
+          <span style="font-size:9px; font-weight:600; {{ badge_tc }}">
+            {% if diff_pct > 0 %}+{% endif %}{{ diff_pct }}%
+          </span>
+        </div>
+        <div style="font-size:8px; color:#94A3B8; margin-top:1px; white-space:nowrap;">
+          평균 {{ '{:,}'.format(bm.avg|int) }}
+        </div>
+      {% else %}
+        <div style="font-size:8px; color:#CBD5E1; margin-top:2px;">—</div>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+
+  {# 카테고리 소계 #}
+  <tr class="bg-gray-50 text-xs font-semibold border-t border-gray-200">
+    <td class="px-2 py-2"></td>
+    <td class="px-2 py-2 text-gray-400 text-xs">소계</td>
+    <td class="px-2 py-2"></td>
+    {% for v in vendors %}
+    <td class="px-2 py-2 text-center text-gray-600">
+      {% set total = data.category_totals.get(v, {}).get(cat, 0) %}
+      {{ '{:,}'.format(total|int) if total else '—' }}
+    </td>
+    {% endfor %}
+    <td class="border-l border-gray-200 px-3 py-2"></td>
+  </tr>
+  {% endfor %}
+
+  </tbody>
+</table>
+</div>
+
+{% if not data.categories and not data.clusters %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center mt-4">
+  <p class="text-gray-500 break-ko">비교할 데이터가 없습니다.</p>
+</div>
+{% endif %}
+
+<!-- 범례 -->
+<div class="flex gap-3 mt-3 flex-wrap items-center">
+  <span class="flex items-center gap-1.5 text-xs text-gray-500">
+    <span class="w-3 h-3 rounded bg-green-100 border border-green-400 inline-block"></span>최저
+  </span>
+  <span class="flex items-center gap-1.5 text-xs text-gray-500">
+    <span class="w-3 h-3 rounded bg-red-50 border border-red-300 inline-block"></span>최고
+  </span>
+  <span class="flex items-center gap-1.5 text-xs text-gray-500">
+    <span class="w-3 h-3 rounded bg-blue-100 border-2 border-blue-400 inline-block"></span>선택됨
+  </span>
+  <span class="text-xs text-gray-300">|</span>
+  <span class="text-xs text-gray-400">과거대비:</span>
+  <span style="background:#FEF2F2;border:0.5px solid #FECACA;border-radius:3px;
+               padding:1px 6px;font-size:9px;font-weight:600;color:#DC2626;">+20%↑</span>
+  <span style="background:#FFF7ED;border:0.5px solid #FED7AA;border-radius:3px;
+               padding:1px 6px;font-size:9px;font-weight:500;color:#EA580C;">+5~20%</span>
+  <span style="background:#F1F5F9;border:0.5px solid #E2E8F0;border-radius:3px;
+               padding:1px 6px;font-size:9px;color:#64748B;">±5%</span>
+  <span style="background:#EFF6FF;border:0.5px solid #BFDBFE;border-radius:3px;
+               padding:1px 6px;font-size:9px;font-weight:500;color:#2563EB;">-5~20%</span>
+  <span style="background:#EFF6FF;border:0.5px solid #93C5FD;border-radius:3px;
+               padding:1px 6px;font-size:9px;font-weight:600;color:#1D4ED8;">-20%↓</span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const selectedItems = new Set();
+
+// ── 액션바 표시/숨김 ─────────────────────────────
+function updateBar() {
+  const barRow = document.getElementById('selectionBarRow');
+  const colHdr = document.getElementById('colHeader');
+  const count  = document.getElementById('selectionCount');
+  if (selectedItems.size === 0) {
+    barRow.style.display = 'none';
+    if (colHdr) colHdr.style.top = '0';
+  } else {
+    barRow.style.display = '';
+    if (colHdr) colHdr.style.top = '33px';
+    count.textContent = selectedItems.size + '개 선택됨';
+  }
+}
+
+// ── 셀 선택 토글 ────────────────────────────────
+function toggleCell(td) {
+  const itemId = td.dataset.itemId;
+  if (!itemId) return;
+  if (selectedItems.has(itemId)) {
+    selectedItems.delete(itemId);
+    td.classList.remove('ring-2', 'ring-blue-500', 'bg-blue-50');
+  } else {
+    selectedItems.add(itemId);
+    td.classList.add('ring-2', 'ring-blue-500', 'bg-blue-50');
+  }
+  syncRowBar(td.dataset.row);
+  updateBar();
+}
+
+function onGrpCheck(cb) {
+  const key = cb.dataset.groupKey;
+  document.querySelectorAll(`.vendor-cell[data-group="${key}"]`).forEach(td => {
+    const id = td.dataset.itemId;
+    if (!id) return;
+    if (cb.checked) { selectedItems.add(id); td.classList.add('ring-2','ring-blue-500','bg-blue-50'); }
+    else            { selectedItems.delete(id); td.classList.remove('ring-2','ring-blue-500','bg-blue-50'); }
+  });
+  updateBar();
+}
+
+function onRowCheck(cb) {
+  const rowKey = cb.dataset.row;
+  document.querySelectorAll(`.vendor-cell[data-row="${rowKey}"]`).forEach(td => {
+    const id = td.dataset.itemId;
+    if (!id) return;
+    if (cb.checked) { selectedItems.add(id); td.classList.add('ring-2','ring-blue-500','bg-blue-50'); }
+    else            { selectedItems.delete(id); td.classList.remove('ring-2','ring-blue-500','bg-blue-50'); }
+  });
+  syncRowBar(rowKey);
+  updateBar();
+}
+
+function syncRowBar(rowKey) {
+  if (!rowKey) return;
+  const barCell = document.getElementById('bar_' + rowKey);
+  if (!barCell) return;
+  const hasSel = [...document.querySelectorAll(`.vendor-cell[data-row="${rowKey}"]`)]
+    .some(td => td.dataset.itemId && selectedItems.has(td.dataset.itemId));
+  barCell.style.borderLeftColor = hasSel ? '#3B82F6' : '';
+}
+
+function toggleAllUnclustered(cb) {
+  document.querySelectorAll('.row-checkbox').forEach(rc => { rc.checked = cb.checked; onRowCheck(rc); });
+}
+
+function clearSelection() {
+  selectedItems.clear();
+  document.querySelectorAll('.vendor-cell').forEach(td =>
+    td.classList.remove('ring-2','ring-blue-500','bg-blue-50'));
+  document.querySelectorAll('.row-checkbox,.grp-checkbox,#selectAllUnclustered')
+    .forEach(cb => cb.checked = false);
+  document.querySelectorAll('[id^="bar_"]').forEach(el => el.style.borderLeftColor = '');
+  updateBar();
+}
+
+// ── 클러스터 선택 변경 → 새 클러스터 UI 토글 ────
+function onClusterChange(sel) {
+  const nameInp    = document.getElementById('newClusterName');
+  const catWrap    = document.getElementById('catSelectWrap');
+  const catSel     = document.getElementById('catSelect');
+  const hint       = document.getElementById('autoCatHint');
+
+  if (sel.value === 'new') {
+    nameInp.style.display = 'inline-block';
+    nameInp.required = true;
+    catWrap.style.display = 'flex';
+
+    // 자동제안: 선택된 아이템들의 카테고리 다수결
+    const cats = {};
+    [...selectedItems].forEach(id => {
+      const td = document.querySelector(`.vendor-cell[data-item-id="${id}"]`);
+      const cat = td ? (td.dataset.category || '') : '';
+      if (cat) cats[cat] = (cats[cat] || 0) + 1;
+    });
+    const suggested = Object.entries(cats).sort((a,b) => b[1]-a[1])[0]?.[0] || '';
+    if (suggested) {
+      catSel.value = suggested;
+      hint.style.display = 'inline';
+    } else {
+      hint.style.display = 'none';
+    }
+  } else {
+    nameInp.style.display = 'none';
+    nameInp.required = false;
+    catWrap.style.display = 'none';
+  }
+}
+
+// ── 이동 폼 제출 전 검증 ────────────────────────
+function prepareMove() {
+  if (selectedItems.size === 0) { alert('이동할 항목을 선택하세요.'); return false; }
+  const sel = document.getElementById('clusterSelect').value;
+  if (!sel) { alert('클러스터를 선택하세요.'); return false; }
+  if (sel === 'new' && !document.getElementById('newClusterName').value.trim()) {
+    alert('새 클러스터 이름을 입력하세요.'); return false;
+  }
+  document.getElementById('selectedItemsJson').value = JSON.stringify([...selectedItems]);
+  return true;
+}
+
+// ── 제외 폼 제출 전 검증 ────────────────────────
+function prepareExclude() {
+  if (selectedItems.size === 0) { alert('제외할 항목을 선택하세요.'); return false; }
+  if (!confirm(selectedItems.size + '개 항목을 미분류로 제외하시겠습니까?')) return false;
+  document.getElementById('excludeItemsJson').value = JSON.stringify([...selectedItems]);
+  return true;
+}
+
+// ── 클러스터 단위 선택 → 병합 ───────────────────
+const selectedClustersCmp = new Map();  // cluster_id -> representative_name
+
+function onClusterSelCmp(cb) {
+  if (cb.checked) selectedClustersCmp.set(cb.value, cb.dataset.name || '(미명)');
+  else            selectedClustersCmp.delete(cb.value);
+  updateClusterBarCmp();
+}
+
+function updateClusterBarCmp() {
+  const bar = document.getElementById('clusterBarRow');
+  const cnt = document.getElementById('clusterSelCount');
+  const sel = document.getElementById('mergeTargetSelCmp');
+  if (selectedClustersCmp.size === 0) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = '';
+  cnt.textContent = selectedClustersCmp.size + '개 클러스터 선택됨';
+  // 병합 대상 드롭다운을 선택된 클러스터로 재구성(기존 선택 유지)
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— 선택 —</option>';
+  selectedClustersCmp.forEach((name, id) => {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = name;
+    if (id === prev) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function clearClusterSelCmp() {
+  selectedClustersCmp.clear();
+  document.querySelectorAll('.cluster-sel-chk').forEach(cb => cb.checked = false);
+  updateClusterBarCmp();
+}
+
+function doClusterMergeCmp() {
+  if (selectedClustersCmp.size < 2) {
+    alert('병합하려면 2개 이상의 클러스터를 선택하세요.');
+    return;
+  }
+  const target = document.getElementById('mergeTargetSelCmp').value;
+  if (!target) { alert('병합 대상 클러스터를 선택하세요.'); return; }
+  const targetName = selectedClustersCmp.get(target);
+  if (!confirm(`선택된 ${selectedClustersCmp.size}개 클러스터를 "${targetName}"(으)로 병합하시겠습니까?`)) return;
+  document.getElementById('mergeClusterIdsJson').value = JSON.stringify([...selectedClustersCmp.keys()]);
+  document.getElementById('mergeTargetIdCmp').value = target;
+  document.getElementById('clusterMergeForm').submit();
+}
+</script>
+{% endblock %}
