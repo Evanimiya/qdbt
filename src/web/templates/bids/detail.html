@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}{{ bid.bid_name }} · {{ bid.project_name }}{% endblock %}
+
+{% block content %}
+<nav class="text-sm mb-4 text-gray-500">
+  <a href="{{ url_for('projects.index') }}" class="hover:text-blue-700">프로젝트</a>
+  <span class="mx-2">›</span>
+  <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}"
+     class="hover:text-blue-700 break-ko">{{ bid.project_name }}</a>
+  <span class="mx-2">›</span>
+  <span class="text-gray-900 break-ko">{{ bid.name }}</span>
+</nav>
+
+<!-- 입찰 헤더 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-start justify-between flex-wrap gap-3 mb-2">
+    <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">{{ bid.name }}</h1>
+    <span class="text-xs px-2 py-1 rounded-full
+      {% if bid.status=='open' %}bg-blue-100 text-blue-700
+      {% elif bid.status=='awarded' %}bg-green-100 text-green-700
+      {% else %}bg-gray-100 text-gray-600{% endif %}">
+      {{ bid.status }}
+    </span>
+  </div>
+  {% if bid.due_date %}<p class="text-sm text-gray-500">마감일: {{ bid.due_date }}</p>{% endif %}
+  {% if bid.description %}<p class="text-sm text-gray-500 mt-1 break-ko">{{ bid.description }}</p>{% endif %}
+</div>
+
+<!-- 통계 카드 -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 text-center">
+    <div class="text-xs text-gray-500 break-ko">제출 업체</div>
+    <div class="text-2xl font-bold text-gray-900">{{ submissions|length }}</div>
+  </div>
+  {% set done = submissions|selectattr('extraction_status','eq','done')|list %}
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 text-center">
+    <div class="text-xs text-gray-500 break-ko">추출 완료</div>
+    <div class="text-2xl font-bold text-green-700">{{ done|length }}</div>
+  </div>
+  {% if done %}
+  {% set prices = done|map(attribute='subtotal_excl_vat')|select|list %}
+  {% if prices %}
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 text-center">
+    <div class="text-xs text-gray-500 break-ko">최저가</div>
+    <div class="text-sm font-bold text-green-700">{{ '{:,}'.format(prices|min|int) }}</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 text-center">
+    <div class="text-xs text-gray-500 break-ko">최고가</div>
+    <div class="text-sm font-bold text-red-600">{{ '{:,}'.format(prices|max|int) }}</div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+
+<!-- 액션 버튼 -->
+<div class="flex flex-wrap gap-3 mb-6">
+  {% if has_role('manager') %}
+  <a href="{{ url_for('submissions.upload', bid_id=bid.bid_id) }}"
+     class="bg-blue-700 hover:bg-blue-800 text-white font-semibold
+            px-4 py-2.5 rounded-lg text-sm transition-colors break-ko">
+    📤 제출서 업로드
+  </a>
+  {% endif %}
+  {% if done|length >= 2 %}
+  <a href="{{ url_for('compare.bid_compare', bid_id=bid.bid_id) }}"
+     class="bg-green-700 hover:bg-green-800 text-white font-semibold
+            px-4 py-2.5 rounded-lg text-sm transition-colors break-ko">
+    📊 업체별 비교
+  </a>
+  <a href="{{ url_for('compare.bid_excel', bid_id=bid.bid_id) }}"
+     class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+            px-4 py-2.5 rounded-lg text-sm transition-colors break-ko">
+    ⬇ Excel 다운로드
+  </a>
+  {% endif %}
+</div>
+
+<!-- 제출서 목록 -->
+<h2 class="text-base font-bold text-gray-900 mb-3 break-ko">제출서 목록</h2>
+
+{% if submissions %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <!-- 모바일: 카드 -->
+  <div class="divide-y divide-gray-100 sm:hidden">
+    {% for s in submissions %}
+    <div class="p-4">
+      <div class="flex justify-between items-start mb-1">
+        <a href="{{ url_for('submissions.detail', submission_id=s.submission_id) }}"
+           class="font-semibold text-blue-700 hover:underline break-ko">{{ s.vendor_name }}</a>
+        <span class="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 uppercase">
+          {{ s.file_format }}
+        </span>
+      </div>
+      <div class="text-sm text-gray-600">
+        {% if s.subtotal_excl_vat %}
+        {{ '{:,}'.format(s.subtotal_excl_vat|int) }}원
+        {% endif %}
+        <span class="ml-2 text-xs
+          {% if s.extraction_status=='done' %}text-green-600
+          {% elif s.extraction_status=='failed' %}text-red-600
+          {% else %}text-gray-400{% endif %}">
+          {{ s.extraction_status }}
+        </span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <!-- 데스크톱: 테이블 -->
+  <table class="hidden sm:table w-full text-sm">
+    <thead class="bg-gray-50 text-gray-600 text-xs uppercase">
+      <tr>
+        <th class="text-left px-4 py-3">업체명</th>
+        <th class="text-right px-4 py-3">공급가액 (원)</th>
+        <th class="text-right px-4 py-3">항목 수</th>
+        <th class="text-center px-4 py-3">형식</th>
+        <th class="text-center px-4 py-3">상태</th>
+        <th class="text-center px-4 py-3">액션</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+    {% for s in submissions %}
+      <tr class="{% if loop.first and done|length > 1 %}bg-green-50{% endif %}">
+        <td class="px-4 py-3 font-semibold break-ko">
+          <a href="{{ url_for('submissions.detail', submission_id=s.submission_id) }}"
+             class="text-blue-700 hover:underline">{{ s.vendor_name }}</a>
+        </td>
+        <td class="px-4 py-3 text-right">
+          {{ '{:,}'.format(s.subtotal_excl_vat|int) if s.subtotal_excl_vat else '-' }}
+        </td>
+        <td class="px-4 py-3 text-right">{{ s.n_items or '-' }}</td>
+        <td class="px-4 py-3 text-center uppercase text-gray-500">{{ s.file_format }}</td>
+        <td class="px-4 py-3 text-center">
+          <span class="text-xs px-2 py-0.5 rounded-full
+            {% if s.extraction_status=='done' %}bg-green-100 text-green-700
+            {% elif s.extraction_status=='failed' %}bg-red-100 text-red-700
+            {% elif s.extraction_status=='processing' %}bg-yellow-100 text-yellow-700
+            {% else %}bg-gray-100 text-gray-600{% endif %}">
+            {{ s.extraction_status }}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-center">
+          {% if has_role('manager') %}
+          <div class="flex gap-2 justify-center">
+            {% if s.extraction_status in ('done', 'failed') %}
+            <form method="POST" action="{{ url_for('submissions.reset', submission_id=s.submission_id) }}"
+                  onsubmit="return confirm('추출 데이터를 초기화하시겠습니까?\n제출서 파일은 유지되며 재추출이 가능합니다.');">
+              <button type="submit"
+                      class="text-xs text-amber-600 hover:text-amber-800 border border-amber-300 rounded px-2 py-0.5 hover:bg-amber-50">
+                초기화
+              </button>
+            </form>
+            {% endif %}
+            <form method="POST" action="{{ url_for('submissions.soft_delete', submission_id=s.submission_id) }}"
+                  onsubmit="return confirm('숨김 처리하시겠습니까?\n하단에서 언제든 복원할 수 있습니다.');">
+              <button type="submit"
+                      class="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-0.5 hover:bg-red-50">
+                삭제
+              </button>
+            </form>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+  <p class="text-gray-500 break-ko">아직 제출서가 없습니다.</p>
+</div>
+{% endif %}
+
+{% if deleted_submissions %}
+<details class="mt-6">
+  <summary class="cursor-pointer text-sm text-gray-400 hover:text-gray-600 select-none mb-3">
+    🗑 삭제된 제출서 {{ deleted_submissions|length }}건 (복원 가능)
+  </summary>
+  <div class="bg-white rounded-xl shadow-sm border border-dashed border-gray-300 overflow-hidden mt-2">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+        <tr>
+          <th class="text-left px-4 py-3">업체명</th>
+          <th class="text-right px-4 py-3">공급가액 (원)</th>
+          <th class="text-center px-4 py-3">상태</th>
+          <th class="text-center px-4 py-3">액션</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+      {% for s in deleted_submissions %}
+        <tr class="opacity-60">
+          <td class="px-4 py-3 font-semibold text-gray-500 break-ko line-through">{{ s.vendor_name }}</td>
+          <td class="px-4 py-3 text-right text-gray-400">
+            {{ '{:,}'.format(s.subtotal_excl_vat|int) if s.subtotal_excl_vat else '-' }}
+          </td>
+          <td class="px-4 py-3 text-center">
+            <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">
+              {{ s.extraction_status }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-center">
+            {% if has_role('manager') %}
+            <div class="flex gap-2 justify-center">
+              <form method="POST" action="{{ url_for('submissions.restore', submission_id=s.submission_id) }}">
+                <button type="submit"
+                        class="text-xs text-green-600 hover:text-green-800 border border-green-300 rounded px-2 py-0.5 hover:bg-green-50">
+                  복원
+                </button>
+              </form>
+              <form method="POST" action="{{ url_for('submissions.delete', submission_id=s.submission_id) }}"
+                    onsubmit="return confirm('영구 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.');">
+                <button type="submit"
+                        class="text-xs text-gray-400 hover:text-red-600 border border-gray-200 rounded px-2 py-0.5 hover:bg-red-50">
+                  완전 삭제
+                </button>
+              </form>
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,164 @@
+"""
+업로드 파일 처리 파이프라인 (새 스키마용).
+
+흐름:
+  1. 파일 형식 감지
+  2. 파서로 텍스트 추출
+  3. LLM으로 구조화 JSON 추출
+  4. DB에 submission_items 저장
+  5. submission 상태 업데이트
+
+submission_id는 이미 생성된 상태로 전달받음
+(파일 업로드 즉시 DB 레코드 생성 → 처리 중 상태 추적 가능)
+"""
+import json
+import shutil
+import sys
+from pathlib import Path
+from datetime import datetime
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import UPLOAD_DIR, EXTRACT_DIR, ALLOWED_EXTENSIONS
+from db.queries import update_submission, insert_items_bulk, delete_submission_items
+from parsers.parse_xlsx import parse_xlsx
+from parsers.parse_pdf  import parse_pdf
+from parsers.parse_docx import parse_docx
+from extractors.llm_extractor import extract_with_validation, is_api_available
+
+
+PARSERS = {
+    ".xlsx": parse_xlsx,
+    ".pdf":  parse_pdf,
+    ".docx": parse_docx,
+}
+
+
+class PipelineError(Exception):
+    pass
+
+
+def save_upload(tmp_path: str, original_filename: str) -> Path:
+    """임시 파일을 uploads/에 영구 저장 (타임스탬프로 중복 방지)"""
+    suffix = Path(original_filename).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        raise PipelineError(f"지원하지 않는 형식: {suffix}")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = Path(original_filename).stem
+    dest = UPLOAD_DIR / f"{stem}_{ts}{suffix}"
+    shutil.copy2(tmp_path, dest)
+    return dest
+
+
+def parse_file(file_path: Path) -> tuple[str, str]:
+    """파일 파싱 → (format, parsed_text)"""
+    suffix = file_path.suffix.lower()
+    parser = PARSERS.get(suffix)
+    if not parser:
+        raise PipelineError(f"파서 없음: {suffix}")
+    return suffix.lstrip("."), parser(str(file_path))
+
+
+def run_extraction(submission_id: str, file_path: Path,
+                   vendor_name: str, api_key: str = "",
+                   provider_id: str = "claude", model: str = None) -> dict:
+    """
+    파일 처리 전체 실행.
+
+    Args:
+        submission_id: DB submission ID
+        file_path:     저장된 파일 경로
+        vendor_name:   업체명
+        api_key:       사용자 API 키
+        provider_id:   LLM provider ('claude' | 'gpt' | ...)
+        model:         모델 지정 (None이면 provider 기본값)
+    """
+    try:
+        update_submission(submission_id, extraction_status="processing")
+
+        fmt, parsed_text = parse_file(file_path)
+
+        if not is_api_available(api_key):
+            raise PipelineError(
+                "API 키가 설정되지 않았습니다. "
+                "프로필(⚙ 내 프로필)에서 API 키를 입력하세요."
+            )
+
+        extraction = extract_with_validation(
+            parsed_text, vendor_name=vendor_name,
+            api_key=api_key, provider_id=provider_id, model=model,
+        )
+
+        # 추출 JSON 저장
+        ext_path = EXTRACT_DIR / f"{submission_id}.json"
+        ext_path.write_text(json.dumps(extraction, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+
+        # ── USD 항목 사후처리 ──────────────────────────────────────
+        # unit_price_currency_in_source='USD'이고 amount(KRW)가 있는 항목에서
+        # 환율 도출 후 unit_price를 원화로 변환.
+        items = extraction.get("items", [])
+        fx_rate_derived = None
+        for it in items:
+            currency_in_src = it.get("unit_price_currency_in_source", "")
+            if currency_in_src not in ("USD", "$"):
+                continue
+            up   = it.get("unit_price")
+            qty  = it.get("quantity")
+            amt  = it.get("amount")
+            if up and qty and amt and up > 0:
+                candidate = amt / (up * qty)
+                # 합리적 환율 범위 (500 ~ 2000)
+                if 500 <= candidate <= 2000:
+                    fx_rate_derived = round(candidate)
+                    break
+
+        if fx_rate_derived:
+            for it in items:
+                if it.get("unit_price_currency_in_source") in ("USD", "$"):
+                    up = it.get("unit_price")
+                    if up is not None:
+                        it["unit_price_orig"] = up
+                        it["unit_price"] = round(up * fx_rate_derived)
+
+        # ── DB 저장 (기존 아이템 먼저 삭제 후 재삽입) ───────────
+        delete_submission_items(submission_id)
+        insert_items_bulk(submission_id, items)
+
+        n_items = sum(1 for it in items if not it.get("is_category_header"))
+
+        has_usd = bool(fx_rate_derived) or extraction.get("currency") == "USD"
+
+        # submission 메타 업데이트 (이전 오류 메시지도 초기화)
+        update_submission(
+            submission_id,
+            extraction_status="done",
+            extraction_error=None,
+            currency=extraction.get("currency", "KRW"),
+            currency_unit=extraction.get("currency_unit", "원"),
+            subtotal_excl_vat=extraction.get("amount_summary", {}).get("subtotal_excl_vat"),
+            vat=extraction.get("amount_summary", {}).get("vat"),
+            grand_total=extraction.get("amount_summary", {}).get("grand_total"),
+            has_usd_items=1 if has_usd else 0,
+            fx_rate_used=fx_rate_derived,
+        )
+
+        warnings = extraction.get("validation", {}).get("warnings", [])
+        return {
+            "status": "success",
+            "n_items": n_items,
+            "subtotal": extraction.get("amount_summary", {}).get("subtotal_excl_vat"),
+            "warnings": warnings,
+        }
+
+    except PipelineError as e:
+        update_submission(submission_id,
+                          extraction_status="failed",
+                          extraction_error=str(e))
+        raise
+
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        update_submission(submission_id,
+                          extraction_status="failed",
+                          extraction_error=msg)
+        raise PipelineError(msg)

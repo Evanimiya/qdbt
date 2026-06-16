@@ -1,0 +1,18 @@
+# 맥 시스템 파일
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 데이터베이스 (실데이터 제외)
+data/*.db
+data/*.sqlite
+
+# 환경/비밀
+.env
+
+# 압축파일
+*.zip
