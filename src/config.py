@@ -27,5 +27,5 @@ ALLOWED_EXTENSIONS = {".xlsx", ".pdf", ".docx"}
 ROLES = ["admin", "manager", "viewer"]
 
 # 버전
-VERSION = "0.7.3-test"
+VERSION = "0.8.6-test"
 STATUS  = "test"

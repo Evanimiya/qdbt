@@ -213,6 +213,16 @@ def list_deleted_submissions(bid_id):
 def reset_submission(submission_id: str):
     """추출 데이터만 초기화 — 제출서 레코드(파일 포함)는 유지"""
     with get_conn() as c:
+        rows = c.execute(
+            "SELECT item_id FROM submission_items WHERE submission_id = ?",
+            (submission_id,)
+        ).fetchall()
+        item_ids = [r["item_id"] for r in rows]
+        if item_ids:
+            ph = ",".join("?" * len(item_ids))
+            c.execute(f"DELETE FROM price_history           WHERE item_id         IN ({ph})", item_ids)
+            c.execute(f"DELETE FROM catalog_suggestions     WHERE item_id         IN ({ph})", item_ids)
+            c.execute(f"DELETE FROM catalog_cluster_members WHERE catalog_item_id IN ({ph})", item_ids)
         c.execute("DELETE FROM submission_items WHERE submission_id = ?", (submission_id,))
         c.execute("""
             UPDATE submissions SET
@@ -252,6 +262,14 @@ def delete_submission_items(submission_id: str):
         c.execute("DELETE FROM submission_items WHERE submission_id = ?", (submission_id,))
 
 
+def _strip_indent_prefix(s: str) -> str:
+    """'[indent=N]' 접두사 제거 (LLM이 가끔 삽입하는 내부 태그)"""
+    import re
+    if s and s.startswith("[indent="):
+        return re.sub(r"^\[indent=\d+\]\s*", "", s)
+    return s
+
+
 def insert_items_bulk(submission_id, items: list[dict]):
     """추출된 아이템 일괄 삽입"""
     with get_conn() as c:
@@ -270,7 +288,8 @@ def insert_items_bulk(submission_id, items: list[dict]):
                 1 if it.get("is_category_header") else 0,
                 it.get("category"),
                 it.get("path") or it.get("parent_path", ""),
-                it.get("name_raw"), it.get("name_normalized"),
+                _strip_indent_prefix(it.get("name_raw") or ""),
+                it.get("name_normalized"),
                 it.get("spec"),
                 it.get("quantity"), it.get("unit"),
                 it.get("unit_price"), it.get("unit_price_orig"),
@@ -330,7 +349,8 @@ def compare_bid_submissions(bid_id):
     """
     with get_conn() as c:
         vendors_rows = c.execute("""
-            SELECT submission_id, vendor_name, subtotal_excl_vat
+            SELECT submission_id, vendor_name, subtotal_excl_vat,
+                   has_usd_items, fx_rate_used
             FROM submissions
             WHERE bid_id = ? AND extraction_status = 'done'
             ORDER BY subtotal_excl_vat NULLS LAST
@@ -340,8 +360,10 @@ def compare_bid_submissions(bid_id):
             return {"vendors": [], "categories": {}, "subtotals": {},
                     "clusters": []}
 
-        vendors = [r["vendor_name"] for r in vendors_rows]
+        vendors   = [r["vendor_name"] for r in vendors_rows]
         subtotals = {r["vendor_name"]: r["subtotal_excl_vat"] for r in vendors_rows}
+        fx_rates  = {r["vendor_name"]: r["fx_rate_used"]
+                     for r in vendors_rows if r["fx_rate_used"]}
 
         all_items = c.execute("""
             SELECT i.*, s.vendor_name
@@ -387,6 +409,8 @@ def compare_bid_submissions(bid_id):
                         "unit":            it["unit"],
                         "quantity":        it["quantity"],
                         "unit_price":      it["unit_price"],
+                        "unit_price_orig":     it["unit_price_orig"],
+                        "unit_price_currency": it["unit_price_currency"] or "KRW",
                         "amount":          it["amount"],
                         "category":        it["category"],
                     })
@@ -394,37 +418,65 @@ def compare_bid_submissions(bid_id):
             if not cluster_items:
                 continue
 
-            # 업체별 단가/품목명 맵 (안 A 렌더링용)
-            vendor_map = {}  # vendor_name → {name_raw, unit_price, amount}
+            # 업체(vendor) 기준으로 압축 → 한 클러스터 기본 1행, 업체가 여러 품목이면 추가 행
+            vendor_items = {}   # vendor → [cell, cell, ...]
             for ci in cluster_items:
-                vendor_map[ci["vendor_name"]] = {
-                    "name_raw":   ci["name_raw"],
-                    "unit_price": ci["unit_price"],
-                    "amount":     ci["amount"],
+                cell = {
+                    "item_id":             ci["item_id"],
+                    "name_raw":            ci["name_raw"],
+                    "name_normalized":     ci["name_normalized"],
+                    "unit_price":          ci["unit_price"],
+                    "unit_price_orig":     ci["unit_price_orig"],
+                    "unit_price_currency": ci["unit_price_currency"] or "KRW",
+                    "amount":              ci["amount"],
                 }
+                vendor_items.setdefault(ci["vendor_name"], []).append(cell)
 
-            # 최저/최고가 업체
-            priced = [(ci["vendor_name"], ci["unit_price"])
-                      for ci in cluster_items if ci["unit_price"]]
+            max_rows = max((len(v) for v in vendor_items.values()), default=1)
+            rows = []
+            for i in range(max_rows):
+                cells = {}
+                for vendor, items_list in vendor_items.items():
+                    if i < len(items_list):
+                        cells[vendor] = items_list[i]
+                rows.append({"cells": cells, "is_extra": i > 0})
+
+            # 클러스터 전체 최저/최고 (소계용)
+            all_priced = [(ci["vendor_name"], ci["unit_price"])
+                          for ci in cluster_items if ci["unit_price"]]
             min_vendor, min_price = (
-                min(priced, key=lambda x: x[1]) if priced else (None, None)
+                min(all_priced, key=lambda x: x[1]) if all_priced else (None, None)
             )
             max_vendor, max_price = (
-                max(priced, key=lambda x: x[1]) if len(priced) > 1 else (None, None)
+                max(all_priced, key=lambda x: x[1]) if len(all_priced) > 1 else (None, None)
             )
+
+            # 클러스터 카테고리 — 멤버 다수결
+            from collections import Counter
+            cat_cnt = Counter(ci["category"] for ci in cluster_items if ci["category"])
+            cl_cat  = cat_cnt.most_common(1)[0][0] if cat_cnt else "기타"
 
             clusters_data.append({
                 "cluster_id":          cl["cluster_id"],
                 "representative_name": cl["representative_name"],
                 "status":              cl["status"],
+                "cat":                 cl_cat,       # 카테고리 (정렬/배지용)
                 "members":             cluster_items,
-                "vendor_map":          vendor_map,   # 업체별 단가/품목명
+                "rows":                rows,
                 "min_vendor":          min_vendor,
                 "min_price":           min_price,
                 "max_vendor":          max_vendor,
                 "max_price":           max_price,
                 "vendors":             vendors,
             })
+
+        # 카테고리 순서 정렬 (자재→인건비→출장비→영업이익→관리비→기타)
+        # + 카테고리 내에서 representative_name A→Z
+        _cat_rank = {"자재":0,"인건비":1,"출장비":2,"영업이익":3,"관리비":4}
+        clusters_data.sort(key=lambda c: (
+            _cat_rank.get(c["cat"], 9),
+            (c["representative_name"] or "").lower()
+        ))
 
         # 카테고리별 피벗 (클러스터 미포함 항목만)
         cat_order = ["자재", "인건비", "출장비", "영업이익", "관리비"]
@@ -443,19 +495,21 @@ def compare_bid_submissions(bid_id):
                 categories[cat] = {}
             if name_key not in categories[cat]:
                 categories[cat][name_key] = {
-                    "name": name_key,
-                    "spec": it["spec"],
-                    "unit": it["unit"],
-                    "path": it["path"],
-                    "prices": {},
-                    "quantities": {},
-                    "amounts": {},
+                    "name":      name_key,
+                    "spec":      it["spec"],
+                    "unit":      it["unit"],
+                    "path":      it["path"],
+                    "prices":    {},
+                    "quantities":{},
+                    "amounts":   {},
+                    "item_ids":  {},  # vendor → item_id (셀 선택용)
                 }
             row = categories[cat][name_key]
             row["prices"][vendor]     = it["unit_price"]
             row["quantities"][vendor] = it["quantity"]
             row["amounts"][vendor]    = it["amount"]
-            if cat in cat_totals[vendor]:
+            row["item_ids"][vendor]   = it["item_id"]
+            if vendor in cat_totals and cat in cat_totals[vendor]:
                 cat_totals[vendor][cat] += (it["amount"] or 0)
 
         result_cats = {}
@@ -467,12 +521,85 @@ def compare_bid_submissions(bid_id):
             if cat not in cat_order and items_dict:
                 result_cats[cat] = list(items_dict.values())
 
+        # ── 과거 가격 벤치마크 조회 ───────────────────
+        # 현재 입찰의 submission_items에 catalog_item_id가 연결된 것들에 대해
+        # 과거 price_history(이전 입찰)의 평균/최저/최고 계산
+        benchmarks = {}  # catalog_item_id → {avg, min_p, max_p, count, prev_bid_count}
+        try:
+            # 현재 입찰에 속한 submission_ids
+            current_sids = tuple(r["submission_id"] for r in vendors_rows)
+            if current_sids:
+                ph_rows = c.execute(f"""
+                    SELECT ph.catalog_item_id,
+                           AVG(ph.unit_price)  as avg_price,
+                           MIN(ph.unit_price)  as min_price,
+                           MAX(ph.unit_price)  as max_price,
+                           COUNT(*)            as total_count,
+                           COUNT(DISTINCT b.bid_id) as bid_count
+                    FROM price_history ph
+                    JOIN submissions s ON ph.submission_id = s.submission_id
+                    JOIN bids b ON s.bid_id = b.bid_id
+                    WHERE ph.catalog_item_id IS NOT NULL
+                      AND ph.unit_price > 0
+                      AND ph.submission_id NOT IN ({','.join('?'*len(current_sids))})
+                    GROUP BY ph.catalog_item_id
+                    HAVING total_count >= 1
+                """, current_sids).fetchall()
+                for row in ph_rows:
+                    benchmarks[row["catalog_item_id"]] = {
+                        "avg":       row["avg_price"],
+                        "min_p":     row["min_price"],
+                        "max_p":     row["max_price"],
+                        "count":     row["total_count"],
+                        "bid_count": row["bid_count"],
+                    }
+        except Exception:
+            pass  # 벤치마크 실패해도 비교 페이지는 정상 표시
+
+        # 각 미분류 row에 benchmark 주입
+        for cat_rows_list in result_cats.values():
+            for row in cat_rows_list:
+                # 해당 row의 item_id들에 연결된 catalog_item_id 조회
+                row_item_ids = list(row["item_ids"].values())
+                if not row_item_ids:
+                    continue
+                placeholders = ','.join('?' * len(row_item_ids))
+                cat_links = c.execute(f"""
+                    SELECT DISTINCT catalog_item_id FROM submission_items
+                    WHERE item_id IN ({placeholders})
+                      AND catalog_item_id IS NOT NULL
+                      AND match_status = 'confirmed'
+                """, row_item_ids).fetchall()
+                for link in cat_links:
+                    cid_key = link["catalog_item_id"]
+                    if cid_key in benchmarks:
+                        row["benchmark"] = benchmarks[cid_key]
+                        break
+
+        # 클러스터에도 benchmark 주입
+        for cl in clusters_data:
+            # 클러스터의 catalog_item_id (확정된 경우)
+            cl_row = c.execute("""
+                SELECT representative_item_id, status FROM catalog_clusters
+                WHERE cluster_id = ?
+            """, (cl["cluster_id"],)).fetchone()
+            if cl_row and cl_row["status"] == "accepted":
+                # representative_item_id가 catalog_items의 ID일 수 있음
+                cat_item = c.execute("""
+                    SELECT catalog_item_id FROM catalog_items
+                    WHERE catalog_item_id = ?
+                """, (cl_row["representative_item_id"],)).fetchone()
+                if cat_item and cat_item["catalog_item_id"] in benchmarks:
+                    cl["benchmark"] = benchmarks[cat_item["catalog_item_id"]]
+
         return {
             "vendors":         vendors,
             "categories":      result_cats,
             "subtotals":       subtotals,
             "category_totals": cat_totals,
             "clusters":        clusters_data,
+            "fx_rates":        fx_rates,
+            "benchmarks":      benchmarks,
         }
     with get_conn() as c:
         # 제출된 업체 목록 (완료된 것만)
@@ -532,7 +659,7 @@ def compare_bid_submissions(bid_id):
             row["amounts"][vendor]   = it["amount"]
 
             # 카테고리별 합계
-            if cat in cat_totals[vendor]:
+            if vendor in cat_totals and cat in cat_totals[vendor]:
                 cat_totals[vendor][cat] += (it["amount"] or 0)
 
         # dict → list 변환 (정렬 유지)
