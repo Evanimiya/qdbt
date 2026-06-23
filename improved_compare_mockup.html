@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<style>
+body{font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;font-size:11px;background:#F1F5F9;padding:12px;margin:0;color:#1E293B}
+.wrap{background:white;border:.5px solid #E2E8F0;border-radius:12px;padding:10px;max-width:1150px}
+.topbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.title{font-size:16px;font-weight:600}
+.note{font-size:10px;color:#64748B;background:#EFF6FF;border:.5px solid #BFDBFE;border-radius:7px;padding:6px 10px;margin-bottom:10px;line-height:1.6}
+.btn{font-size:11px;padding:5px 11px;border-radius:7px;cursor:pointer;border:.5px solid #E2E8F0;background:#F8FAFC;color:#475569;white-space:nowrap}
+.btn-blue{background:#2563EB;color:white;border:none;font-weight:600}
+.btn-green{background:#16A34A;color:white;border:none;font-weight:600}
+.btn-red{background:#FEF2F2;color:#DC2626;border:.5px solid #FCA5A5}
+
+/* 액션바 - 스크롤해도 상단 고정 */
+.actionbar{position:sticky;top:0;z-index:60;background:#EFF6FF;border:1px solid #93C5FD;border-radius:8px;padding:7px 12px;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;box-shadow:0 2px 8px rgba(59,130,246,.15)}
+.actionbar .cnt{font-size:11px;font-weight:600;color:#1D4ED8;min-width:90px}
+.actionbar .cnt.empty{color:#94A3B8;font-weight:400}
+.sel{font-size:10px;padding:4px 7px;border-radius:6px;border:.5px solid #93C5FD;background:white;color:#1D4ED8}
+.inp{font-size:10px;padding:4px 8px;border-radius:6px;border:.5px solid #93C5FD;width:110px}
+.act-btn{font-size:10px;padding:4px 11px;border-radius:6px;cursor:pointer;font-weight:600;white-space:nowrap}
+.move{background:#2563EB;color:white;border:none}
+.move:disabled{background:#CBD5E1;cursor:not-allowed}
+.exclude{background:#FEF2F2;color:#DC2626;border:.5px solid #FCA5A5}
+.exclude:disabled{opacity:.4;cursor:not-allowed}
+.cancel{background:white;color:#1D4ED8;border:.5px solid #93C5FD}
+
+table{width:100%;border-collapse:separate;border-spacing:0;font-size:10px}
+/* 헤더도 액션바 아래에 고정 */
+thead th{position:sticky;top:54px;z-index:40;background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;text-align:center;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0}
+th.l{text-align:left}th.r{text-align:right}
+.cathdr td{padding:3px 10px;font-size:9px;font-weight:700;letter-spacing:.05em}
+.cl-cell{vertical-align:middle;padding:7px 8px;width:170px}
+.clname{font-weight:600;font-size:11px;margin-bottom:3px}
+.chips{display:flex;gap:3px;align-items:center;flex-wrap:nowrap;margin-bottom:3px}
+.chip{font-size:8px;padding:1px 4px;border-radius:3px;white-space:nowrap;font-weight:600}
+.chip-cat{background:#FEF9C3;color:#854D0E}
+.chip-detail{background:white;border:.5px solid #CBD5E1;color:#64748B;font-weight:400;cursor:pointer}
+.chip-status{background:#FEF08A;color:#713F12}
+/* 클러스터 선택용 라디오 */
+.cl-pick{display:flex;align-items:center;gap:4px;cursor:pointer;padding:2px 4px;border-radius:4px;margin-bottom:3px}
+.cl-pick:hover{background:#FEF3C7}
+.cl-pick.picked{background:#DBEAFE;outline:1px solid #3B82F6}
+.acts{display:flex;gap:2px;flex-wrap:wrap}
+.act{font-size:9px;padding:1px 5px;border-radius:3px;cursor:pointer;white-space:nowrap}
+.act-ok{border:.5px solid #16A34A;background:#DCFCE7;color:#15803D;font-weight:500}
+.act-hold{border:.5px solid #CA8A04;background:#FEF9C3;color:#A16207}
+.act-no{border:.5px solid #E2E8F0;background:#F8FAFC;color:#64748B}
+.act-del{border:.5px solid #FCA5A5;background:#FEF2F2;color:#DC2626}
+
+td.vendor{padding:5px 7px;text-align:center;vertical-align:middle;cursor:pointer;border:1px solid transparent}
+td.vendor:hover{background:#F1F5F9}
+td.vendor.sel{background:#DBEAFE;outline:2px solid #3B82F6;outline-offset:-2px;border-radius:3px}
+td.vendor .nm{font-size:9px;opacity:.8;margin-bottom:1px;line-height:1.2}
+td.vendor .pr{font-size:10px;font-weight:600}
+.min-bg{background:#DCFCE7}.min-bg .nm,.min-bg .pr{color:#15803D}
+.max-bg{background:#FEF2F2}.max-bg .nm,.max-bg .pr{color:#B91C1C}
+td.vendor.sel .nm,td.vendor.sel .pr{color:#1D4ED8}
+.empty{color:#CBD5E1;cursor:default}
+.empty:hover{background:transparent}
+td.last{text-align:right;padding:5px 8px;border-left:.5px solid #E2E8F0;vertical-align:middle}
+.last .lp{font-weight:600;color:#15803D;font-size:10px}
+.last .lv{font-size:8px;color:#94A3B8}
+.last .pend{font-size:8px;color:#CBD5E1;margin-top:1px}
+.cl-first td{border-top:2px solid #EAB308}
+.cl-last td{border-bottom:2px solid #EAB308}
+.cl-bg{background:#FEFCE8}
+.bar{border-left:3px solid #EAB308}
+.subrow-label{font-size:8px;color:#A16207;background:#FEF3C7;padding:1px 5px;border-radius:3px;display:inline-block;margin-bottom:2px}
+.legend{display:flex;gap:10px;margin-top:8px;font-size:9px;color:#94A3B8;align-items:center;flex-wrap:wrap}
+.sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1E293B;color:white;padding:8px 18px;border-radius:8px;font-size:12px;z-index:99;display:none}
+</style></head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="title">📊 업체별 비교 <span style="font-size:11px;color:#94A3B8">(개선안)</span></div>
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button class="btn btn-blue">🤖 클러스터 실행</button>
+      <button class="btn">🔀 클러스터 관리</button>
+      <button class="btn btn-green">⬇ Excel</button>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>개선 1 — 행 압축</b>: 업체별 품목을 한 줄에. &nbsp; <b>개선 2 — 이동</b>: 액션바·헤더 고정 + 3가지 선택. &nbsp; <b>개선 3 — 환율</b>: USD 견적은 환율 적용해 원화 표기, summary에 💱 배지. &nbsp; <b>개선 4 — 최저/최고</b>: 클러스터 <b>전체에서 최저 🥇·최고 ↑ 각 1개씩만</b> (품목별 아님).
+  </div>
+
+  <!-- 액션바: 항상 표시 -->
+  <div class="actionbar">
+    <span class="cnt empty" id="cnt">선택 안 됨</span>
+    <div style="display:flex;gap:5px;align-items:center">
+      <span style="font-size:9px;color:#64748B">묶음선택:</span>
+      <select class="sel" id="pickSel" onchange="pickFromBar(this)">
+        <option value="">클러스터/행 통째 선택...</option>
+        <optgroup label="클러스터">
+          <option value="cl|All-Flash 스토리지|af-b,af-c,af-d,af-a,af-e">자재 › All-Flash 스토리지 (5)</option>
+          <option value="cl|Backup Storage|bk-b,bk-c1,bk-d,bk-a,bk-c2">자재 › Backup Storage (5)</option>
+          <option value="cl|PM 상주|pm-b,pm-a">인건비 › PM 상주 (2)</option>
+          <option value="cl|Daily Allowance|da-b,da-c">출장비 › Daily Allowance (2)</option>
+        </optgroup>
+        <optgroup label="미분류 행">
+          <option value="row|GPU Server|gpu-c,gpu-d,gpu-a">미분류 › GPU Server (3)</option>
+          <option value="row|Firewall|fw-c,fw-d">미분류 › Firewall (2)</option>
+        </optgroup>
+      </select>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:9px;color:#64748B">→ 이동:</span>
+      <select class="sel" id="target">
+        <option value="">이동 대상 클러스터...</option>
+        <option value="자재 › All-Flash 스토리지">자재 › All-Flash 스토리지</option>
+        <option value="자재 › Backup Storage">자재 › Backup Storage</option>
+        <option value="인건비 › PM 상주">인건비 › PM 상주</option>
+        <option value="new">+ 새 클러스터 만들기</option>
+      </select>
+      <input class="inp" id="newname" placeholder="새 클러스터 이름" style="display:none">
+      <select class="sel" id="newcat" style="display:none">
+        <option value="자재">자재</option><option value="인건비">인건비</option>
+        <option value="출장비">출장비</option><option value="관리비">관리비</option>
+      </select>
+      <button class="act-btn move" id="moveBtn" onclick="doMove()" disabled>이동</button>
+      <button class="act-btn exclude" id="exBtn" onclick="doExclude()" disabled>제외</button>
+      <button class="act-btn cancel" onclick="clearAll()">취소</button>
+    </div>
+  </div>
+
+  <!-- 공급가액 요약 카드 (환율 배지 포함) -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:10px">
+    <div style="border:.5px solid #16A34A;background:#F0FDF4;border-radius:8px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:600;color:#15803D;margin-bottom:3px">B제조 🥇</div>
+      <div style="font-size:12px;font-weight:700;color:#15803D">2,105,680,000</div>
+    </div>
+    <div style="border:.5px solid #E2E8F0;background:white;border-radius:8px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:600;color:#475569;margin-bottom:3px">C공업</div>
+      <div style="font-size:12px;font-weight:700">2,212,740,000</div>
+    </div>
+    <div style="border:.5px solid #E2E8F0;background:white;border-radius:8px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:600;color:#475569;margin-bottom:3px">D엔지니어링</div>
+      <div style="font-size:12px;font-weight:700">2,277,532,000</div>
+      <div style="font-size:9px;color:#2563EB;margin-top:2px">💱 USD 견적 · 1,380원/USD 환산</div>
+    </div>
+    <div style="border:.5px solid #E2E8F0;background:white;border-radius:8px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:600;color:#475569;margin-bottom:3px">A상사</div>
+      <div style="font-size:12px;font-weight:700">2,289,400,000</div>
+    </div>
+    <div style="border:.5px solid #E2E8F0;background:white;border-radius:8px;padding:8px 10px">
+      <div style="font-size:10px;font-weight:600;color:#475569;margin-bottom:3px">E시스템즈</div>
+      <div style="font-size:12px;font-weight:700">2,398,720,000</div>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="width:170px" class="l">클러스터</th>
+      <th>B제조</th><th>C공업</th><th>D엔지니어링</th><th>A상사</th><th>E시스템즈</th>
+      <th class="r">최저 / 과거대비</th>
+    </tr></thead>
+    <tbody>
+
+      <tr class="cathdr" style="background:#FFFBEB"><td colspan="7" style="color:#854D0E">자재</td></tr>
+
+      <!-- 클러스터 1: All-Flash — 5줄→1줄 압축 -->
+      <tr class="cl-first cl-last cl-bg" data-cl="자재 › All-Flash 스토리지">
+        <td class="cl-cell cl-bg bar" style="border-right:1.5px solid #EAB308">
+          <div class="cl-pick" onclick="pickCluster(this,'All-Flash 스토리지',['af-b','af-c','af-d','af-a','af-e'])">
+            <span style="font-size:11px">◉</span>
+            <div>
+              <div class="clname">📦 All-Flash 스토리지</div>
+            </div>
+          </div>
+          <div class="chips">
+            <span class="chip chip-cat">자재</span>
+            <span class="chip chip-detail">🔍 상세</span>
+            <span class="chip chip-status">검토 대기 · 5개</span>
+          </div>
+          <div class="acts">
+            <span class="act act-ok">✅ 확정</span>
+            <span class="act act-hold">⏸ 보류</span>
+            <span class="act act-no">✕ 거부</span>
+            <span class="act act-del">🗑</span>
+          </div>
+        </td>
+        <td class="vendor min-bg" data-id="af-b" onclick="toggleCell(this)">
+          <div class="nm">올플래시 스토리지</div><div class="pr">295,000,000 🥇</div></td>
+        <td class="vendor" data-id="af-c" onclick="toggleCell(this)">
+          <div class="nm">All-Flash Array</div><div class="pr">310,000,000</div></td>
+        <td class="vendor" data-id="af-d" onclick="toggleCell(this)">
+          <div class="nm">All-Flash Storage</div><div class="pr">317,400,000</div>
+          <div style="font-size:7px;color:#2563EB">💱 $230,000 × 1,380</div></td>
+        <td class="vendor" data-id="af-a" onclick="toggleCell(this)">
+          <div class="nm">All-Flash Storage Array</div><div class="pr">320,000,000</div></td>
+        <td class="vendor max-bg" data-id="af-e" onclick="toggleCell(this)">
+          <div class="nm">올플래시 스토리지</div><div class="pr">335,000,000 ↑</div></td>
+        <td class="last"><div class="lp">295,000,000</div><div class="lv">B제조</div><div class="pend">확정 후 표시</div></td>
+      </tr>
+
+      <!-- 클러스터 2: Backup — 한 업체(C공업)가 2개 품목 → 2줄 -->
+      <tr class="cl-first cl-bg" data-cl="자재 › Backup Storage">
+        <td rowspan="2" class="cl-cell cl-bg bar" style="border-right:1.5px solid #EAB308">
+          <div class="cl-pick" onclick="pickCluster(this,'Backup Storage',['bk-b','bk-c1','bk-d','bk-a','bk-c2'])">
+            <span style="font-size:11px">◉</span>
+            <div class="clname">📦 Backup Storage</div>
+          </div>
+          <div class="chips">
+            <span class="chip chip-cat">자재</span>
+            <span class="chip chip-detail">🔍 상세</span>
+            <span class="chip chip-status">검토 대기 · 5개</span>
+          </div>
+          <div class="acts">
+            <span class="act act-ok">✅ 확정</span>
+            <span class="act act-hold">⏸ 보류</span>
+            <span class="act act-no">✕ 거부</span>
+            <span class="act act-del">🗑</span>
+          </div>
+        </td>
+        <td class="vendor" data-id="bk-b" onclick="toggleCell(this)">
+          <div class="nm">백업 스토리지</div><div class="pr">132,000,000</div></td>
+        <td class="vendor" data-id="bk-c1" onclick="toggleCell(this)">
+          <div class="nm">Backup Storage</div><div class="pr">140,000,000</div></td>
+        <td class="vendor min-bg" data-id="bk-d" onclick="toggleCell(this)">
+          <div class="nm">Backup Storage</div><div class="pr">96,600,000 🥇</div>
+          <div style="font-size:7px;color:#2563EB">💱 $70,000 × 1,380</div></td>
+        <td class="vendor max-bg" data-id="bk-a" onclick="toggleCell(this)">
+          <div class="nm">Backup Storage</div><div class="pr">145,000,000 ↑</div></td>
+        <td class="vendor empty">—</td>
+        <td rowspan="2" class="last"><div class="lp">96,600,000</div><div class="lv">D엔지니어링</div><div class="pend">확정 후 표시</div></td>
+      </tr>
+      <!-- 같은 클러스터 추가 행: C공업이 낸 두 번째 품목만 표시 -->
+      <tr class="cl-last cl-bg" data-cl="자재 › Backup Storage">
+        <td class="vendor empty">—</td>
+        <td class="vendor" data-id="bk-c2" onclick="toggleCell(this)">
+          <span class="subrow-label">C공업 추가 품목</span>
+          <div class="nm">백업용 스토리지(2차)</div><div class="pr">128,000,000</div></td>
+        <td class="vendor empty">—</td>
+        <td class="vendor empty">—</td>
+        <td class="vendor empty">—</td>
+      </tr>
+
+      <!-- 미분류 -->
+      <tr class="cathdr" style="background:#F8FAFC"><td colspan="7" style="color:#94A3B8">미분류 항목 &nbsp;<span style="font-weight:400;color:#CBD5E1">(◫ 행 클릭 = 행 통째 선택 · 셀 클릭 = 개별)</span></td></tr>
+
+      <!-- 미분류 행 1: GPU (3개 업체 묶음) -->
+      <tr data-cl="" style="border-left:3px solid #E2E8F0">
+        <td class="cl-cell">
+          <div class="cl-pick" onclick="pickRow(this,'GPU Server',['gpu-c','gpu-d','gpu-a'])">
+            <span style="font-size:11px">◫</span>
+            <div style="font-size:10px;color:#475569">GPU Server <span style="color:#94A3B8">· 3개</span></div>
+          </div>
+        </td>
+        <td class="vendor empty">—</td>
+        <td class="vendor min-bg" data-id="gpu-c" onclick="toggleCell(this)">
+          <div class="nm">GPU Server</div><div class="pr">92,500,000 🥇</div></td>
+        <td class="vendor" data-id="gpu-d" onclick="toggleCell(this)">
+          <div class="nm">GPU Server</div><div class="pr">95,220,000</div>
+          <div style="font-size:7px;color:#2563EB">💱 $69,000 × 1,380</div></td>
+        <td class="vendor max-bg" data-id="gpu-a" onclick="toggleCell(this)">
+          <div class="nm">GPU Server</div><div class="pr">95,000,000 ↑</div></td>
+        <td class="vendor empty">—</td>
+        <td class="last"><div class="lp">92,500,000</div><div class="lv">C공업</div></td>
+      </tr>
+
+      <!-- 미분류 행 2: 방화벽 (2개 업체 묶음) -->
+      <tr data-cl="" style="border-left:3px solid #E2E8F0">
+        <td class="cl-cell">
+          <div class="cl-pick" onclick="pickRow(this,'Firewall',['fw-c','fw-d'])">
+            <span style="font-size:11px">◫</span>
+            <div style="font-size:10px;color:#475569">Firewall <span style="color:#94A3B8">· 2개</span></div>
+          </div>
+        </td>
+        <td class="vendor empty">—</td>
+        <td class="vendor min-bg" data-id="fw-c" onclick="toggleCell(this)">
+          <div class="nm">Firewall</div><div class="pr">82,500,000 🥇</div></td>
+        <td class="vendor max-bg" data-id="fw-d" onclick="toggleCell(this)">
+          <div class="nm">Firewall</div><div class="pr">85,560,000 ↑</div>
+          <div style="font-size:7px;color:#2563EB">💱 $62,000 × 1,380</div></td>
+        <td class="vendor empty">—</td>
+        <td class="vendor empty">—</td>
+        <td class="last"><div class="lp">82,500,000</div><div class="lv">C공업</div></td>
+      </tr>
+
+      <!-- 카테고리: 인건비 (스크롤 확인용) -->
+      <tr class="cathdr" style="background:#FAF5FF"><td colspan="7" style="color:#7E22CE">인건비</td></tr>
+      <tr class="cl-first cl-last cl-bg" data-cl="인건비 › PM 상주">
+        <td class="cl-cell cl-bg bar" style="border-right:1.5px solid #EAB308">
+          <div class="cl-pick" onclick="pickCluster(this,'PM 상주',['pm-b','pm-a'])">
+            <span style="font-size:11px">◉</span><div class="clname">📦 PM 상주</div>
+          </div>
+          <div class="chips">
+            <span class="chip" style="background:#F3E8FF;color:#7E22CE">인건비</span>
+            <span class="chip chip-detail">🔍 상세</span>
+            <span class="chip chip-status">검토 대기 · 2개</span>
+          </div>
+          <div class="acts">
+            <span class="act act-ok">✅ 확정</span><span class="act act-hold">⏸ 보류</span>
+            <span class="act act-no">✕ 거부</span><span class="act act-del">🗑</span>
+          </div>
+        </td>
+        <td class="vendor min-bg" data-id="pm-b" onclick="toggleCell(this)">
+          <div class="nm">PM 상주</div><div class="pr">8,500,000 🥇</div></td>
+        <td class="vendor empty">—</td><td class="vendor empty">—</td>
+        <td class="vendor max-bg" data-id="pm-a" onclick="toggleCell(this)">
+          <div class="nm">Project Manager</div><div class="pr">9,000,000 ↑</div></td>
+        <td class="vendor empty">—</td>
+        <td class="last"><div class="lp">8,500,000</div><div class="lv">B제조</div><div class="pend">확정 후 표시</div></td>
+      </tr>
+
+      <!-- 카테고리: 출장비 -->
+      <tr class="cathdr" style="background:#EFF6FF"><td colspan="7" style="color:#1D4ED8">출장비</td></tr>
+      <tr class="cl-first cl-last cl-bg" data-cl="출장비 › Daily Allowance">
+        <td class="cl-cell cl-bg bar" style="border-right:1.5px solid #EAB308">
+          <div class="cl-pick" onclick="pickCluster(this,'Daily Allowance',['da-b','da-c'])">
+            <span style="font-size:11px">◉</span><div class="clname">📦 Daily Allowance</div>
+          </div>
+          <div class="chips">
+            <span class="chip" style="background:#DBEAFE;color:#1D4ED8">출장비</span>
+            <span class="chip chip-detail">🔍 상세</span>
+            <span class="chip chip-status">검토 대기 · 2개</span>
+          </div>
+          <div class="acts">
+            <span class="act act-ok">✅ 확정</span><span class="act act-hold">⏸ 보류</span>
+            <span class="act act-no">✕ 거부</span><span class="act act-del">🗑</span>
+          </div>
+        </td>
+        <td class="vendor min-bg" data-id="da-b" onclick="toggleCell(this)">
+          <div class="nm">Daily Allowance</div><div class="pr">95,000 🥇</div></td>
+        <td class="vendor max-bg" data-id="da-c" onclick="toggleCell(this)">
+          <div class="nm">일비</div><div class="pr">100,000 ↑</div></td>
+        <td class="vendor empty">—</td><td class="vendor empty">—</td><td class="vendor empty">—</td>
+        <td class="last"><div class="lp">95,000</div><div class="lv">B제조</div><div class="pend">확정 후 표시</div></td>
+      </tr>
+
+    </tbody>
+  </table>
+
+  <div class="legend">
+    <span><span class="sw" style="background:#DCFCE7;border:.5px solid #16A34A"></span> 최저 🥇</span>
+    <span><span class="sw" style="background:#FEF2F2;border:.5px solid #FCA5A5"></span> 최고 ↑</span>
+    <span><span class="sw" style="background:#DBEAFE;border:.5px solid #3B82F6"></span> 선택됨</span>
+    <span style="color:#64748B">| ◉ 클러스터 통째 · ◫ 미분류 행 통째 · 셀 클릭 = 개별</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const sel = new Set();
+let pickedCluster = null;
+
+// 액션바 드롭다운에서 클러스터/행 통째 선택 (스크롤과 무관하게 항상 가능)
+function pickFromBar(s){
+  clearSelOnly();
+  if(!s.value)return;
+  const [type,name,idstr]=s.value.split('|');
+  const ids=idstr.split(',');
+  ids.forEach(id=>{const td=document.querySelector('td.vendor[data-id="'+id+'"]');if(td){sel.add(id);td.classList.add('sel');}});
+  // 해당 클러스터/행의 핸들도 하이라이트
+  refresh();
+}
+function clearSelOnly(){
+  sel.clear();
+  document.querySelectorAll('td.vendor.sel').forEach(e=>e.classList.remove('sel'));
+  document.querySelectorAll('.cl-pick.picked').forEach(e=>e.classList.remove('picked'));
+  pickedCluster=null;
+}
+function refresh(){
+  const c = document.getElementById('cnt');
+  const move = document.getElementById('moveBtn');
+  const ex = document.getElementById('exBtn');
+  const n = sel.size;
+  if(n>0){ c.textContent = n+'개 선택됨'; c.className='cnt'; move.disabled=false; ex.disabled=false; }
+  else { c.textContent='선택 안 됨'; c.className='cnt empty'; move.disabled=true; ex.disabled=true; }
+}
+function toggleCell(td){
+  if(td.classList.contains('empty'))return;
+  const id=td.dataset.id;
+  if(sel.has(id)){sel.delete(id);td.classList.remove('sel');}
+  else{sel.add(id);td.classList.add('sel');}
+  // 셀을 개별 클릭하면 클러스터 통째 선택은 해제
+  if(pickedCluster){document.querySelectorAll('.cl-pick.picked').forEach(e=>e.classList.remove('picked'));pickedCluster=null;}
+  refresh();
+}
+function pickCluster(el,name,ids){
+  const already = el.classList.contains('picked');
+  document.querySelectorAll('.cl-pick.picked').forEach(e=>e.classList.remove('picked'));
+  document.querySelectorAll('td.vendor.sel').forEach(e=>e.classList.remove('sel'));
+  sel.clear();
+  if(already){pickedCluster=null;refresh();return;}
+  el.classList.add('picked');pickedCluster=name;
+  ids.forEach(id=>{
+    const td=document.querySelector('td.vendor[data-id="'+id+'"]');
+    if(td){sel.add(id);td.classList.add('sel');}
+  });
+  refresh();
+}
+// 미분류 행 묶음 선택 (여러 행을 누적 선택 가능)
+function pickRow(el,name,ids){
+  const already = el.classList.contains('picked');
+  // 클러스터 통째 선택과는 배타적
+  document.querySelectorAll('.cl-pick.picked').forEach(e=>{
+    if(e.querySelector('span').textContent==='◉'){e.classList.remove('picked');}
+  });
+  pickedCluster=null;
+  if(already){
+    el.classList.remove('picked');
+    ids.forEach(id=>{sel.delete(id);const td=document.querySelector('td.vendor[data-id="'+id+'"]');if(td)td.classList.remove('sel');});
+  } else {
+    el.classList.add('picked');
+    ids.forEach(id=>{const td=document.querySelector('td.vendor[data-id="'+id+'"]');if(td){sel.add(id);td.classList.add('sel');}});
+  }
+  refresh();
+}
+document.getElementById('target').addEventListener('change',function(){
+  const isNew=this.value==='new';
+  document.getElementById('newname').style.display=isNew?'inline-block':'none';
+  document.getElementById('newcat').style.display=isNew?'inline-block':'none';
+});
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',2200);}
+function doMove(){
+  const t=document.getElementById('target').value;
+  if(!t){toast('이동 대상 클러스터를 선택하세요');return;}
+  const label=t==='new'?(document.getElementById('newname').value||'새 클러스터'):t;
+  toast('✅ '+sel.size+'개 항목 → "'+label+'" 이동');
+  clearAll();
+}
+function doExclude(){toast('✅ '+sel.size+'개 항목을 미분류로 제외');clearAll();}
+function clearAll(){
+  sel.clear();
+  document.querySelectorAll('td.vendor.sel').forEach(e=>e.classList.remove('sel'));
+  document.querySelectorAll('.cl-pick.picked').forEach(e=>e.classList.remove('picked'));
+  pickedCluster=null;
+  const ps=document.getElementById('pickSel');if(ps)ps.value='';
+  document.getElementById('target').value='';
+  document.getElementById('newname').style.display='none';
+  document.getElementById('newcat').style.display='none';
+  refresh();
+}
+refresh();
+</script>
+</body></html>
