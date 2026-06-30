@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% block title %}내 프로필 · QDBT{% endblock %}
+
+{% block content %}
+<div class="max-w-xl">
+  <h1 class="text-xl font-bold text-gray-900 mb-6 break-ko">⚙ 내 프로필</h1>
+
+  <!-- 기본 정보 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-5">
+    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wide mb-3">기본 정보</h2>
+    <div class="space-y-2 text-sm">
+      <div class="flex justify-between">
+        <span class="text-gray-500">이름</span>
+        <span class="font-semibold">{{ user.name }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">이메일</span>
+        <span>{{ user.email }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">부서</span>
+        <span>{{ user.dept or '—' }}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">권한</span>
+        <span class="px-2 py-0.5 rounded-full text-xs
+          {% if user.role=='admin' %}bg-red-100 text-red-700
+          {% elif user.role=='manager' %}bg-blue-100 text-blue-700
+          {% elif user.role=='viewer-detail' %}bg-purple-100 text-purple-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ user.role }}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM 설정 -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wide mb-1">LLM 설정</h2>
+    <p class="text-xs text-gray-500 mb-4 break-ko">
+      파일 업로드 시 자동 추출에 사용됩니다. API 키는 암호화되어 본인만 사용합니다.
+    </p>
+
+    <!-- 현재 상태 -->
+    {% if masked_key %}
+    <div class="flex items-center justify-between bg-green-50 border border-green-200
+                rounded-lg px-4 py-3 mb-5">
+      <div class="text-sm">
+        <div class="text-xs text-green-600 font-semibold mb-0.5">✅ 설정됨</div>
+        <div class="font-semibold text-gray-800">
+          {{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='name') | first | default(llm.provider) }}
+          {% if llm.model %}<span class="text-xs text-gray-500 ml-1">/ {{ llm.model }}</span>{% endif %}
+        </div>
+        <div class="font-mono text-xs text-gray-500 mt-0.5">{{ masked_key }}</div>
+      </div>
+      <form method="POST" action="{{ url_for('profile.delete_api_key') }}"
+            onsubmit="return confirm('API 키를 삭제하시겠습니까?');">
+        <button class="text-xs text-red-600 hover:text-red-800 font-semibold">삭제</button>
+      </form>
+    </div>
+    {% else %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-5">
+      <div class="text-xs text-yellow-700 font-semibold">⚠️ 미설정</div>
+      <div class="text-xs text-yellow-600 mt-0.5 break-ko">API 키를 설정해야 파일 업로드 후 자동 추출이 가능합니다.</div>
+    </div>
+    {% endif %}
+
+    <!-- 설정 폼 -->
+    <form method="POST" action="{{ url_for('profile.save_llm') }}" id="llmForm">
+
+      <!-- Provider 선택 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-2">LLM Provider</label>
+        <div class="grid grid-cols-2 gap-2" id="providerCards">
+          {% for p in providers %}
+          <label class="cursor-pointer">
+            <input type="radio" name="provider" value="{{ p.id }}"
+                   class="sr-only peer"
+                   {% if llm.provider == p.id %}checked{% endif %}
+                   onchange="onProviderChange('{{ p.id }}', '{{ p.key_prefix }}', {{ p.models | tojson }})">
+            <div class="border-2 rounded-lg p-3 text-sm text-center transition-all
+                        peer-checked:border-blue-600 peer-checked:bg-blue-50
+                        border-gray-200 hover:border-blue-300">
+              <div class="font-semibold text-gray-900">{{ p.name }}</div>
+              <div class="text-xs text-gray-500 mt-0.5">{{ p.key_prefix }}...</div>
+            </div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- 모델 선택 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          모델 <span class="text-xs font-normal text-gray-400">(선택 — 비워두면 기본값 사용)</span>
+        </label>
+        <div class="flex gap-2">
+          <select name="model_select" id="modelSelect"
+                  onchange="onModelSelectChange()"
+                  class="flex-1 px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                         focus:ring-2 focus:ring-blue-500">
+            <option value="">자동 (기본값)</option>
+            {% for p in providers %}
+              {% if llm.provider == p.id %}
+                {% for model_id, model_name in p.models %}
+                <option value="{{ model_id }}"
+                        {% if llm.model == model_id %}selected{% endif %}>
+                  {{ model_name }}
+                </option>
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+            {% if llm.model and llm.model not in known_model_ids %}
+            <option value="{{ llm.model }}" selected>{{ llm.model }} (현재)</option>
+            {% endif %}
+            <option value="__custom__"
+                    {% if llm.model and llm.model not in known_model_ids %}{% endif %}>
+              직접 입력 (게이트웨이/사내 모델명)
+            </option>
+          </select>
+          <button type="button" id="fetchModelsBtn" onclick="fetchModels()"
+                  class="px-3 py-2.5 bg-blue-50 text-blue-700 border border-blue-200
+                         rounded-lg text-sm font-medium hover:bg-blue-100 whitespace-nowrap">
+            🔄 모델 불러오기
+          </button>
+        </div>
+        <!-- 직접 입력란 -->
+        <input type="text" name="model_custom" id="modelCustom"
+               value="{% if llm.model and llm.model not in known_model_ids %}{{ llm.model }}{% endif %}"
+               placeholder="예: gpt-5.1-2025-11-13-sko"
+               class="w-full mt-2 px-3 py-2.5 border border-gray-300 rounded-lg text-sm
+                      focus:ring-2 focus:ring-blue-500
+                      {% if not (llm.model and llm.model not in known_model_ids) %}hidden{% endif %}">
+        <p id="fetchModelsMsg" class="text-xs text-gray-400 mt-1">
+          VDI/사내 게이트웨이는 base_url과 API 키 입력 후 '모델 불러오기'를 누르면
+          사용 가능한 모델이 자동으로 채워집니다.
+        </p>
+      </div>
+      <script>
+        function onModelSelectChange() {
+          var sel = document.getElementById('modelSelect');
+          var cst = document.getElementById('modelCustom');
+          if (sel.value === '__custom__') {
+            cst.classList.remove('hidden');
+            cst.focus();
+          } else {
+            cst.classList.add('hidden');
+          }
+        }
+
+        async function fetchModels() {
+          var btn = document.getElementById('fetchModelsBtn');
+          var msg = document.getElementById('fetchModelsMsg');
+          var sel = document.getElementById('modelSelect');
+          // 화면의 base_url / api_key / verify_ssl 수집
+          var baseUrl = (document.querySelector('[name=base_url]') || {}).value || '';
+          var apiKey  = (document.querySelector('[name=api_key]')  || {}).value || '';
+          var vs = document.querySelector('[name=verify_ssl]');
+          var verifySsl = vs ? (vs.checked ? '1' : '0') : '1';
+
+          btn.disabled = true;
+          msg.textContent = '모델을 불러오는 중...';
+          msg.className = 'text-xs text-blue-500 mt-1';
+
+          try {
+            var body = new URLSearchParams();
+            body.set('base_url', baseUrl);
+            body.set('api_key', apiKey);
+            body.set('verify_ssl', verifySsl);
+            // 선택된 provider도 전송 (base_url 없는 OpenAI 직접 호출 판정용)
+            var provEl = document.querySelector('[name=provider]:checked');
+            if (provEl) body.set('provider', provEl.value);
+            var token = new URLSearchParams(location.search).get('_t');
+            var url = '{{ url_for("profile.fetch_models") }}' + (token ? ('?_t=' + token) : '');
+
+            var resp = await fetch(url, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: body.toString()
+            });
+            var data = await resp.json();
+
+            if (!data.ok) {
+              msg.textContent = '❌ ' + (data.error || '불러오기 실패');
+              msg.className = 'text-xs text-red-500 mt-1';
+              return;
+            }
+
+            // 드롭다운 갱신: 기본 옵션 + 게이트웨이 모델들
+            var cur = sel.value;
+            sel.innerHTML = '<option value="">자동 (기본값)</option>';
+            data.models.forEach(function(mid) {
+              var opt = document.createElement('option');
+              opt.value = mid;
+              opt.textContent = mid;
+              sel.appendChild(opt);
+            });
+            var customOpt = document.createElement('option');
+            customOpt.value = '__custom__';
+            customOpt.textContent = '직접 입력 (게이트웨이/사내 모델명)';
+            sel.appendChild(customOpt);
+
+            // 모델이 하나면 자동 선택 (VDI: API당 1모델)
+            if (data.models.length === 1) {
+              sel.value = data.models[0];
+              msg.textContent = '✅ 모델 자동 선택됨: ' + data.models[0];
+            } else {
+              // 기존 선택값이 목록에 있으면 유지
+              if (data.models.indexOf(cur) >= 0) sel.value = cur;
+              msg.textContent = '✅ ' + data.models.length + '개 모델을 불러왔습니다. 선택하세요.';
+            }
+            msg.className = 'text-xs text-green-600 mt-1';
+            onModelSelectChange();
+          } catch (e) {
+            msg.textContent = '❌ 요청 실패: ' + e;
+            msg.className = 'text-xs text-red-500 mt-1';
+          } finally {
+            btn.disabled = false;
+          }
+        }
+      </script>
+
+      <!-- API 키 -->
+      <div class="mb-5">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          API 키
+          {% if masked_key %}<span class="text-xs font-normal text-gray-400">(변경 시에만 입력)</span>{% endif %}
+        </label>
+        <textarea name="api_key" id="apiKeyInput" rows="2"
+                  placeholder="{{ providers | selectattr('id', 'eq', llm.provider) | map(attribute='key_prefix') | first | default('sk-') }}..."
+                  autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                  class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                         focus:ring-2 focus:ring-blue-500 font-mono text-xs resize-none"></textarea>
+        <div class="flex gap-2 mt-2">
+          <button type="button" onclick="pasteFromClipboard()"
+                  class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                         px-3 py-1.5 rounded-lg transition-colors">📋 클립보드에서 붙여넣기</button>
+          <button type="button" onclick="clearKey()"
+                  class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-500
+                         px-3 py-1.5 rounded-lg transition-colors">지우기</button>
+          <span id="pasteMsg" class="text-xs self-center"></span>
+        </div>
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          키는 입력 즉시 암호화 저장됩니다.
+          <a href="https://console.anthropic.com/settings/keys" target="_blank"
+             id="keyLink" class="text-blue-600 hover:underline">키 발급 →</a>
+        </p>
+      </div>
+
+      <!-- 커스텀 Base URL (VDI/프록시 환경) -->
+      <div class="mb-5">
+        <label class="block text-sm font-semibold text-gray-700 mb-1">
+          API Base URL
+          <span class="text-xs font-normal text-gray-400">(선택 — VDI/사내망 환경에서만 입력)</span>
+        </label>
+        <input type="text" name="base_url"
+               value="{{ llm.base_url or '' }}"
+               placeholder="예: https://stgadxp.adotbiz.ai/api/v1/gateway"
+               autocomplete="off" spellcheck="false"
+               class="w-full px-3 py-2.5 border border-gray-300 rounded-lg
+                      focus:ring-2 focus:ring-blue-500 font-mono text-xs">
+        <p class="text-xs text-gray-400 mt-1 break-ko">
+          입력 시 API 키 형식 검증이 생략됩니다. 비워두면 공식 엔드포인트를 사용합니다.
+        </p>
+      </div>
+
+      <!-- SSL 검증 비활성화 (폐쇄망 사내 인증서 환경) -->
+      <div class="mb-5">
+        <label class="flex items-start gap-2 cursor-pointer select-none">
+          <input type="hidden" name="verify_ssl" value="0">
+          <input type="checkbox" name="verify_ssl" value="1"
+                 {% if llm.get('verify_ssl', True) %}checked{% endif %}
+                 class="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600
+                        focus:ring-blue-500 cursor-pointer">
+          <span class="text-sm text-gray-700">
+            SSL 인증서 검증
+            <span class="text-xs font-normal text-gray-400">
+              (폐쇄망 사내 CA 인증서 사용 시 체크 해제)
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <button type="submit"
+              class="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold
+                     py-2.5 rounded-lg transition-colors text-sm">
+        저장
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Provider별 모델 목록 (서버에서 전달)
+const PROVIDERS = {{ providers | tojson }};
+const KEY_LINKS = {
+  'claude': 'https://console.anthropic.com/settings/keys',
+  'gpt':    'https://platform.openai.com/api-keys',
+};
+
+async function pasteFromClipboard() {
+  const inp = document.getElementById('apiKeyInput');
+  const msg = document.getElementById('pasteMsg');
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text && text.trim()) {
+      inp.value = text.trim();
+      msg.textContent = '✅ 붙여넣기 완료';
+      msg.className = 'text-xs self-center text-green-600';
+      inp.focus();
+    } else {
+      msg.textContent = '클립보드가 비어 있습니다';
+      msg.className = 'text-xs self-center text-yellow-600';
+    }
+  } catch (e) {
+    msg.textContent = '⚠️ 브라우저가 클립보드 접근을 막았습니다 — 새 탭에서 열거나 직접 입력하세요';
+    msg.className = 'text-xs self-center text-red-600';
+  }
+}
+
+function clearKey() {
+  const inp = document.getElementById('apiKeyInput');
+  inp.value = '';
+  inp.focus();
+  document.getElementById('pasteMsg').textContent = '';
+}
+
+function onProviderChange(providerId, keyPrefix, models) {
+  // 모델 선택 드롭다운 업데이트
+  const sel = document.getElementById('modelSelect');
+  sel.innerHTML = '<option value="">자동 (기본값)</option>';
+  models.forEach(([id, name]) => {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+
+  // API 키 placeholder 업데이트
+  document.getElementById('apiKeyInput').placeholder =
+    `${providerId.toUpperCase()} API 키 (${keyPrefix}...)`;
+
+  // 키 발급 링크 업데이트
+  const link = document.getElementById('keyLink');
+  if (KEY_LINKS[providerId]) link.href = KEY_LINKS[providerId];
+}
+</script>
+{% endblock %}

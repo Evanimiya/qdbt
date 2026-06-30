@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+{% block title %}열 매핑 추출 · {{ sub.vendor_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="mb-3">
+    <a href="{{ url_for('submissions.detail', submission_id=sub.submission_id) }}"
+       class="text-sm text-blue-600 hover:underline break-ko">← 제출서 상세로</a>
+  </div>
+
+  <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+    <div>
+      <h1 class="text-xl font-bold text-gray-900 break-ko">{{ sub.vendor_name }} — 열 매핑 추출</h1>
+      <p class="text-sm text-gray-500 mt-0.5 break-ko">
+        엑셀을 그대로 보며 ① 열 역할 지정 → ② 분류 클릭으로 비교 단위 선택 → 추출
+      </p>
+    </div>
+    {% if sheets|length > 1 %}
+    <div class="flex items-center gap-2">
+      <label class="text-xs text-gray-600 break-ko">시트:</label>
+      <select onchange="location.href='?sheet='+encodeURIComponent(this.value)"
+              class="text-sm border border-gray-300 rounded-lg px-2 py-1.5">
+        {% for s in sheets %}
+        <option value="{{ s }}" {% if s == current_sheet %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- 모드 탭 + 컨트롤 -->
+  <div class="flex items-center gap-2 mb-3 flex-wrap">
+    <div class="inline-flex bg-gray-200 rounded-lg p-0.5">
+      <button id="tabMap" onclick="setMode('map')"
+              class="text-sm px-3 py-1.5 rounded-md font-semibold">① 열 역할 지정</button>
+      <button id="tabSel" onclick="setMode('select')"
+              class="text-sm px-3 py-1.5 rounded-md font-semibold">② 비교 단위 선택</button>
+    </div>
+    <div id="mapControls" class="flex items-center gap-2">
+      <label class="text-xs text-gray-600 break-ko">헤더 행:</label>
+      <select id="headerRow" onchange="render()" class="text-sm border border-gray-300 rounded-lg px-2 py-1.5"></select>
+    </div>
+    <div id="selControls" class="hidden flex items-center gap-2 flex-wrap">
+      <span class="text-xs text-gray-600 break-ko">일괄:</span>
+      <span id="bulkButtons" class="flex gap-1.5"></span>
+      <button onclick="clearUnits()" class="text-xs border border-gray-300 rounded-md px-2.5 py-1 text-gray-600 hover:bg-gray-50">전체 해제</button>
+      <span class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-2.5 py-1 break-ko">
+        💡 소계·합계(subtotal)는 <b>행번호(R) 클릭</b>해 제외 · special nego는 <b>금액 클릭</b>해 차감(−)
+      </span>
+    </div>
+    <button onclick="runExtract()"
+            class="ml-auto text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-4 py-1.5 rounded-lg break-ko">
+      이 매핑으로 추출 →
+    </button>
+  </div>
+
+  <!-- 엑셀 격자 -->
+  <div class="bg-white rounded-xl border border-gray-200 overflow-auto" style="max-height:60vh">
+    <table id="gridTable" class="text-xs border-collapse"></table>
+  </div>
+
+  <!-- 비교 단위 집계 (select 모드) -->
+  <div id="unitSummary" class="hidden bg-white rounded-xl border border-gray-200 p-4 mt-3">
+    <h3 class="text-sm font-bold text-gray-900 break-ko mb-2">비교 단위 (<span id="unitCount">0</span>개)</h3>
+    <div id="unitList" class="text-xs"></div>
+  </div>
+
+  <p class="text-xs text-gray-400 mt-3 break-ko" id="hint"></p>
+</div>
+
+<script>
+const GRID = {{ grid_json|safe }};
+const SUGGEST = {{ suggest_json|safe }};
+const SAVED = {{ saved_config_json|safe }};
+const SUB_ID = "{{ sub.submission_id }}";
+const SHEET = {{ current_sheet|tojson }};
+
+const ROLES = [
+  {id:"",label:"—",color:"#9ca3af"},
+  {id:"cat1",label:"대분류",color:"#1d4ed8"},
+  {id:"cat2",label:"중분류",color:"#2563eb"},
+  {id:"cat3",label:"소분류",color:"#3b82f6"},
+  {id:"cat4",label:"세분류",color:"#60a5fa"},
+  {id:"seq",label:"번호(계층)",color:"#7c3aed"},
+  {id:"name",label:"품목명",color:"#15803d"},
+  {id:"spec",label:"규격",color:"#16a34a"},
+  {id:"qty",label:"수량",color:"#ca8a04"},
+  {id:"unit",label:"단위",color:"#a16207"},
+  {id:"price",label:"단가",color:"#dc2626"},
+  {id:"amount",label:"금액",color:"#b91c1c"},
+  {id:"remark",label:"비고",color:"#6b7280"},
+  {id:"ignore",label:"무시",color:"#d1d5db"},
+];
+const roleOf = (id) => ROLES.find(r=>r.id===id) || ROLES[0];
+const colLetter = (c) => { let s=""; c++; while(c>0){ s=String.fromCharCode(65+(c-1)%26)+s; c=Math.floor((c-1)/26);} return s; };
+
+let mode = "map";
+let mapping = {};      // col(0-based) -> role
+let headerRow = (SUGGEST.header_row || 1);  // 1-based
+let units = {};        // path -> true
+let excluded = {};     // rowNum(1-based) -> true (추출 제외 행, subtotal 등)
+let nego = {};         // rowNum(1-based) -> true (차감 행, special nego)
+
+// 초기화: 저장된 설정(SAVED)이 있으면 복원, 없으면 SUGGEST 제안값.
+if (SAVED && SAVED.mapping) {
+  // 저장된 매핑 (mapping은 {col(1-based): role})
+  Object.entries(SAVED.mapping).forEach(([c,r]) => { mapping[parseInt(c)-1] = r; });
+  headerRow = SAVED.header_row || headerRow;
+  (SAVED.compare_units || []).forEach(p => { units[p] = true; });
+  (SAVED.excluded_rows || []).forEach(n => { excluded[n] = true; });
+  (SAVED.nego_rows || []).forEach(n => { nego[n] = true; });
+} else {
+  // 제안 매핑 (SUGGEST.mapping은 {col(1-based): role})
+  Object.entries(SUGGEST.mapping || {}).forEach(([c,r]) => { mapping[parseInt(c)-1] = r; });
+}
+
+function catCols() {
+  // cat1..cat5 순서로 정렬된 0-based 열 인덱스
+  return Object.entries(mapping)
+    .filter(([,r]) => r && r.startsWith("cat"))
+    .sort((a,b)=> a[1].localeCompare(b[1]))
+    .map(([c])=> parseInt(c));
+}
+function colByRole(role){ const e=Object.entries(mapping).find(([,r])=>r===role); return e?parseInt(e[0]):null; }
+
+function pathTo(rowArr, catIdx){
+  // 엔진(extract_by_mapping)과 동일한 path 생성 규칙을 따라야
+  // 비교 단위와 저장 항목 path가 일치해 매칭됨.
+  // 빈 분류는 버리지 않고 직전 레벨명으로 채운다(엔진과 동일).
+  const cc = catCols();
+  const parts = [];
+  for(let i=0; i<=catIdx; i++){
+    let v = (rowArr[cc[i]] || "").trim();
+    if(!v && parts.length){ v = parts[parts.length-1]; }  // 빈칸 → 직전 레벨로
+    if(v) parts.push(v);
+  }
+  return parts.join(" > ");
+}
+
+function setMode(m){
+  mode = m;
+  document.getElementById('tabMap').style.background = m==='map' ? '#fff' : 'transparent';
+  document.getElementById('tabMap').style.color = m==='map' ? '#1d4ed8' : '#6b7280';
+  document.getElementById('tabSel').style.background = m==='select' ? '#fff' : 'transparent';
+  document.getElementById('tabSel').style.color = m==='select' ? '#1d4ed8' : '#6b7280';
+  document.getElementById('mapControls').classList.toggle('hidden', m!=='map');
+  document.getElementById('selControls').classList.toggle('hidden', m!=='select');
+  document.getElementById('unitSummary').classList.toggle('hidden', m!=='select');
+  if(m==='select') buildBulkButtons();
+  render();
+}
+
+function buildBulkButtons(){
+  const span = document.getElementById('bulkButtons');
+  span.innerHTML = '';
+  catCols().forEach((c, idx) => {
+    const role = roleOf(mapping[c]);
+    const b = document.createElement('button');
+    b.textContent = role.label + '로';
+    b.style.cssText = `font-size:12px;padding:4px 10px;border-radius:6px;border:1.5px solid ${role.color};background:#fff;color:${role.color};font-weight:600;cursor:pointer;`;
+    b.onclick = () => bulkSelect(idx);
+    span.appendChild(b);
+  });
+}
+
+function bulkSelect(catIdx){
+  const rows = GRID.grid.slice(headerRow); // 헤더 다음부터
+  const u = {};
+  rows.forEach(r => { const p = pathTo(r, catIdx); if(p) u[p]=true; });
+  units = u; render();
+}
+function clearUnits(){ units = {}; render(); }
+function toggleUnit(path){ if(units[path]) delete units[path]; else units[path]=true; render(); }
+
+function unitForRow(rowArr){
+  const cc = catCols();
+  for(let i=cc.length-1;i>=0;i--){ const p=pathTo(rowArr,i); if(units[p]) return p; }
+  return null;
+}
+
+function setColRole(col, role){ mapping[col]=role; if(mode==='select') buildBulkButtons(); render(); }
+
+function render(){
+  headerRow = parseInt(document.getElementById('headerRow').value || headerRow);
+  const tbl = document.getElementById('gridTable');
+  tbl.innerHTML = '';
+  const nCols = GRID.n_cols;
+
+  // thead
+  const thead = document.createElement('thead');
+  // 역할 드롭다운 행 (map 모드만)
+  if(mode==='map'){
+    const tr = document.createElement('tr');
+    tr.appendChild(cornerCell());
+    for(let c=0;c<nCols;c++){
+      const th = document.createElement('th');
+      th.style.cssText = 'border:1px solid #e5e7eb;padding:3px;background:#fafbfc;position:sticky;top:0;z-index:3;';
+      const sel = document.createElement('select');
+      const role = roleOf(mapping[c]);
+      sel.style.cssText = `font-size:11px;font-weight:700;border:1.5px solid ${role.color};border-radius:5px;padding:2px 3px;color:${role.color};background:#fff;cursor:pointer;min-width:58px;`;
+      ROLES.forEach(r => { const o=document.createElement('option'); o.value=r.id; o.textContent=r.label; if((mapping[c]||"")===r.id) o.selected=true; sel.appendChild(o); });
+      sel.onchange = () => setColRole(c, sel.value);
+      th.appendChild(sel); tr.appendChild(th);
+    }
+    thead.appendChild(tr);
+  }
+  // 역할 라벨 행 (select 모드 — ①탭에서 잡은 분류를 헤더로 표시)
+  if(mode==='select'){
+    const tr = document.createElement('tr');
+    tr.appendChild(cornerCell());
+    for(let c=0;c<nCols;c++){
+      const role = roleOf(mapping[c]);
+      const th = document.createElement('th');
+      const isSet = role.id && role.id!=='ignore';
+      th.textContent = isSet ? role.label : '';
+      th.style.cssText = `border:1px solid #e5e7eb;padding:3px 6px;font-size:11px;font-weight:700;text-align:center;white-space:nowrap;position:sticky;top:0;z-index:3;`
+        + (isSet ? `color:#fff;background:${role.color};` : 'color:#d1d5db;background:#fafbfc;');
+      tr.appendChild(th);
+    }
+    thead.appendChild(tr);
+  }
+  // 열문자 행
+  const tr2 = document.createElement('tr');
+  tr2.appendChild(cornerCell(30));
+  for(let c=0;c<nCols;c++){
+    const th=document.createElement('th');
+    th.textContent = colLetter(c);
+    th.style.cssText='border:1px solid #e5e7eb;padding:2px 6px;background:#f9fafb;color:#9ca3af;font-weight:400;font-size:11px;position:sticky;top:30px;z-index:2;';
+    tr2.appendChild(th);
+  }
+  thead.appendChild(tr2);
+  tbl.appendChild(thead);
+
+  // tbody
+  const tbody = document.createElement('tbody');
+  // select 모드: 비교 단위별 색 구분 준비 (단위 순서대로 번갈아 색조)
+  let unitOrder = [];
+  if(mode==='select'){
+    const seen = new Set();
+    GRID.grid.forEach((rowArr, ri) => {
+      const rowNum = ri+1;
+      if(rowNum<=headerRow || excluded[rowNum]) return;
+      if(!rowArr.some(x=>x&&x.trim())) return;
+      const cc = catCols();
+      const u = unitForRow(rowArr) || pathTo(rowArr, cc.length-1);
+      if(u && !seen.has(u)){ seen.add(u); unitOrder.push(u); }
+    });
+  }
+  const UNIT_TINTS = ['#eff6ff', '#f0fdf4'];  // 번갈아 칠할 두 색조 (파랑/초록 옅게)
+  const unitTint = (u) => { const i = unitOrder.indexOf(u); return i<0 ? '#fff' : UNIT_TINTS[i%2]; };
+
+  GRID.grid.forEach((rowArr, ri) => {
+    const rowNum = ri+1; // 1-based
+    const isHeader = rowNum===headerRow;
+    const isData = rowNum>headerRow;
+    const dataIdx = ri - headerRow;
+    const tr = document.createElement('tr');
+
+    // 행 배경 + 단위 경계선 (select 모드)
+    if(mode==='select' && isData && !excluded[rowNum] && rowArr.some(x=>x&&x.trim())){
+      const cc = catCols();
+      const myUnit = unitForRow(rowArr) || pathTo(rowArr, cc.length-1);
+      tr.style.background = unitTint(myUnit);
+      // 위 행과 단위가 다르면 경계선 (묶음 구분)
+      let prevUnit = null;
+      for(let pri=ri-1; pri>headerRow-1; pri--){
+        const pr = GRID.grid[pri];
+        if(excluded[pri+1] || !pr.some(x=>x&&x.trim())) continue;
+        prevUnit = unitForRow(pr) || pathTo(pr, cc.length-1); break;
+      }
+      if(prevUnit !== null && prevUnit !== myUnit){
+        tr.style.borderTop = '2px solid #94a3b8';
+      }
+    } else {
+      tr.style.background = isHeader ? '#eff6ff' : (excluded[rowNum] ? '#fafafa' : '#fff');
+    }
+    if(excluded[rowNum]) tr.style.opacity = '0.4';
+    // 행번호
+    const rn = document.createElement('td');
+    const isExcluded = !!excluded[rowNum];
+    if(mode==='select' && isData){
+      rn.textContent = isExcluded ? '✕' : 'R'+rowNum;
+      rn.title = isExcluded ? '제외됨 — 클릭하면 복원' : '클릭하면 추출에서 제외 (subtotal 등)';
+      rn.style.cssText='border:1px solid #f3f4f6;padding:2px 6px;background:'+(isExcluded?'#fee2e2':'#fefce8')+';color:'+(isExcluded?'#dc2626':'#a16207')+';font-weight:600;text-align:center;position:sticky;left:0;cursor:pointer;';
+      rn.onmouseenter = () => { if(!excluded[rowNum]){ rn.textContent='✕'; rn.style.background='#fee2e2'; rn.style.color='#dc2626'; } };
+      rn.onmouseleave = () => { if(!excluded[rowNum]){ rn.textContent='R'+rowNum; rn.style.background='#fefce8'; rn.style.color='#a16207'; } };
+      rn.onclick = () => { if(excluded[rowNum]) delete excluded[rowNum]; else excluded[rowNum]=true; render(); };
+    } else {
+      rn.textContent = 'R'+rowNum;
+      rn.style.cssText='border:1px solid #f3f4f6;padding:2px 6px;background:#f9fafb;color:#9ca3af;font-weight:600;text-align:center;position:sticky;left:0;';
+    }
+    tr.appendChild(rn);
+
+    for(let c=0;c<nCols;c++){
+      const val = rowArr[c]||"";
+      const role = roleOf(mapping[c]);
+      const isCat = role.id.startsWith("cat");
+      const td = document.createElement('td');
+      td.style.cssText='border:1px solid #f3f4f6;padding:2px 8px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;';
+
+      const catIdx = catCols().indexOf(c);
+      if(mode==='select' && isData && isCat && catIdx>=0){
+        const path = pathTo(rowArr, catIdx);
+        const show = dataIdx===0 || pathTo(GRID.grid[ri-1], catIdx)!==path;
+        const selected = !!units[path];
+        const inUnit = unitForRow(rowArr)===path;
+        td.style.cursor='pointer';
+        td.style.textAlign='center';
+        td.style.background = selected?'#bfdbfe':'transparent';
+        td.style.fontWeight = selected?'700':'400';
+        td.style.color = show?(selected?'#1d4ed8':'#374151'):'#e5e7eb';
+        if(selected) td.style.borderLeft='3px solid #2563eb';
+        td.textContent = show? val : '';
+        if(selected){ const b=document.createElement('span'); b.textContent='단위'; b.style.cssText='font-size:8px;margin-left:3px;background:#2563eb;color:#fff;padding:0 4px;border-radius:999px;'; td.appendChild(b); }
+        td.onclick = () => toggleUnit(path);
+      } else {
+        const isAmt = role.id==='amount'||role.id==='price'||role.id==='qty';
+        td.style.textAlign = isAmt?'right':'center';
+        td.style.fontWeight = isHeader?'700':'400';
+        // select 모드 + 금액 열 + 데이터 행 → 클릭으로 차감(nego) 토글
+        if(mode==='select' && isData && role.id==='amount'){
+          const isNego = !!nego[rowNum];
+          td.style.cursor='pointer';
+          td.title = isNego ? '차감 항목(−) — 클릭하면 해제' : '클릭하면 차감(special nego)으로 지정';
+          td.style.color = isNego ? '#dc2626' : (val?'#374151':'#e5e7eb');
+          td.style.fontWeight = isNego ? '700' : '400';
+          if(isNego && val) td.style.background='#fee2e2';
+          td.textContent = (isNego && val ? '− ' : '') + (val || '·');
+          td.onclick = () => { if(nego[rowNum]) delete nego[rowNum]; else nego[rowNum]=true; render(); };
+        } else {
+          td.style.color = val?(isCat?'#1e40af':'#374151'):'#e5e7eb';
+          if(isData && mode==='map' && role.id && role.id!=='ignore') td.style.background = role.color+'0c';
+          td.textContent = val || '·';
+        }
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+
+  if(mode==='select') renderUnitSummary();
+  updateHint();
+}
+
+function cornerCell(top){ const th=document.createElement('th'); th.style.cssText='border:1px solid #e5e7eb;background:#f3f4f6;position:sticky;left:0;top:'+(top||0)+'px;z-index:4;'; return th; }
+
+function renderUnitSummary(){
+  const rows = GRID.grid.slice(headerRow);
+  const amtCol = colByRole("amount");
+  const g = {};
+  rows.forEach(r => {
+    if(!r.some(x=>x&&x.trim())) return;
+    const cc = catCols();
+    const unit = unitForRow(r) || pathTo(r, cc.length-1);
+    if(!unit) return;
+    if(!g[unit]) g[unit]={path:unit,amount:0,n:0};
+    const amt = amtCol!=null ? parseFloat((r[amtCol]||"").replace(/[,\s원₩$]/g,''))||0 : 0;
+    g[unit].amount += amt; g[unit].n += 1;
+  });
+  const list = Object.values(g);
+  document.getElementById('unitCount').textContent = list.length;
+  document.getElementById('unitList').innerHTML =
+    '<table style="width:100%;border-collapse:collapse;">' +
+    '<tr style="background:#f9fafb;color:#6b7280;"><td style="padding:5px 10px;">비교 단위</td><td style="padding:5px 10px;text-align:right;">품목</td><td style="padding:5px 10px;text-align:right;">금액</td></tr>' +
+    list.map(x=>`<tr style="border-top:1px solid #f3f4f6;"><td style="padding:5px 10px;font-weight:600;color:#1d4ed8;">${x.path}</td><td style="padding:5px 10px;text-align:right;color:#6b7280;">${x.n}</td><td style="padding:5px 10px;text-align:right;font-weight:600;">${x.amount.toLocaleString('ko-KR')}</td></tr>`).join('') +
+    '</table>';
+}
+
+function updateHint(){
+  const cc = catCols().map(c=>colLetter(c)).join(", ");
+  document.getElementById('hint').textContent =
+    mode==='map' ? `분류 열: ${cc||'없음'} | 정보 열(품목/단가 등)을 지정하세요. LLM 제안값을 확인/수정하면 됩니다.`
+                 : `분류 칸을 클릭해 비교 단위를 지정하세요. 일괄 선택 후 개별 조정 가능. 분류 열: ${cc||'없음'}`;
+}
+
+function collectCompareUnits(){
+  // 선택된 units의 path 목록 (없으면 빈 배열 → 최하위 기본)
+  return Object.keys(units);
+}
+
+// ── Special Nego 수기 입력 ──────────────────
+let negoItems = [];
+function loadNego(){
+  fetch(`/submissions/${SUB_ID}/nego/list`).then(r=>r.json()).then(d=>{
+    negoItems = d.items || [];
+    renderNego();
+  }).catch(()=>{});
+}
+function renderNego(){
+  const box = document.getElementById('negoList');
+  if(!negoItems.length){ box.innerHTML = '<div style="font-size:12px;color:#b45309;">아직 없음. 아래에서 추가하세요.</div>'; return; }
+  box.innerHTML = negoItems.map(it =>
+    `<div style="display:flex;align-items:center;gap:8px;font-size:13px;">
+       <span style="flex:1;color:#92400e;font-weight:600;">${escapeHtmlN(it.name_normalized||'')}</span>
+       <span style="color:#dc2626;font-weight:700;">${Number(it.amount).toLocaleString('ko-KR')}</span>
+       <button onclick="editNego('${it.item_id}','${escapeHtmlN(it.name_normalized||'')}',${it.amount})" style="color:#a16207;background:none;border:none;cursor:pointer;font-size:12px;">수정</button>
+       <button onclick="delNego('${it.item_id}')" style="color:#dc2626;background:none;border:none;cursor:pointer;font-size:13px;">✕</button>
+     </div>`).join('');
+}
+function escapeHtmlN(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function addNego(){
+  const label = document.getElementById('negoLabel').value.trim();
+  const amount = parseFloat(document.getElementById('negoAmount').value);
+  if(!label || !amount){ alert('항목명과 금액을 입력하세요.'); return; }
+  fetch(`/submissions/${SUB_ID}/nego/add`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({label, amount})
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ document.getElementById('negoLabel').value=''; document.getElementById('negoAmount').value=''; loadNego(); }
+  });
+}
+function editNego(itemId, curLabel, curAmount){
+  const label = prompt('항목명', curLabel); if(label===null) return;
+  const amtStr = prompt('금액 (양수 입력 → 자동 −)', Math.abs(curAmount)); if(amtStr===null) return;
+  fetch(`/submissions/${SUB_ID}/nego/${itemId}/update`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({label, amount: parseFloat(amtStr)})
+  }).then(r=>r.json()).then(d=>{ if(d.ok) loadNego(); });
+}
+function delNego(itemId){
+  if(!confirm('이 nego 항목을 삭제할까요?')) return;
+  fetch(`/submissions/${SUB_ID}/item/${itemId}/delete`, {
+    method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}
+  }).then(r=>r.json()).then(d=>{ if(d.ok) loadNego(); });
+}
+
+function runExtract(){
+  // mapping을 1-based로 변환
+  const m1 = {};
+  Object.entries(mapping).forEach(([c,r]) => { if(r && r!=='ignore') m1[parseInt(c)+1]=r; });
+  const hasCat = Object.values(m1).some(r=>r.startsWith('cat') || r==='seq');
+  const hasName = Object.values(m1).includes('name');
+  // 분류/번호 또는 품목명 중 하나는 있어야 함
+  if(!hasCat && !hasName){ alert('분류 열(대/중/소/번호) 또는 품목명 열을 최소 1개 지정하세요.'); return; }
+  if(!hasName && hasCat){ if(!confirm('품목명 열이 없습니다. 분류만으로 추출할까요?')) return; }
+  // 분류 없이 품목명만 있는 경우는 그대로 진행 (품목명이 곧 항목)
+
+  fetch(`/submissions/${SUB_ID}/map/extract`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ sheet: SHEET, mapping: m1, header_row: headerRow, compare_units: collectCompareUnits(), excluded_rows: Object.keys(excluded).map(Number), nego_rows: Object.keys(nego).map(Number) })
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ alert(`추출 완료: ${d.n_items}개 항목`); location.href = d.redirect; }
+    else alert('추출 실패: ' + d.error);
+  }).catch(e=> alert('오류: '+e));
+}
+
+// 헤더 행 드롭다운 채우기
+(function init(){
+  const hr = document.getElementById('headerRow');
+  for(let i=1;i<=Math.min(GRID.n_rows,15);i++){ const o=document.createElement('option'); o.value=i; o.textContent='R'+i; if(i===headerRow)o.selected=true; hr.appendChild(o); }
+  setMode('map');
+})();
+</script>
+{% endblock %}
