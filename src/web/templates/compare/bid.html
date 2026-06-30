@@ -76,6 +76,17 @@ main { overflow-x: clip !important; }
     </a>
     {% if data.clusters %}
     <form method="POST"
+          action="{{ url_for('compare.refine_unmatched_from_compare', bid_id=bid.bid_id) }}"
+          onsubmit="return confirm('현재 클러스터는 그대로 두고, 아직 묶이지 않은 미분류 품목만 다시 검토합니다.\n기존 그룹에 편입하거나 미분류끼리 새 그룹을 만듭니다.\n계속하시겠습니까?')">
+      <button type="submit"
+              class="text-sm bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200
+                     font-semibold px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+        🔍 미분류만 재검토
+      </button>
+    </form>
+    {% endif %}
+    {% if data.clusters %}
+    <form method="POST"
           action="{{ url_for('compare.reset_clusters_from_compare', bid_id=bid.bid_id) }}"
           onsubmit="return confirm('모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')">
       <button type="submit"

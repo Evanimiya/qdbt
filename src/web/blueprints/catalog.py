@@ -565,6 +565,119 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
             _active_cluster_bids.discard(bid_id)
 
 
+def _unmatched_worker(app, job_id, bid_id, items_raw, llm):
+    """미분류 항목만 재검증 — 현재 클러스터는 고정, 안 묶인 항목만
+    기존 클러스터에 편입 시도. 전체 재클러스터링과 달리 확정/기존 그룹을
+    흔들지 않는다."""
+    import sqlite3
+    from db.queries import DB_PATH
+    from extractors.catalog_clusterer import (
+        run_unmatched_verification, apply_verification_results)
+    with app.app_context():
+        try:
+            _cluster_jobs[job_id] = {
+                "status": "running", "phase": 1,
+                "message": "미분류 항목 검토 중...", "n": 0}
+
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+
+            # 이미 어느 클러스터에든 든 item_id (확정 포함 전체)
+            clustered_ids = {
+                row["catalog_item_id"]
+                for row in conn.execute("""
+                    SELECT cm.catalog_item_id
+                    FROM catalog_cluster_members cm
+                    JOIN catalog_clusters cc ON cm.cluster_id = cc.cluster_id
+                    WHERE cc.bid_id = ?
+                """, (bid_id,)).fetchall()
+            }
+            unmatched = [i for i in items_raw if i["item_id"] not in clustered_ids]
+
+            if not unmatched:
+                _cluster_jobs[job_id] = {
+                    "status": "done", "phase": 3,
+                    "message": "미분류 항목이 없습니다. 모두 분류됨.", "n": 0}
+                conn.close()
+                return
+
+            # 기존 클러스터 (편입 대상) — pending/held만 (확정은 못 건드림)
+            existing_clusters = [
+                {
+                    "cluster_id":          row["cluster_id"],
+                    "representative_name": row["representative_name"],
+                    "member_names":        (row["member_names"] or "").split(" | "),
+                }
+                for row in conn.execute("""
+                    SELECT cc.cluster_id, cc.representative_name,
+                           GROUP_CONCAT(si.name_raw, ' | ') as member_names
+                    FROM catalog_clusters cc
+                    JOIN catalog_cluster_members cm ON cm.cluster_id = cc.cluster_id
+                    JOIN submission_items si ON si.item_id = cm.catalog_item_id
+                    WHERE cc.bid_id = ? AND cc.status IN ('pending', 'held')
+                    GROUP BY cc.cluster_id
+                """, (bid_id,)).fetchall()
+            ]
+
+            n_added = 0
+            if existing_clusters:
+                _cluster_jobs[job_id] = {
+                    "status": "running", "phase": 2,
+                    "message": f"미분류 {len(unmatched)}개를 기존 클러스터와 대조 중...",
+                    "n": 0}
+                additions = run_unmatched_verification(
+                    unmatched_items=unmatched,
+                    existing_clusters=existing_clusters,
+                    api_key=llm["api_key"],
+                    provider_id=llm["provider"],
+                    model=llm["model"],
+                    base_url=llm.get("base_url") or None,
+                    verify_ssl=llm.get("verify_ssl", True),
+                )
+                n_added = apply_verification_results(conn, additions)
+
+            # 여전히 미분류인 항목끼리 새 클러스터도 시도
+            from extractors.catalog_clusterer import run_clustering, save_clusters
+            still_clustered = {
+                row["catalog_item_id"]
+                for row in conn.execute("""
+                    SELECT cm.catalog_item_id FROM catalog_cluster_members cm
+                    JOIN catalog_clusters cc ON cm.cluster_id = cc.cluster_id
+                    WHERE cc.bid_id = ?
+                """, (bid_id,)).fetchall()
+            }
+            still_unmatched = [i for i in items_raw if i["item_id"] not in still_clustered]
+            n_new = 0
+            if len(still_unmatched) >= 2:
+                _cluster_jobs[job_id] = {
+                    "status": "running", "phase": 2,
+                    "message": f"남은 {len(still_unmatched)}개끼리 새 그룹 탐색 중...",
+                    "n": n_added}
+                try:
+                    new_clusters = run_clustering(
+                        submission_items=still_unmatched,
+                        api_key=llm["api_key"], provider_id=llm["provider"],
+                        model=llm["model"], base_url=llm.get("base_url") or None,
+                        verify_ssl=llm.get("verify_ssl", True))
+                    n_new = save_clusters(conn, new_clusters, bid_id=bid_id)
+                except Exception:
+                    pass
+
+            conn.commit()
+            conn.close()
+            _cluster_jobs[job_id] = {
+                "status": "done", "phase": 3,
+                "message": f"완료 — 기존 그룹 편입 {n_added}개, 새 그룹 {n_new}개.",
+                "n": n_added + n_new}
+        except Exception as e:
+            _cluster_jobs[job_id] = {
+                "status": "error", "phase": 0,
+                "message": str(e), "n": 0}
+        finally:
+            with _active_cluster_lock:
+                _active_cluster_bids.discard(bid_id)
+
+
 @bp.route("/clusters/run", methods=["POST"])
 @require_role("manager")
 def run_clusters():

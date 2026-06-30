@@ -329,6 +329,42 @@ def run_cluster_from_compare(bid_id):
                             return_to=bid_id, _t=tok))
 
 
+@bp.route("/bid/<bid_id>/cluster/refine-unmatched", methods=["POST"])
+def refine_unmatched_from_compare(bid_id):
+    """미분류 항목만 재검토 — 현재 클러스터는 고정하고, 안 묶인 항목만
+    기존 클러스터에 편입하거나 미분류끼리 새 그룹을 만든다.
+    전체 재클러스터링과 달리 확정/기존 그룹을 흔들지 않는다."""
+    from flask import g, session, current_app
+    import threading, uuid as _uuid
+    from db.queries import list_submission_items_for_clustering, get_user_llm_settings
+    from web.blueprints.catalog import _unmatched_worker
+
+    tok = getattr(g, "auth_token", "") or ""
+    uid = session.get("user_id", "")
+
+    llm = get_user_llm_settings(uid)
+    if not llm.get("api_key"):
+        flash("API 키가 설정되지 않았습니다. ⚙ 내 프로필에서 설정하세요.", "error")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
+    if len(items_raw) < 2:
+        flash("추출 완료 견적서가 2개 이상 필요합니다.", "warning")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    job_id = str(_uuid.uuid4())
+    app = current_app._get_current_object()
+    threading.Thread(
+        target=_unmatched_worker,
+        args=(app, job_id, bid_id, items_raw, llm),
+        daemon=True,
+    ).start()
+
+    return redirect(url_for("catalog.cluster_progress",
+                            job_id=job_id, bid_id=bid_id,
+                            return_to=bid_id, _t=tok))
+
+
 @bp.route("/bid/<bid_id>/cluster/<cluster_id>/accept", methods=["POST"])
 def accept_cluster_from_compare(bid_id, cluster_id):
     from flask import g
