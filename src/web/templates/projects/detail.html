@@ -88,12 +88,24 @@
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
     <h2 class="text-base font-bold text-gray-900 break-ko">🗂 기준정보</h2>
-    {% if has_role('manager') %}
-    <button type="button" id="attrEditBtn" onclick="qdStartEdit('attrCard')"
-            class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
-                   px-3 py-1.5 rounded-lg transition-colors">✏️ 편집</button>
-    {% endif %}
+    <div class="flex items-center gap-2">
+      {% if has_role('manager') %}
+      <a href="{{ url_for('admin.attr_defs') }}?return_project={{ project.project_id }}"
+         class="text-sm bg-white border border-gray-300 hover:bg-gray-50 text-gray-600 font-medium
+                px-3 py-1.5 rounded-lg transition-colors break-ko"
+         title="기준정보 항목(법인명·공장명 등)을 추가·수정·삭제합니다">
+        기준정보 항목 관리 →</a>
+      <button type="button" id="attrEditBtn" onclick="qdStartEdit('attrCard')"
+              class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                     px-3 py-1.5 rounded-lg transition-colors">✏️ 편집</button>
+      {% endif %}
+    </div>
   </div>
+  {% if has_role('manager') %}
+  <p class="text-xs text-gray-400 -mt-1 mb-3 break-ko">
+    기준정보 <b>항목</b>의 추가·삭제·변경은 '기준정보 항목 관리'에서 하며, 이 화면에서는 <b>값</b>만 입력합니다.
+  </p>
+  {% endif %}
 
   {# ── 보기 모드 ── #}
   <div id="attrCardText" class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-sm">

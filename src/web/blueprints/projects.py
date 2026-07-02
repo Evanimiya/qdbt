@@ -49,8 +49,9 @@ def detail(project_id):
     if not project:
         abort(404)
     bids = list_bids(project_id)
-    # 기준정보: 속성 사전 + 이 프로젝트의 값 + 속성별 기존값(드롭다운용)
-    attr_defs = [dict(d) for d in list_attr_defs()]
+    # 기준정보: 이 프로젝트 도메인의 항목(공통 + 도메인 전용)만
+    _pdomain = (dict(project).get("domain")) or "IT"
+    attr_defs = [dict(d) for d in list_attr_defs(domain=_pdomain)]
     attrs = get_project_attrs(project_id)
     attr_options = {d["attr_key"]: attr_value_options(d["attr_key"])
                     for d in attr_defs}
@@ -68,14 +69,17 @@ def save_attrs(project_id):
     project = get_project(project_id)
     if not project:
         abort(404)
-    values = {d["attr_key"]: request.form.get(f"attr_{d['attr_key']}", "")
-              for d in list_attr_defs()}
-    set_project_attrs(project_id, values)
-    # 프로젝트 도메인 변경 (제출된 경우)
     from db.queries import list_domain_names, update_project_domain
+    # 도메인 변경이 함께 온 경우 먼저 반영 → 그 도메인의 항목을 수용
     new_domain = request.form.get("domain", "").strip()
     if new_domain and new_domain in list_domain_names():
         update_project_domain(project_id, new_domain)
+        eff_domain = new_domain
+    else:
+        eff_domain = (dict(project).get("domain")) or "IT"
+    values = {d["attr_key"]: request.form.get(f"attr_{d['attr_key']}", "")
+              for d in list_attr_defs(domain=eff_domain)}
+    set_project_attrs(project_id, values)
     flash("기준정보가 저장되었습니다.", "success")
     return redirect(url_for("projects.detail", project_id=project_id))
 

@@ -513,6 +513,9 @@ def migrate_db(db_path=None):
     bid_cols = [c[1] for c in conn.execute("PRAGMA table_info(bids)").fetchall()]
     if "domain" not in bid_cols:
         migrations.append("ALTER TABLE bids ADD COLUMN domain TEXT NOT NULL DEFAULT 'IT'")
+    if "category_order" not in bid_cols:
+        # 입찰별 분류(카테고리) 표시 순서. JSON 배열. 비어있으면 분류관리 기본순서 사용.
+        migrations.append("ALTER TABLE bids ADD COLUMN category_order TEXT")
 
     # projects.domain 컬럼 추가 (프로젝트 기본 도메인 → 입찰이 승계)
     proj_cols = [c[1] for c in conn.execute("PRAGMA table_info(projects)").fetchall()]

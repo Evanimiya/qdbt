@@ -477,6 +477,32 @@ def change_cluster_category_from_compare(bid_id, cluster_id):
     return _redirect()
 
 
+@bp.route("/bid/<bid_id>/categories/reorder", methods=["POST"])
+@require_role("manager")
+def reorder_categories_route(bid_id):
+    """입찰별 분류(카테고리) 순서 저장 (신규4). JSON: {order: [cat, ...]}"""
+    from db.queries import set_bid_category_order
+    payload = request.get_json(silent=True) or {}
+    order = payload.get("order") or []
+    try:
+        set_bid_category_order(bid_id, order)
+        return jsonify({"ok": True, "count": len(order)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+
+
+@bp.route("/bid/<bid_id>/categories/reset-order", methods=["POST"])
+@require_role("manager")
+def reset_categories_order_route(bid_id):
+    """분류 순서를 분류관리 기본순서로 되돌림 (신규4)."""
+    from flask import g
+    from db.queries import reset_bid_category_order
+    tok = getattr(g, "auth_token", "") or ""
+    reset_bid_category_order(bid_id)
+    flash("분류 순서를 기본값으로 되돌렸습니다.", "success")
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+
 @bp.route("/bid/<bid_id>/clusters/reorder", methods=["POST"])
 @require_role("manager")
 def reorder_clusters_route(bid_id):

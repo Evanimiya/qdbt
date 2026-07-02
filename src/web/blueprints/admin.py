@@ -257,9 +257,10 @@ def domain_delete(domain_id):
 @require_role("manager")
 def attr_defs():
     """기준정보 정의(항목) 관리 화면."""
-    from db.queries import list_attr_defs
+    from db.queries import list_attr_defs, list_domain_names
     defs = list_attr_defs(active_only=False)
-    return render_template("admin/attr_defs.html", defs=defs)
+    return render_template("admin/attr_defs.html", defs=defs,
+                           domains=list_domain_names(active_only=False))
 
 
 @bp.route("/attr-defs/new", methods=["POST"])
@@ -268,11 +269,12 @@ def attr_def_new():
     from db.queries import create_attr_def
     key = request.form.get("attr_key", "").strip()
     label = request.form.get("label", "").strip()
+    domain = request.form.get("domain", "").strip() or "공통"
     if not label:
         flash("기준정보 항목명을 입력하세요.", "error")
     else:
         try:
-            create_attr_def(label=label, attr_key=key or None)
+            create_attr_def(label=label, attr_key=key or None, domain=domain)
             flash(f"기준정보 항목 '{label}'이(가) 추가되었습니다.", "success")
         except Exception as e:
             flash(f"추가 실패: {e}", "error")
@@ -286,6 +288,8 @@ def attr_def_update(attr_key):
     fields = {}
     if request.form.get("label", "").strip():
         fields["label"] = request.form["label"].strip()
+    if request.form.get("domain", "").strip():
+        fields["domain"] = request.form["domain"].strip()
     if request.form.get("sort_order", "").strip():
         try:
             fields["sort_order"] = int(request.form["sort_order"])

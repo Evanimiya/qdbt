@@ -112,13 +112,23 @@ def update_project(project_id, **kwargs):
 
 # ─── 프로젝트 기준정보 (속성 사전 + 값) ─────────────
 
-def list_attr_defs(active_only: bool = True) -> list:
-    """속성 사전(기준정보 원장) 목록. 도메인 확장 시 행 추가만으로 대응."""
+def list_attr_defs(active_only: bool = True, domain: str = None) -> list:
+    """속성 사전(기준정보 원장) 목록.
+
+    domain 지정 시: '공통' 항목 + 해당 도메인 전용 항목만 반환.
+    domain=None: 전체 반환(관리 화면용).
+    """
     with get_conn() as c:
         q = "SELECT * FROM project_attr_defs"
+        conds, params = [], []
         if active_only:
-            q += " WHERE is_active = 1"
-        return c.execute(q + " ORDER BY sort_order, attr_key").fetchall()
+            conds.append("is_active = 1")
+        if domain:
+            conds.append("(domain = ? OR domain = '공통' OR domain = 'ALL')")
+            params.append(domain)
+        if conds:
+            q += " WHERE " + " AND ".join(conds)
+        return c.execute(q + " ORDER BY sort_order, attr_key", params).fetchall()
 
 
 def get_attr_def(attr_key: str):
@@ -1079,30 +1089,67 @@ def _apply_compare_units(all_items, units_by_sub):
 
 
 def category_order_for_bid(bid_id: str, present_cats=None) -> list:
-    """입찰의 도메인 기준으로 카테고리 표시 순서를 사전(catalog_categories)에서 결정.
+    """입찰의 카테고리 표시 순서를 결정.
 
-    - 해당 도메인(+ALL 공통)의 활성 카테고리를 sort_order대로 우선 배치
-    - 사전에 없지만 실제 데이터에 존재하는 분류(present_cats)는 뒤에 덧붙여 유실 방지
-    - 도메인 확장(IT/설비/용역) 시 하드코딩 없이 사전만으로 순서가 반영됨
+    우선순위:
+    1. 입찰에 저장된 사용자 지정 순서(bids.category_order)가 있으면 그것을 우선
+    2. 없으면 도메인 사전(catalog_categories)의 기본 sort_order
+    3. 사전·저장순서에 없지만 실제 데이터에 있는 분류(present_cats)는 뒤에 덧붙여 유실 방지
     """
+    import json as _json
     with get_conn() as c:
-        row = c.execute("SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)).fetchone()
-        domain = (dict(row).get("domain") if row else None) or "IT"
+        row = c.execute("SELECT domain, category_order FROM bids WHERE bid_id = ?",
+                        (bid_id,)).fetchone()
+        rd = dict(row) if row else {}
+        domain = rd.get("domain") or "IT"
         cats = c.execute("""
             SELECT name FROM catalog_categories
             WHERE is_active = 1 AND (domain = ? OR domain = 'ALL')
             ORDER BY sort_order, name
         """, (domain,)).fetchall()
-    order = []
+
+    # 기본순서 (분류관리)
+    default_order = []
     for r in cats:
         nm = r["name"]
-        if nm not in order:
-            order.append(nm)
-    # 데이터에만 있는 분류 보존 (사전 미등록)
-    for nm in (present_cats or []):
+        if nm not in default_order:
+            default_order.append(nm)
+
+    # 사용자 지정 순서가 있으면 그것을 기준으로, 나머지는 기본순서 뒤에 덧붙임
+    saved = []
+    if rd.get("category_order"):
+        try:
+            saved = [x for x in _json.loads(rd["category_order"]) if x]
+        except Exception:
+            saved = []
+
+    if saved:
+        order = [x for x in saved]                       # 저장 순서 우선
+        for nm in default_order:                          # 저장에 없는 기본분류 뒤에
+            if nm not in order:
+                order.append(nm)
+    else:
+        order = list(default_order)
+
+    for nm in (present_cats or []):                       # 데이터에만 있는 분류 보존
         if nm and nm not in order:
             order.append(nm)
     return order
+
+
+def set_bid_category_order(bid_id: str, ordered_cats: list):
+    """입찰별 분류 표시 순서 저장(사용자 재정렬). 빈 리스트/None이면 기본순서로 되돌림."""
+    import json as _json
+    val = _json.dumps([c for c in (ordered_cats or []) if c], ensure_ascii=False) \
+          if ordered_cats else None
+    with get_conn() as c:
+        c.execute("UPDATE bids SET category_order = ? WHERE bid_id = ?", (val, bid_id))
+
+
+def reset_bid_category_order(bid_id: str):
+    """분류 순서를 분류관리 기본순서로 되돌림."""
+    with get_conn() as c:
+        c.execute("UPDATE bids SET category_order = NULL WHERE bid_id = ?", (bid_id,))
 
 
 def compare_bid_submissions(bid_id):

@@ -505,9 +505,9 @@ function qdSyncModel(form){
       <div style="display:flex;gap:3px;align-items:center;flex-wrap:nowrap;margin-bottom:4px;overflow:hidden">
         {% if has_role('manager') %}
         <button type="button"
-                onclick="qdOpenCatChange('{{ cl.cluster_id }}', {{ cl.cat|tojson }})"
+                class="qd-cat-badge rounded {{ c_info[0] }} flex-shrink-0"
+                data-cluster-id="{{ cl.cluster_id }}" data-cat="{{ cl.cat|e }}"
                 title="분류 변경"
-                class="rounded {{ c_info[0] }} flex-shrink-0"
                 style="font-size:8px;padding:1px 4px;white-space:nowrap;font-weight:600;
                        border:none;cursor:pointer">{{ cl.cat }} ▾</button>
         {% else %}
@@ -1299,6 +1299,73 @@ window.addEventListener('pageshow', function(e) {
 
 /* ── 클러스터 분류 변경 ── */
 var _qdCatChangeClId=null;
+/* 분류 목록 (드롭다운 옵션 소스) */
+var QD_CATS = {{ (dict_categories or [])|tojson }};
+
+/* 배지 클릭 → 배지 바로 아래 인라인 드롭다운 (모달 대신, 항목3) */
+document.addEventListener('click', function(e){
+  var badge = e.target.closest && e.target.closest('.qd-cat-badge');
+  // 열려있는 인라인 드롭다운 밖을 클릭하면 닫기
+  var openPop = document.getElementById('qdCatInlinePop');
+  if(openPop && !e.target.closest('#qdCatInlinePop') && !badge){ openPop.remove(); }
+  if(!badge) return;
+  e.preventDefault();
+  e.stopPropagation();
+  qdOpenCatInline(badge);
+});
+
+function qdOpenCatInline(badge){
+  var old=document.getElementById('qdCatInlinePop');
+  if(old) old.remove();
+  var clusterId=badge.dataset.clusterId;
+  var curCat=badge.dataset.cat || '';
+
+  var pop=document.createElement('div');
+  pop.id='qdCatInlinePop';
+  pop.style.cssText='position:absolute;z-index:120;background:#fff;border:1px solid #CBD5E1;'
+    +'border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:4px;min-width:150px;font-size:12px';
+
+  // 분류 옵션
+  QD_CATS.forEach(function(cat){
+    var item=document.createElement('div');
+    item.textContent=(cat===curCat?'✓ ':'')+cat;
+    item.style.cssText='padding:5px 10px;border-radius:5px;cursor:pointer;white-space:nowrap;'
+      +(cat===curCat?'font-weight:700;color:#1D4ED8;background:#EFF6FF':'color:#334155');
+    item.onmouseover=function(){ if(cat!==curCat) item.style.background='#F1F5F9'; };
+    item.onmouseout=function(){ if(cat!==curCat) item.style.background=''; };
+    item.onclick=function(){ qdSubmitCatChange(clusterId, cat); };
+    pop.appendChild(item);
+  });
+  // 구분선 + 신규 분류
+  var hr=document.createElement('div'); hr.style.cssText='height:1px;background:#E2E8F0;margin:3px 6px'; pop.appendChild(hr);
+  var neo=document.createElement('div');
+  neo.textContent='＋ 신규 분류 만들기…';
+  neo.style.cssText='padding:5px 10px;border-radius:5px;cursor:pointer;color:#7C3AED;white-space:nowrap';
+  neo.onmouseover=function(){ neo.style.background='#F5F3FF'; };
+  neo.onmouseout=function(){ neo.style.background=''; };
+  neo.onclick=function(){
+    var name=prompt('새 분류명을 입력하세요:');
+    if(name && name.trim()) qdSubmitCatChange(clusterId, name.trim());
+  };
+  pop.appendChild(neo);
+
+  document.body.appendChild(pop);
+  // 배지 바로 아래에 배치
+  var r=badge.getBoundingClientRect();
+  pop.style.left=(window.scrollX + r.left)+'px';
+  pop.style.top=(window.scrollY + r.bottom + 3)+'px';
+}
+
+function qdSubmitCatChange(clusterId, cat){
+  var pop=document.getElementById('qdCatInlinePop'); if(pop) pop.remove();
+  var form=document.getElementById('qdCatChangeForm');
+  form.action='{{ url_for("compare.change_cluster_category_from_compare", bid_id=bid.bid_id, cluster_id="__CID__") }}'
+    .replace('__CID__', clusterId);
+  document.getElementById('qdCatChangeValue').value=cat;
+  form.submit();
+}
+
+/* (구 모달 함수 — 하위호환용 유지, 미사용) */
 function qdOpenCatChange(clusterId, curCat){
   _qdCatChangeClId=clusterId;
   var cur=document.getElementById('qdCatChangeCur');
