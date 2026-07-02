@@ -298,6 +298,54 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     }
 
 
+def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
+    """헤더 행을 코드로 1차 탐지해 열 매핑 후보를 제안한다.
+
+    (LLM 헤더 인식의 코드 폴백 / 초기값. 키워드 매칭 기반.)
+    반환: {"header_row": int, "mapping": {col: role}, "confidence": str}
+    """
+    wb = load_workbook(path, data_only=True)
+    sheet = wb[sheet_name] if sheet_name in wb.sheetnames else wb[wb.sheetnames[0]]
+
+    # 역할별 헤더 키워드
+    KW = {
+        "seq": ["no.", "no", "번호", "순번", "항번", "item no"],
+        "cat1": ["대분류"], "cat2": ["중분류"], "cat3": ["소분류"],
+        "cat4": ["세분류", "세세분류"],
+        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item"],
+        "spec": ["규격", "사양", "spec", "remark주요"],
+        "qty": ["수량", "q'ty", "qty", "수 량"],
+        "unit": ["단위", "unit"],
+        "price": ["단가", "unit price", "unitprice"],
+        "amount": ["금액", "amount", "total", "공급가", "합계금액"],
+        "remark": ["비고", "remark", "remarks"],
+    }
+
+    best_row, best_map, best_hits = None, {}, 0
+    for hr in range(1, min(sheet.max_row, max_scan_rows) + 1):
+        mapping = {}
+        for c in range(1, sheet.max_column + 1):
+            v = sheet.cell(row=hr, column=c).value
+            if not v:
+                continue
+            vs = str(v).strip().lower()
+            for role, kws in KW.items():
+                if any(kw.lower() in vs for kw in kws):
+                    # "unit price"는 unit이 아니라 price로 (price 우선)
+                    if role == "unit" and "price" in vs:
+                        continue
+                    mapping[c] = role
+                    break
+        if len(mapping) > best_hits:
+            best_hits = len(mapping)
+            best_row = hr
+            best_map = mapping
+
+    wb.close()
+    conf = "high" if best_hits >= 4 else ("low" if best_hits >= 2 else "none")
+    return {"header_row": best_row or 1, "mapping": best_map, "confidence": conf}
+
+
 def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
     """합계·소계·총계로 의심되는 행을 감지해 목록으로 반환.
 
