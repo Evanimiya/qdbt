@@ -24,8 +24,7 @@ main { overflow-x: clip !important; }
 .vendor-cell.sel .nm,.vendor-cell.sel .pr{color:#1D4ED8!important}
 .min-bg{background:#DCFCE7}.min-bg .nm,.min-bg .pr{color:#15803D}
 .max-bg{background:#FEF2F2}.max-bg .nm,.max-bg .pr{color:#B91C1C}
-.vendor-cell .nm{font-size:9px;opacity:.8;margin-bottom:1px;line-height:1.2;word-break:break-all}
-.vendor-cell .pr{font-size:10px;font-weight:600;white-space:nowrap}
+.vendor-cell .nm{font-size:9px;opacity:.8;margin-bottom:1px;line-height:1.2;word-break:break-all}.vendor-cell .pr{font-size:10px;font-weight:600;white-space:nowrap}
 .empty-cell{text-align:center;color:#CBD5E1;padding:5px 7px;vertical-align:middle;cursor:default}
 #cnt.empty{color:#94A3B8;font-weight:400}
 #cnt{font-size:11px;font-weight:600;color:#1D4ED8;min-width:90px}
@@ -37,14 +36,42 @@ main { overflow-x: clip !important; }
   #actionBar      { top:0; }
   #clusterMergeBar{ top:0; }
 }
+
+/* ── 드래그드랍 레이어 (기존 클릭 동선과 공존) ── */
+.cl-pick{touch-action:none}                 /* 핸들에서 터치 드래그 허용 */
+.vendor-cell.sel{touch-action:none}         /* 선택된 셀은 터치로도 끌기 가능 */
+.qdnd-newzone{padding:9px;text-align:center;color:#94A3B8;font-size:10px;
+              border:2px dashed #E2E8F0;border-radius:8px}
+body:not(.qdnd-drag) .qdnd-newzone-row{display:none}   /* 드래그 중에만 노출 */
+body.qdnd-drag td[data-drop="cluster"]:not([data-cl-status="accepted"]){
+  outline:1.5px dashed #BFDBFE;outline-offset:-3px;border-radius:6px}
+td.qdnd-over{outline:2px solid #2563EB!important;outline-offset:-3px;
+             background:#EFF6FF!important;border-radius:6px}
+td[data-cl-status="accepted"].qdnd-over{outline-color:#F87171!important;background:#FEF2F2!important}
+td.qdnd-merge-over{outline:2px solid #047857!important;outline-offset:-3px;
+                   background:#ECFDF5!important;border-radius:6px}
+td[data-drop="unclustered"].qdnd-over{outline:2px solid #7C3AED!important;
+                   background:#F5F3FF!important;color:#6D28D9!important}
+.qdnd-dragging{opacity:.4}
+/* 드래그 중에는 전체 텍스트 선택 차단 — 지나간 셀이 '선택된 듯' 보이는 문제 방지 (②) */
+body.qdnd-drag, body.qdnd-drag * { user-select:none !important; -webkit-user-select:none !important; }
+body.qdnd-drag .vendor-cell::selection { background:transparent; }#qdndGhost{position:fixed;pointer-events:none;z-index:99;background:#1D4ED8;color:#fff;
+           font-size:12px;font-weight:700;padding:5px 12px;border-radius:9999px;display:none;
+           box-shadow:0 4px 12px rgba(29,78,216,.35)}
+#qdndGhost.merge{background:#047857}
+#qdndToast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;
+           color:#fff;font-size:12px;padding:9px 15px;border-radius:10px;opacity:0;
+           transition:opacity .2s;pointer-events:none;max-width:92vw;z-index:100}
+#qdndToast.show{opacity:1}
 </style>
 
-<nav class="text-sm mb-4 text-gray-500">
-  <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}" class="hover:text-blue-700">{{ bid.project_name }}</a>
-  <span class="mx-2">›</span>
-  <a href="{{ url_for('bids.detail', bid_id=bid.bid_id) }}" class="hover:text-blue-700 break-ko">{{ bid.name }}</a>
-  <span class="mx-2">›</span> 업체별 비교
-</nav>
+{% from '_breadcrumb.html' import breadcrumb %}
+{{ breadcrumb([
+    ('프로젝트', url_for('projects.index')),
+    (bid.project_name, url_for('projects.detail', project_id=bid.project_id)),
+    (bid.name, url_for('bids.detail', bid_id=bid.bid_id)),
+    ('업체별 비교', none),
+]) }}
 
 <!-- 상단 헤더 -->
 <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
@@ -56,53 +83,116 @@ main { overflow-x: clip !important; }
               class="ml-2 text-blue-500 hover:underline">새로고침</button>
     </p>
   </div>
-  <div class="flex gap-2 flex-wrap">
-    {% from '_model_selector.html' import model_selector %}
-    <form method="POST"
-          action="{{ url_for('compare.run_cluster_from_compare', bid_id=bid.bid_id) }}"
-          onsubmit="return confirm('이 입찰의 견적 품목을 분석합니다. 계속하시겠습니까?')"
-          class="flex items-center gap-2 flex-wrap">
+  <div class="flex gap-2 flex-wrap items-center">
+    {% from '_model_selector.html' import model_selector with context %}
+    {# 모델 선택 1개로 통합 — 클러스터 실행·미분류 재검토가 공유 #}
+    <div class="flex items-center gap-1.5">
+      <span class="text-xs text-gray-500 font-medium whitespace-nowrap">모델</span>
       {{ model_selector('cmp') }}
+    </div>
+    <form method="POST" id="qdRunClusterForm"
+          action="{{ url_for('compare.run_cluster_from_compare', bid_id=bid.bid_id) }}"
+          onsubmit="return qdSyncModel(this) && confirm('이 입찰의 견적 품목을 분석합니다. 계속하시겠습니까?')"
+          class="flex items-center">
       <button type="submit"
               class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold
                      px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
         🤖 클러스터 실행
       </button>
     </form>
-    <a href="{{ url_for('catalog.clusters', bid_id=bid.bid_id) }}"
-       class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
-              px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
-      🔀 클러스터 관리
-    </a>
     {% if data.clusters %}
-    <form method="POST"
+    <form method="POST" id="qdRefineForm"
           action="{{ url_for('compare.refine_unmatched_from_compare', bid_id=bid.bid_id) }}"
-          onsubmit="return confirm('현재 클러스터는 그대로 두고, 아직 묶이지 않은 미분류 품목만 다시 검토합니다.\n기존 그룹에 편입하거나 미분류끼리 새 그룹을 만듭니다.\n계속하시겠습니까?')">
+          onsubmit="return qdSyncModel(this) && confirm('현재 클러스터는 그대로 두고, 아직 묶이지 않은 미분류 품목만 다시 검토합니다.\n기존 그룹에 편입하거나 미분류끼리 새 그룹을 만듭니다.\n계속하시겠습니까?')"
+          class="flex items-center">
       <button type="submit"
               class="text-sm bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200
                      font-semibold px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
         🔍 미분류만 재검토
       </button>
     </form>
-    {% endif %}
-    {% if data.clusters %}
     <form method="POST"
           action="{{ url_for('compare.reset_clusters_from_compare', bid_id=bid.bid_id) }}"
-          onsubmit="return confirm('모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')">
+          onsubmit="return confirm('모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')"
+          class="flex items-center">
       <button type="submit"
               class="text-sm bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
                      font-semibold px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
-        🗑 클러스터 리셋
+        🗑 리셋
       </button>
     </form>
     {% endif %}
     <a href="{{ url_for('compare.bid_excel', bid_id=bid.bid_id) }}"
        class="text-sm bg-green-700 hover:bg-green-800 text-white font-semibold
-              px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+              px-3 py-2 rounded-lg transition-colors whitespace-nowrap ml-auto">
       ⬇ Excel
     </a>
   </div>
 </div>
+
+{# 모델 셀렉터가 폼 밖에 있으므로, 제출 시 cmp 셀렉터값을 각 폼에 주입 #}
+<script>
+function qdSyncModel(form){
+  try{
+    var prov=document.getElementById('cmp_prov');
+    var modelSel=document.getElementById('cmp_model');
+    var modelCustom=document.getElementById('cmp_model_custom');
+    var pairs={
+      provider_id: prov ? prov.value : '',
+      model: (modelCustom && !modelCustom.classList.contains('hidden'))
+               ? modelCustom.value
+               : (modelSel ? modelSel.value : '')
+    };
+    Object.keys(pairs).forEach(function(name){
+      var ex=form.querySelector('[name="'+name+'"]');
+      if(ex){ ex.value=pairs[name]; }
+      else { var h=document.createElement('input'); h.type='hidden'; h.name=name; h.value=pairs[name]; form.appendChild(h); }
+    });
+  }catch(e){}
+  return true;
+}
+</script>
+
+{% if data.clusters or data.categories %}
+<!-- 표시 도구: 트리 경로 토글 (항상 노출) -->
+<div class="flex items-center gap-2 flex-wrap mb-2 text-xs">
+  <label class="inline-flex items-center gap-1.5 cursor-pointer" title="품목 아래 상위 트리 경로 표시">
+    <input type="checkbox" id="qdTreeToggle" checked onchange="qdToggleTreePaths(this)"
+           style="accent-color:#2563EB;width:14px;height:14px">
+    <span class="text-gray-600 font-medium">🌳 트리 경로 표시</span>
+  </label>
+</div>
+{% endif %}
+
+{% if data.clusters %}
+<!-- 클러스터 도구: 접기/펼치기 + 일괄 확정 (③④) -->
+<div class="flex items-center gap-2 flex-wrap mb-3 text-xs">
+  <div class="flex items-center gap-1">
+    <button type="button" onclick="qdAllCats(false)"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg">▸ 전체 접기</button>
+    <button type="button" onclick="qdAllCats(true)"
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg">▾ 전체 펼치기</button>
+  </div>
+  <span class="text-gray-300">|</span>
+  {% if has_role('manager') %}
+  <label class="inline-flex items-center gap-1.5 cursor-pointer">
+    <input type="checkbox" id="qdAcceptAll" onchange="qdToggleAllAccept(this)"
+           style="accent-color:#16A34A;width:14px;height:14px">
+    <span class="text-gray-600 font-medium">확정 대상 전체 선택</span>
+  </label>
+  <span id="qdAcceptCount" class="text-gray-500"></span>
+  <button type="button" id="qdAcceptBtn" onclick="qdBatchAccept()" disabled
+          class="bg-green-600 hover:bg-green-700 text-white font-semibold px-3 py-1.5 rounded-lg
+                 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+    ✅ 선택 일괄 확정
+  </button>
+  <form method="POST" id="qdBatchAcceptForm"
+        action="{{ url_for('compare.accept_batch_from_compare', bid_id=bid.bid_id) }}" class="hidden">
+    <input type="hidden" name="cluster_ids_json" id="qdBatchAcceptIds">
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 
 <!-- 공급가액 카드 -->
 <div class="grid gap-3 mb-4"
@@ -154,52 +244,9 @@ main { overflow-x: clip !important; }
 
   <span id="cnt" class="empty">선택 안 됨</span>
 
-  <!-- 묶음선택 드롭다운 -->
-  <div style="display:flex;gap:5px;align-items:center">
-    <span style="font-size:9px;color:#64748B">묶음선택:</span>
-    <select id="batchPickSel" onchange="pickFromBar(this)"
-            style="font-size:10px;padding:4px 7px;border-radius:6px;
-                   border:0.5px solid #93C5FD;background:white;color:#1D4ED8;max-width:220px">
-      <option value="">클러스터/행 통째 선택...</option>
-      {% if data.clusters %}
-      <optgroup label="클러스터">
-        {% for cl in data.clusters %}
-        {% set cl_opt_ids = [] %}
-        {% for grp in cl.groups %}
-          {% for v in vendors %}
-            {% if grp.cells and grp.cells.get(v) and grp.cells.get(v).item_id %}
-              {% set _ = cl_opt_ids.append(grp.cells[v].item_id) %}
-            {% endif %}
-          {% endfor %}
-        {% endfor %}
-        {% if cl_opt_ids %}
-        <option value="cl:{{ cl.cluster_id }}" data-ids='{{ cl_opt_ids|tojson }}'>
-          {{ cl.cat }} › {{ cl.representative_name }} ({{ cl_opt_ids|length }}개)
-        </option>
-        {% endif %}
-        {% endfor %}
-      </optgroup>
-      {% endif %}
-      {% if data.categories %}
-      <optgroup label="미분류 행">
-        {% for cat, cat_rows in data.categories.items() %}
-        {% for row in cat_rows %}
-        {% set row_opt_ids = [] %}
-        {% for v in vendors %}
-          {% set iid = (row.item_ids or {}).get(v, '') %}
-          {% if iid %}{% set _ = row_opt_ids.append(iid) %}{% endif %}
-        {% endfor %}
-        {% if row_opt_ids %}
-        <option value="row:{{ loop.index }}_{{ cat }}" data-ids='{{ row_opt_ids|tojson }}'>
-          {{ cat }} › {{ row.name }} ({{ row_opt_ids|length }}개)
-        </option>
-        {% endif %}
-        {% endfor %}
-        {% endfor %}
-      </optgroup>
-      {% endif %}
-    </select>
-  </div>
+  <span style="font-size:9px;color:#94A3B8;white-space:nowrap">
+    ◉ 클러스터 선택 · ⌘/Ctrl+클릭 다중선택 · ⋮⋮ 드래그로 순서변경
+  </span>
 
   <!-- 이동 / 제외 폼 -->
   <div style="margin-left:auto;display:flex;gap:5px;align-items:center;flex-wrap:wrap">
@@ -210,15 +257,22 @@ main { overflow-x: clip !important; }
       <input type="hidden" name="item_ids_json" id="selectedItemsJson">
       <select name="cluster_id" id="clusterSelect" required onchange="onClusterChange(this)"
               style="font-size:10px;padding:4px 7px;border-radius:6px;
-                     border:0.5px solid #93C5FD;background:white;color:#1D4ED8;max-width:180px">
-        <option value="">이동 대상 클러스터...</option>
+                     border:0.5px solid #93C5FD;background:white;color:#1D4ED8;max-width:200px">
+        <option value="">이동 대상 선택...</option>
+        <optgroup label="── 분류로 이동 (선택 클러스터 전체) ──">
+          {% for dc in (dict_categories or []) %}
+          <option value="cat::{{ dc }}">🗂 {{ dc }}(으)로 분류 이동</option>
+          {% endfor %}
+        </optgroup>
+        <optgroup label="── 기존 클러스터로 이동 (항목) ──">
         {% for cl in data.clusters %}
         {% if cl.status in ['pending', 'held'] %}
         <option value="{{ cl.cluster_id }}" data-cat="{{ cl.cat }}">
-          {{ cl.cat }} › {{ cl.representative_name }}
+          {{ cl.cat }} › {{ cl.representative_name|leaf }}
         </option>
         {% endif %}
         {% endfor %}
+        </optgroup>
         <option value="new">+ 새 클러스터 만들기</option>
       </select>
       <input type="text" name="representative_name" id="newClusterName"
@@ -230,12 +284,9 @@ main { overflow-x: clip !important; }
         <select name="category" id="catSelect"
                 style="font-size:10px;padding:4px 7px;border-radius:6px;
                        border:0.5px solid #93C5FD;background:white;color:#1D4ED8">
-          <option value="자재">자재</option>
-          <option value="인건비">인건비</option>
-          <option value="출장비">출장비</option>
-          <option value="영업이익">영업이익</option>
-          <option value="관리비">관리비</option>
-          <option value="기타">기타</option>
+          {% for dc in (dict_categories or ['자재','인건비','기타']) %}
+          <option value="{{ dc }}">{{ dc }}</option>
+          {% endfor %}
         </select>
         <span id="autoCatHint" style="display:none;font-size:8px;color:#60A5FA;white-space:nowrap">✨자동제안</span>
       </div>
@@ -294,17 +345,35 @@ main { overflow-x: clip !important; }
 <!-- ══════════════════════════════════════════
      메인 비교 테이블
      ══════════════════════════════════════════ -->
-<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
-<table class="border-collapse text-xs" id="compareTable" style="width:100%">
+<!-- 표시 폭 조절 도구 (항목 4) -->
+{% if data.clusters or data.categories %}
+<div class="flex items-center gap-2 flex-wrap mb-2 text-xs">
+  <span class="text-gray-500 font-medium">열 너비:</span>
+  <button type="button" onclick="qdSetColW(90)" class="qd-colw-btn bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">좁게</button>
+  <button type="button" onclick="qdSetColW(120)" class="qd-colw-btn bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">보통</button>
+  <button type="button" onclick="qdSetColW(170)" class="qd-colw-btn bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">넓게</button>
+  <input type="range" id="qdColWRange" min="70" max="240" value="120" step="10"
+         oninput="qdSetColW(this.value)" style="width:120px;accent-color:#2563EB">
+  <span class="text-gray-400">클러스터 열 경계를 드래그해도 조절됩니다</span>
+</div>
+{% endif %}
+
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto" id="compareScroll">
+<table class="border-collapse text-xs" id="compareTable"
+       style="--qd-clw:170px;--qd-vw:120px;table-layout:auto;min-width:100%">
   <thead>
     <tr id="colHeader" style="background:#F8FAFC">
-      <th style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
+      <th id="qdClusterColHead" style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:left;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
-                 width:170px;min-width:160px">클러스터</th>
+                 width:var(--qd-clw);min-width:var(--qd-clw);max-width:var(--qd-clw);position:relative">
+        클러스터
+        <span id="qdClusterResize" title="드래그하여 클러스터 열 너비 조절"
+              style="position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:5"></span>
+      </th>
       {% for v in vendors %}
       <th style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:center;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
-                 min-width:85px;white-space:nowrap">{{ v }}</th>
+                 width:var(--qd-vw);min-width:var(--qd-vw);white-space:nowrap">{{ v }}</th>
       {% endfor %}
       <th style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:right;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
@@ -339,10 +408,22 @@ main { overflow-x: clip !important; }
   {% if cl.cat != last_cat.v %}
   {% set last_cat.v = cl.cat %}
   {% set c_info = cat_colors.get(cl.cat, ('bg-gray-100 text-gray-600', '#F8FAFC', '#64748B')) %}
-  <tr style="background:{{ c_info[1] }};border-top:1px solid #E2E8F0">
+  <tr class="qd-cat-header" data-cat="{{ cl.cat }}"
+      style="background:{{ c_info[1] }};border-top:1px solid #E2E8F0;cursor:pointer"
+      onclick="qdToggleCat('{{ cl.cat|e }}')">
     <td colspan="{{ vendors|length + 2 }}"
-        style="padding:3px 10px;color:{{ c_info[2] }};font-size:9px;font-weight:700;letter-spacing:.05em">
+        style="padding:4px 10px;color:{{ c_info[2] }};font-size:9px;font-weight:700;letter-spacing:.05em">
+      <span class="qd-cat-caret" data-cat="{{ cl.cat }}"
+            style="display:inline-block;width:12px;transition:transform .12s">▾</span>
       {{ cl.cat }}
+      <span class="qd-cat-count" data-cat="{{ cl.cat }}" style="font-weight:400;opacity:.6"></span>
+      {% if has_role('manager') %}
+      <button type="button"
+              onclick="event.stopPropagation();qdRenameCat('{{ cl.cat|e }}')"
+              title="분류명 수정"
+              style="margin-left:6px;font-size:9px;color:{{ c_info[2] }};opacity:.7;
+                     background:none;border:none;cursor:pointer">✏️</button>
+      {% endif %}
     </td>
   </tr>
   {% endif %}
@@ -377,34 +458,62 @@ main { overflow-x: clip !important; }
   {# 최저·최고: 업체별 총액 기준, min_vendor/max_vendor 직접 비교 #}
 
   {% for ri in range(max_rows.v) %}
-  <tr style="{{ bg_style }};
+  <tr class="qd-cat-row" data-cat="{{ cl.cat }}"
+      style="{{ bg_style }};
              {% if ri == 0 %}border-top:2px solid {{ border_color }};{% else %}border-top:0.5px dashed {{ inner_border }};{% endif %}
              {% if ri == max_rows.v - 1 %}border-bottom:2px solid {{ border_color }};{% endif %}">
 
     {# 클러스터 셀 — 첫 번째 행만, rowspan #}
     {% if ri == 0 %}
     <td rowspan="{{ max_rows.v }}"
+        data-drop="cluster" data-cl-head="1" data-cluster-id="{{ cl.cluster_id }}" data-cl-status="{{ cl.status }}"
         style="{{ bg_style }};border-left:3px solid {{ border_color }};
                border-right:1.5px solid {{ border_color }};
-               vertical-align:middle;padding:7px 8px;width:170px;min-width:160px">
+               vertical-align:middle;padding:7px 8px;
+               width:var(--qd-clw);min-width:var(--qd-clw);max-width:var(--qd-clw)">
 
       {# ◉ 클러스터 전체 선택 핸들 #}
-      <div class="cl-pick"
-           data-ids='{{ cl_item_ids|tojson }}'
-           data-name="{{ cl.representative_name }}"
-           data-cl-type="cluster"
-           onclick="pickCluster(this)">
-        <span style="font-size:11px;flex-shrink:0">◉</span>
-        <div style="font-weight:600;font-size:11px;word-break:break-all;line-height:1.3">
-          📦 {{ cl.representative_name }}
+      <div style="display:flex;align-items:flex-start;gap:2px">
+        <span class="qd-sort-handle" draggable="true" title="드래그하여 순서 변경"
+              data-cluster-id="{{ cl.cluster_id }}" data-cluster-cat="{{ cl.cat }}"
+              style="cursor:grab;color:#CBD5E1;font-size:11px;line-height:1;padding:1px 2px;
+                     flex-shrink:0;user-select:none">⋮⋮</span>
+        <div class="cl-pick" style="flex:1;min-width:0"
+             data-ids='{{ cl_item_ids|tojson }}'
+             data-name="{{ cl.representative_name|leaf }}"
+             data-cl-type="cluster"
+             data-cluster-id="{{ cl.cluster_id }}"
+             data-cluster-cat="{{ cl.cat }}"
+             onclick="pickCluster(this, event)">
+          <span style="font-size:11px;flex-shrink:0">◉</span>
+          <div style="min-width:0">
+          <div class="rep" style="font-weight:600;font-size:11px;word-break:break-all;line-height:1.3">
+            📦 {{ cl.representative_name|leaf }}
+          </div>
+          {% set _cl_path = cl.representative_name|treepath %}
+          {% if _cl_path %}
+          <div class="qd-treepath" style="font-size:8px;color:#94A3B8;line-height:1.2;margin-top:1px" title="{{ _cl_path }}">
+            {{ _cl_path }}
+          </div>
+          {% endif %}
+        </div>
         </div>
       </div>
 
-      {# 칩: 카테고리 + 🔍상세 + 상태 + 카탈로그 참조 #}
+      {# 칩: 카테고리(클릭 시 분류변경) + 🔍상세 + 상태 + 카탈로그 참조 #}
       {% set c_info = cat_colors.get(cl.cat, ('bg-gray-100 text-gray-600', '#F8FAFC', '#64748B')) %}
       <div style="display:flex;gap:3px;align-items:center;flex-wrap:nowrap;margin-bottom:4px;overflow:hidden">
+        {% if has_role('manager') %}
+        <button type="button"
+                onclick="qdOpenCatChange('{{ cl.cluster_id }}', {{ cl.cat|tojson }})"
+                title="분류 변경"
+                class="rounded {{ c_info[0] }} flex-shrink-0"
+                style="font-size:8px;padding:1px 4px;white-space:nowrap;font-weight:600;
+                       border:none;cursor:pointer">{{ cl.cat }} ▾</button>
+        {% else %}
         <span class="rounded {{ c_info[0] }} flex-shrink-0"
               style="font-size:8px;padding:1px 4px;white-space:nowrap;font-weight:600">{{ cl.cat }}</span>
+        {% endif %}
         <a href="{{ url_for('catalog.cluster_detail', cluster_id=cl.cluster_id) }}?return_bid_id={{ bid.bid_id }}&_t={{ request.args.get('_t','') }}"
            style="font-size:8px;padding:1px 4px;border-radius:3px;white-space:nowrap;
                   background:white;border:0.5px solid #CBD5E1;color:#64748B;flex-shrink:0;
@@ -428,7 +537,7 @@ main { overflow-x: clip !important; }
         <form method="POST"
               action="{{ url_for('compare.accept_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
               onsubmit="return confirm('확정하시겠습니까?\n카탈로그에 자동 등록됩니다.')" class="inline">
-          <input type="hidden" name="representative_name" value="{{ cl.representative_name }}">
+          <input type="hidden" name="representative_name" value="{{ cl.representative_name|leaf }}">
           <button style="font-size:9px;padding:1px 5px;border-radius:3px;border:0.5px solid #16A34A;
                          background:#DCFCE7;color:#15803D;cursor:pointer;font-weight:500;white-space:nowrap">✅ 확정</button>
         </form>
@@ -467,14 +576,24 @@ main { overflow-x: clip !important; }
       </div>
       {% endif %}
 
-      {# 병합 선택 체크박스 #}
-      <label style="font-size:8px;color:#94A3B8;cursor:pointer;display:flex;align-items:center;gap:3px;margin-top:2px">
-        <input type="checkbox" class="cluster-sel-chk"
-               value="{{ cl.cluster_id }}" data-name="{{ cl.representative_name }}"
-               onchange="onClusterSelCmp(this)"
-               style="accent-color:#7C3AED;width:10px;height:10px">
-        병합 선택
-      </label>
+      {# 병합·확정 선택 (한 줄, 항목 8) #}
+      <div style="display:flex;align-items:center;gap:6px;margin-top:2px;font-size:8px;flex-wrap:nowrap">
+        <label style="color:#7C3AED;cursor:pointer;display:inline-flex;align-items:center;gap:2px" title="병합 대상으로 선택">
+          <input type="checkbox" class="cluster-sel-chk"
+                 value="{{ cl.cluster_id }}" data-name="{{ cl.representative_name|leaf }}"
+                 onchange="onClusterSelCmp(this)"
+                 style="accent-color:#7C3AED;width:10px;height:10px">병합
+        </label>
+        {% if has_role('manager') and cl.status in ('pending', 'held') %}
+        <span style="color:#CBD5E1">|</span>
+        <label style="color:#15803D;cursor:pointer;display:inline-flex;align-items:center;gap:2px" title="일괄 확정 대상으로 선택">
+          <input type="checkbox" class="qd-accept-chk"
+                 value="{{ cl.cluster_id }}" data-name="{{ cl.representative_name|leaf }}"
+                 onchange="qdOnAcceptSel()"
+                 style="accent-color:#16A34A;width:10px;height:10px">확정
+        </label>
+        {% endif %}
+      </div>
     </td>
     {% endif %}
 
@@ -497,12 +616,17 @@ main { overflow-x: clip !important; }
       <td class="vendor-cell {{ 'min-bg' if is_min else 'max-bg' if is_max else '' }}"
           data-item-id="{{ found.cell.item_id }}"
           data-cluster-id="{{ cl.cluster_id }}"
+          data-drop="cluster" data-cl-status="{{ cl.status }}" data-cat="{{ cl.cat }}"
           onclick="toggleCell(this)">
         {% if ri > 0 %}
         <div style="font-size:8px;color:#A16207;background:#FEF3C7;padding:1px 5px;
                     border-radius:3px;display:inline-block;margin-bottom:2px;white-space:nowrap">추가 품목</div>
         {% endif %}
-        <div class="nm">{{ found.cell.name_normalized or found.cell.name_raw or '' }}</div>
+        {% set _cell_name = found.cell.name_normalized or found.cell.name_raw or '' %}
+        {% set _cell_path = (found.cell.path|treepath) or (_cell_name|treepath) %}
+        <div class="nm">
+          {{ _cell_name|leaf }}{% if _cell_path %}<span class="qd-treepath" style="color:#B0BAC9;font-weight:400" title="{{ _cell_path }}"> · {{ _cell_path }}</span>{% endif %}
+        </div>
         {# 총액 표시 (기준) #}
         {% if found.cell.amount %}
         <div class="pr" style="font-weight:700">
@@ -562,16 +686,23 @@ main { overflow-x: clip !important; }
   {% endfor %}{# end clusters #}
   {% endif %}{# end data.clusters #}
 
+  {# ─── 드래그드랍: 새 클러스터 존 ─── #}
+  <tr class="qdnd-newzone-row">
+    <td colspan="{{ vendors|length + 2 }}" data-drop="new" class="qdnd-newzone">
+      ＋ 품목을 여기에 끌어놓으면 새 클러스터 생성
+    </td>
+  </tr>
+
   {# ─── 미분류 항목 ─── #}
   {% if data.categories %}
   <tr>
-    <td colspan="{{ vendors|length + 2 }}"
+    <td colspan="{{ vendors|length + 2 }}" data-drop="unclustered"
         style="padding:5px 10px;font-size:9px;font-weight:600;color:#94A3B8;
                text-transform:uppercase;letter-spacing:.05em;
                background:#F8FAFC;border-top:1px solid #E2E8F0">
       미분류 항목
       <span style="font-weight:400;color:#CBD5E1;margin-left:4px">
-        (◫ 클릭 = 행 통째 선택 · 셀 클릭 = 개별)
+        (◫ 클릭 = 행 통째 선택 · 셀 클릭 = 개별 · 끌어놓기 = 이동/빼내기)
       </span>
     </td>
   </tr>
@@ -604,14 +735,17 @@ main { overflow-x: clip !important; }
     <td style="vertical-align:middle;padding:6px 8px;width:170px;min-width:160px">
       <div class="cl-pick"
            data-ids='{{ row_item_ids|tojson }}'
-           data-name="{{ row.name }}"
+           data-name="{{ row.name|leaf }}"
            data-cl-type="row"
            onclick="pickRow(this)"
            id="rpick_{{ row_key }}">
         <span style="font-size:11px;flex-shrink:0">◫</span>
-        <div style="font-size:10px;color:#475569;word-break:break-all;line-height:1.3">
-          {{ row.name }}
-          <span style="color:#94A3B8;font-size:9px"> · {{ row_item_ids|length }}개</span>
+        <div style="min-width:0">
+          {% set _row_path = (row.path|treepath) or (row.name|treepath) %}
+          <div style="font-size:10px;color:#475569;word-break:break-all;line-height:1.3">
+            {{ row.name|leaf }}
+            <span style="color:#94A3B8;font-size:9px"> · {{ row_item_ids|length }}개</span>{% if _row_path %}<span class="qd-treepath" style="color:#B0BAC9;font-size:8px;font-weight:400" title="{{ _row_path }}"> · {{ _row_path }}</span>{% endif %}
+          </div>
         </div>
       </div>
     </td>
@@ -624,10 +758,15 @@ main { overflow-x: clip !important; }
     {% if p %}
     <td class="vendor-cell {{ 'min-bg' if is_min else 'max-bg' if is_max else '' }}"
         data-item-id="{{ iid }}"
-        data-row="{{ row_key }}"
+        data-row="{{ row_key }}" data-cat="{{ cat }}"
         onclick="{% if iid %}toggleCell(this){% endif %}"
         style="{% if not iid %}cursor:default{% endif %}">
-      <div class="nm">{{ row.name }}</div>
+      <div class="nm">{{ row.name|leaf }}</div>
+      {% set _uc_path = (row.path|treepath) or (row.name|treepath) %}
+      {% if _uc_path %}
+      <div class="tp qd-treepath" style="font-size:8px;color:#94A3B8;line-height:1.15;word-break:break-all"
+           title="{{ _uc_path }}">{{ _uc_path }}</div>
+      {% endif %}
       <div class="pr">{{ '{:,}'.format(p|int) }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}</div>
       {% set vfx_unc = data.fx_rates.get(v) if data.fx_rates else none %}
     </td>
@@ -721,25 +860,85 @@ main { overflow-x: clip !important; }
   <span style="background:#EFF6FF;border:0.5px solid #BFDBFE;border-radius:3px;padding:1px 6px;font-weight:500;color:#2563EB">-5~20%</span>
   <span style="background:#EFF6FF;border:0.5px solid #93C5FD;border-radius:3px;padding:1px 6px;font-weight:600;color:#1D4ED8">-20%↓</span>
 </div>
+
+<!-- 끌어오기 새 클러스터 생성 모달 (①: 카테고리 지정 + 이름) -->
+<div id="qdNewClusterOverlay"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:200;
+            align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:12px;max-width:360px;width:100%;padding:18px;
+              box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div style="font-size:14px;font-weight:700;color:#0F172A;margin-bottom:12px">➕ 새 클러스터 만들기</div>
+    <label style="display:block;font-size:11px;color:#64748B;margin-bottom:3px">분류(카테고리)</label>
+    <select id="qdNewCatSel"
+            style="width:100%;font-size:13px;padding:7px 9px;border:1px solid #CBD5E1;border-radius:8px;margin-bottom:4px">
+    </select>
+    <input type="text" id="qdNewCatCustom" placeholder="직접 입력 (목록에 없으면)"
+           style="width:100%;font-size:12px;padding:6px 9px;border:1px solid #E2E8F0;border-radius:8px;
+                  margin-bottom:12px;display:none">
+    <label style="display:block;font-size:11px;color:#64748B;margin-bottom:3px">클러스터 이름</label>
+    <input type="text" id="qdNewNameInp"
+           style="width:100%;font-size:13px;padding:7px 9px;border:1px solid #CBD5E1;border-radius:8px;margin-bottom:16px">
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" onclick="qdNewClusterCancel()"
+              style="font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid #E2E8F0;
+                     background:#fff;color:#64748B;cursor:pointer">취소</button>
+      <button type="button" onclick="qdNewClusterConfirm()"
+              style="font-size:12px;padding:7px 16px;border-radius:8px;border:none;
+                     background:#2563EB;color:#fff;font-weight:600;cursor:pointer">생성</button>
+    </div>
+  </div>
+</div>
+
+<!-- 분류명(카테고리) 수정 폼 (②) -->
+<form method="POST" id="qdCatRenameForm"
+      action="{{ url_for('compare.rename_category_from_compare', bid_id=bid.bid_id) }}"
+      style="display:none">
+  <input type="hidden" name="old_category" id="qdCatOld">
+  <input type="hidden" name="new_category" id="qdCatNew">
+</form>
+
+<!-- 클러스터 분류 변경 모달 -->
+<div id="qdCatChangeOverlay"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:200;
+            align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:12px;max-width:340px;width:100%;padding:18px;
+              box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div style="font-size:14px;font-weight:700;color:#0F172A;margin-bottom:4px">🗂 클러스터 분류 변경</div>
+    <div style="font-size:11px;color:#64748B;margin-bottom:12px">
+      이 클러스터 소속 항목 전체의 분류가 바뀝니다.
+      <span id="qdCatChangeCur" style="font-weight:600;color:#334155"></span>
+    </div>
+    <form method="POST" id="qdCatChangeForm">
+      <input type="hidden" name="return" value="compare">
+      <label style="display:block;font-size:11px;color:#64748B;margin-bottom:3px">변경할 분류</label>
+      <select id="qdCatChangeSel" onchange="qdCatChangeSelChange()"
+              style="width:100%;font-size:13px;padding:7px 9px;border:1px solid #CBD5E1;border-radius:8px;margin-bottom:4px">
+        {% for c in (dict_categories or []) %}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+        <option value="__new__">➕ 신규 분류 만들기…</option>
+      </select>
+      <input type="text" id="qdCatChangeCustom" name="category_custom" placeholder="새 분류명 입력"
+             style="width:100%;font-size:12px;padding:6px 9px;border:1px solid #93C5FD;border-radius:8px;
+                    margin-bottom:12px;display:none">
+      <input type="hidden" name="category" id="qdCatChangeValue">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" onclick="qdCatChangeCancel()"
+                style="font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid #E2E8F0;
+                       background:#fff;color:#64748B;cursor:pointer">취소</button>
+        <button type="button" onclick="qdCatChangeConfirm()"
+                style="font-size:12px;padding:7px 16px;border-radius:8px;border:none;
+                       background:#2563EB;color:#fff;font-weight:600;cursor:pointer">변경</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 const sel = new Set();
 let pickedCluster = null;
-
-/* ── 묶음선택 드롭다운 ── */
-function pickFromBar(s) {
-  clearSelOnly();
-  if (!s.value) return;
-  const opt = s.options[s.selectedIndex];
-  const ids = JSON.parse(opt.dataset.ids || '[]');
-  ids.forEach(id => {
-    const td = document.querySelector(`[data-item-id="${id}"]`);
-    if (td) { sel.add(id); td.classList.add('sel'); }
-  });
-  refresh();
-}
 
 function clearSelOnly() {
   sel.clear();
@@ -779,17 +978,36 @@ function toggleCell(td) {
   refresh();
 }
 
-/* ── ◉ 클러스터 통째 선택 ── */
-function pickCluster(el) {
+/* ── ◉ 클러스터 통째 선택 (다중 선택 지원) ── */
+const selectedClusterIds = new Set();   // 분류 이동 대상 클러스터 ID들
+function pickCluster(el, ev) {
+  const multi = ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey);
   const already = el.classList.contains('picked');
-  document.querySelectorAll('.cl-pick.picked').forEach(e => e.classList.remove('picked'));
-  document.querySelectorAll('.vendor-cell.sel').forEach(e => e.classList.remove('sel'));
-  sel.clear();
-  if (already) { pickedCluster = null; refresh(); return; }
+  const clId = el.dataset.clusterId;
+  if (!multi) {
+    // 단일 선택: 기존 선택 모두 해제
+    document.querySelectorAll('.cl-pick.picked').forEach(e => e.classList.remove('picked'));
+    document.querySelectorAll('.vendor-cell.sel').forEach(e => e.classList.remove('sel'));
+    sel.clear();
+    selectedClusterIds.clear();
+    if (already) { pickedCluster = null; refresh(); return; }
+  } else {
+    // 다중 선택: 토글
+    if (already) {
+      el.classList.remove('picked');
+      selectedClusterIds.delete(clId);
+      JSON.parse(el.dataset.ids || '[]').forEach(id => {
+        sel.delete(id);
+        const td = document.querySelector(`[data-item-id="${id}"]`);
+        if (td) td.classList.remove('sel');
+      });
+      refresh(); return;
+    }
+  }
   el.classList.add('picked');
   pickedCluster = el.dataset.name;
-  const ids = JSON.parse(el.dataset.ids || '[]');
-  ids.forEach(id => {
+  if (clId) selectedClusterIds.add(clId);
+  JSON.parse(el.dataset.ids || '[]').forEach(id => {
     const td = document.querySelector(`[data-item-id="${id}"]`);
     if (td) { sel.add(id); td.classList.add('sel'); }
   });
@@ -824,24 +1042,44 @@ function pickRow(el) {
 /* ── 이동 폼 ── */
 function onClusterChange(s) {
   const isNew = s.value === 'new';
+  const isCat = s.value.startsWith('cat::');
   document.getElementById('newClusterName').style.display = isNew ? 'inline-block' : 'none';
   const catWrap = document.getElementById('catSelectWrap');
   catWrap.style.display = isNew ? 'flex' : 'none';
   const hint = document.getElementById('autoCatHint');
-  if (isNew) {
-    const cats = {};
-    [...sel].forEach(id => {
-      const td = document.querySelector(`[data-item-id="${id}"]`);
-      const cat = td ? (td.dataset.clusterId ? '' : '') : '';
-    });
-    hint.style.display = 'none';
-  }
+  if (isNew) hint.style.display = 'none';
 }
 
 function prepareMove() {
-  if (sel.size === 0) { alert('이동할 항목을 선택하세요.'); return false; }
   const clSel = document.getElementById('clusterSelect').value;
-  if (!clSel) { alert('클러스터를 선택하세요.'); return false; }
+  if (!clSel) { alert('이동 대상을 선택하세요.'); return false; }
+
+  // 분류 이동: 선택된 클러스터(들)를 다른 분류로 일괄 이동
+  if (clSel.startsWith('cat::')) {
+    const targetCat = clSel.slice(5);
+    if (selectedClusterIds.size === 0) {
+      alert('분류를 옮길 클러스터를 선택하세요.\n(클러스터의 ◉ 핸들 클릭, 여러 개는 ⌘/Ctrl+클릭)');
+      return false;
+    }
+    if (!confirm(selectedClusterIds.size + '개 클러스터를 "' + targetCat + '" 분류로 이동하시겠습니까?')) {
+      return false;
+    }
+    const form = document.getElementById('moveForm');
+    form.action = "{{ url_for('compare.move_clusters_to_category', bid_id=bid.bid_id) }}";
+    // 클러스터 ID 목록 + 대상 분류 전송
+    document.getElementById('selectedItemsJson').value = JSON.stringify([...selectedClusterIds]);
+    var catInput = document.getElementById('moveCatTarget');
+    if (!catInput) {
+      catInput = document.createElement('input');
+      catInput.type = 'hidden'; catInput.name = 'category'; catInput.id = 'moveCatTarget';
+      form.appendChild(catInput);
+    }
+    catInput.value = targetCat;
+    return true;
+  }
+
+  // 기존: 개별 항목을 클러스터로 이동
+  if (sel.size === 0) { alert('이동할 항목을 선택하세요.'); return false; }
   if (clSel === 'new' && !document.getElementById('newClusterName').value.trim()) {
     alert('새 클러스터 이름을 입력하세요.'); return false;
   }
@@ -858,17 +1096,101 @@ function prepareExclude() {
 
 function clearAll() {
   sel.clear();
+  selectedClusterIds.clear();
   document.querySelectorAll('.vendor-cell.sel').forEach(e => e.classList.remove('sel'));
   document.querySelectorAll('.cl-pick.picked').forEach(e => e.classList.remove('picked'));
   pickedCluster = null;
-  const ps = document.getElementById('batchPickSel');
-  if (ps) ps.value = '';
   const cs = document.getElementById('clusterSelect');
   if (cs) cs.value = '';
   document.getElementById('newClusterName').style.display = 'none';
   document.getElementById('catSelectWrap').style.display = 'none';
   refresh();
 }
+
+/* ── 열 너비 조절 (항목 4) ── */
+function qdSetColW(px){
+  px=parseInt(px)||120;
+  var t=document.getElementById('compareTable');
+  if(t) t.style.setProperty('--qd-vw', px+'px');
+  var r=document.getElementById('qdColWRange');
+  if(r && parseInt(r.value)!==px) r.value=px;
+  qdSyncMinWidth();
+}
+function qdSyncMinWidth(){
+  // 열 너비 합이 컨테이너보다 크면 자동으로 가로 스크롤 (overflow-x-auto가 처리)
+  var t=document.getElementById('compareTable');
+  if(!t) return;
+  // table-layout:auto + 셀 min-width로 자연히 확장되므로 별도 계산 불필요.
+  // 컨테이너보다 좁아지지 않게 최소폭만 보장.
+}
+(function(){
+  // 클러스터 열 리사이즈 핸들 드래그
+  var handle=document.getElementById('qdClusterResize');
+  if(!handle) return;
+  var startX=0, startW=170, dragging=false;
+  handle.addEventListener('mousedown', function(e){
+    dragging=true; startX=e.clientX;
+    var t=document.getElementById('compareTable');
+    var cur=getComputedStyle(t).getPropertyValue('--qd-clw');
+    startW=parseInt(cur)||170;
+    e.preventDefault();
+    document.body.style.userSelect='none';
+  });
+  document.addEventListener('mousemove', function(e){
+    if(!dragging) return;
+    var t=document.getElementById('compareTable');
+    var w=Math.max(120, Math.min(360, startW + (e.clientX-startX)));
+    t.style.setProperty('--qd-clw', w+'px');
+  });
+  document.addEventListener('mouseup', function(){
+    if(dragging){ dragging=false; document.body.style.userSelect=''; }
+  });
+})();
+
+/* ── 클러스터 순서 드래그&드롭 정렬 (항목 6) ── */
+(function(){
+  var dragCid=null;
+  document.addEventListener('dragstart', function(e){
+    var h=e.target.closest && e.target.closest('.qd-sort-handle');
+    if(!h) return;
+    dragCid=h.dataset.clusterId;
+    e.dataTransfer.effectAllowed='move';
+    try{ e.dataTransfer.setData('text/plain', dragCid); }catch(_){}
+  });
+  document.addEventListener('dragover', function(e){
+    if(!dragCid) return;
+    var td=e.target.closest && e.target.closest('td[data-cl-head][data-cluster-id]');
+    if(td){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }
+  });
+  document.addEventListener('drop', function(e){
+    if(!dragCid) return;
+    var td=e.target.closest && e.target.closest('td[data-cl-head][data-cluster-id]');
+    if(!td){ dragCid=null; return; }
+    e.preventDefault();
+    var targetCid=td.dataset.clusterId;
+    if(targetCid===dragCid){ dragCid=null; return; }
+    var srcTd=document.querySelector('td[data-cl-head][data-cluster-id="'+dragCid+'"]');
+    var srcRow=srcTd?srcTd.closest('tr'):null;
+    var tgtRow=td.closest('tr');
+    if(!srcRow||!tgtRow){ dragCid=null; return; }
+    var rows=[...document.querySelectorAll('tr')];
+    var si=rows.indexOf(srcRow), ti=rows.indexOf(tgtRow);
+    if(si<ti) tgtRow.parentNode.insertBefore(srcRow, tgtRow.nextSibling);
+    else tgtRow.parentNode.insertBefore(srcRow, tgtRow);
+    dragCid=null;
+    saveClusterOrder();
+  });
+  window.saveClusterOrder=function(){
+    var ids=[...document.querySelectorAll('td[data-cl-head][data-cluster-id]')]
+      .map(function(td){ return td.dataset.clusterId; });
+    fetch("{{ url_for('compare.reorder_clusters_route', bid_id=bid.bid_id) }}",{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({order:ids})
+    }).then(function(r){return r.json();}).then(function(d){
+      if(!d.ok) console.warn('순서 저장 실패', d.error);
+    }).catch(function(e){ console.warn('순서 저장 오류', e); });
+  };
+})();
 
 /* ── 클러스터 병합 ── */
 const selectedClustersCmp = new Map();
@@ -974,6 +1296,379 @@ if (_mainEl) _mainEl.addEventListener('scroll', adjustColHeader, {passive: true}
 window.addEventListener('pageshow', function(e) {
   if (e.persisted) location.href = location.pathname + '?_t={{ request.args.get("_t","") }}&_r=' + Date.now();
 });
+
+/* ── 클러스터 분류 변경 ── */
+var _qdCatChangeClId=null;
+function qdOpenCatChange(clusterId, curCat){
+  _qdCatChangeClId=clusterId;
+  var cur=document.getElementById('qdCatChangeCur');
+  if(cur) cur.textContent='(현재: '+curCat+')';
+  var sel=document.getElementById('qdCatChangeSel');
+  // 현재 분류를 기본 선택 (목록에 있으면)
+  var found=false;
+  for(var i=0;i<sel.options.length;i++){
+    if(sel.options[i].value===curCat){ sel.selectedIndex=i; found=true; break; }
+  }
+  if(!found) sel.selectedIndex=0;
+  document.getElementById('qdCatChangeCustom').style.display='none';
+  document.getElementById('qdCatChangeCustom').value='';
+  document.getElementById('qdCatChangeOverlay').style.display='flex';
+}
+function qdCatChangeSelChange(){
+  var sel=document.getElementById('qdCatChangeSel');
+  var ci=document.getElementById('qdCatChangeCustom');
+  var isNew=(sel.value==='__new__');
+  ci.style.display=isNew?'block':'none';
+  if(isNew) ci.focus();
+}
+function qdCatChangeCancel(){
+  document.getElementById('qdCatChangeOverlay').style.display='none';
+  _qdCatChangeClId=null;
+}
+function qdCatChangeConfirm(){
+  if(!_qdCatChangeClId) return;
+  var sel=document.getElementById('qdCatChangeSel');
+  var cat=sel.value;
+  if(cat==='__new__') cat=document.getElementById('qdCatChangeCustom').value.trim();
+  if(!cat){ alert('분류를 선택하거나 새 분류명을 입력하세요.'); return; }
+  var form=document.getElementById('qdCatChangeForm');
+  form.action='{{ url_for("compare.change_cluster_category_from_compare", bid_id=bid.bid_id, cluster_id="__CID__") }}'
+    .replace('__CID__', _qdCatChangeClId);
+  document.getElementById('qdCatChangeValue').value=cat;
+  form.submit();
+}
+
+/* ── 트리 경로 일괄 표시/숨김 토글 ── */
+function qdToggleTreePaths(cb){
+  var show = cb.checked;
+  document.querySelectorAll('.qd-treepath').forEach(function(el){
+    el.style.display = show ? '' : 'none';
+  });
+}
+/* 로드 시 토글 체크 상태와 실제 표시를 동기화 (bfcache 복원 등 대비) */
+document.addEventListener('DOMContentLoaded', function(){
+  var t = document.getElementById('qdTreeToggle');
+  if (t) qdToggleTreePaths(t);
+});
+
+/* ── ② 분류명(카테고리) 수정 ── */
+function qdRenameCat(oldCat){
+  var nm=prompt('분류명을 수정합니다.\n이 입찰에서 "'+oldCat+'" 분류의 모든 항목이 새 이름으로 바뀝니다.', oldCat);
+  if(nm===null) return;
+  nm=nm.trim();
+  if(!nm){ alert('분류명을 입력하세요.'); return; }
+  if(nm===oldCat) return;
+  document.getElementById('qdCatOld').value=oldCat;
+  document.getElementById('qdCatNew').value=nm;
+  document.getElementById('qdCatRenameForm').submit();
+}
+
+/* ── ① 끌어오기 새 클러스터: 카테고리 지정 모달 ── */
+var _qdNewIds=null;
+var QD_CATS=(function(){
+  // 서버의 실제 카테고리(비교표에 존재) + 표준 6종 합집합 → 도메인 확장 대응
+  var std=['자재','인건비','출장비','영업이익','관리비','기타'];
+  var found={};
+  document.querySelectorAll('[data-cat]').forEach(function(el){
+    var c=el.getAttribute('data-cat'); if(c) found[c]=1;
+  });
+  var all=Object.keys(found);
+  std.forEach(function(s){ if(all.indexOf(s)<0) all.push(s); });
+  return all;
+})();
+function qdNewClusterModal(ids, suggestName, defCat){
+  _qdNewIds=ids;
+  var sel=document.getElementById('qdNewCatSel');
+  sel.innerHTML='';
+  QD_CATS.forEach(function(c){
+    var o=document.createElement('option'); o.value=c; o.textContent=c;
+    if(c===defCat) o.selected=true; sel.appendChild(o);
+  });
+  var cust=document.createElement('option'); cust.value='__custom__'; cust.textContent='✏️ 직접 입력…';
+  sel.appendChild(cust);
+  var ci=document.getElementById('qdNewCatCustom');
+  ci.style.display='none'; ci.value='';
+  sel.onchange=function(){
+    ci.style.display=(sel.value==='__custom__')?'block':'none';
+    if(sel.value==='__custom__') ci.focus();
+  };
+  document.getElementById('qdNewNameInp').value=suggestName||'';
+  document.getElementById('qdNewClusterOverlay').style.display='flex';
+  setTimeout(function(){ document.getElementById('qdNewNameInp').focus(); },50);
+}
+function qdNewClusterCancel(){
+  document.getElementById('qdNewClusterOverlay').style.display='none';
+  _qdNewIds=null;
+}
+function qdNewClusterConfirm(){
+  if(!_qdNewIds) return;
+  var sel=document.getElementById('qdNewCatSel');
+  var cat=sel.value;
+  if(cat==='__custom__') cat=document.getElementById('qdNewCatCustom').value.trim();
+  var nm=document.getElementById('qdNewNameInp').value.trim();
+  if(!nm){ alert('클러스터 이름을 입력하세요.'); return; }
+  if(!cat){ alert('분류(카테고리)를 선택하거나 입력하세요.'); return; }
+  document.getElementById('selectedItemsJson').value=JSON.stringify(_qdNewIds);
+  document.getElementById('clusterSelect').value='new';
+  document.getElementById('newClusterName').value=nm;
+  document.getElementById('catSelect').value=cat;
+  // catSelect에 없는 커스텀 카테고리면 옵션 추가 후 선택
+  var cs=document.getElementById('catSelect');
+  if(cs.value!==cat){
+    var o=document.createElement('option'); o.value=cat; o.textContent=cat; o.selected=true;
+    cs.appendChild(o);
+  }
+  document.getElementById('qdNewClusterOverlay').style.display='none';
+  document.getElementById('moveForm').submit();
+}
+
+/*QDND-START 드래그드랍 레이어 — 기존 sel/폼 재사용, 클릭 동선과 공존*/
+
+/* ── ③ 카테고리 접기/펴기 (Excel 그룹 방식) ── */
+function qdToggleCat(cat){
+  var rows = document.querySelectorAll('.qd-cat-row[data-cat="'+cat+'"]');
+  var caret = document.querySelector('.qd-cat-caret[data-cat="'+cat+'"]');
+  if(!rows.length) return;
+  var collapsed = rows[0].style.display === 'none';
+  rows.forEach(function(r){ r.style.display = collapsed ? '' : 'none'; });
+  if(caret){ caret.textContent = collapsed ? '▾' : '▸'; }
+  var cnt = document.querySelector('.qd-cat-count[data-cat="'+cat+'"]');
+  if(cnt){ cnt.textContent = collapsed ? '' : '(접힘)'; }
+}
+function qdAllCats(expand){
+  document.querySelectorAll('.qd-cat-header').forEach(function(h){
+    var cat = h.getAttribute('data-cat');
+    var rows = document.querySelectorAll('.qd-cat-row[data-cat="'+cat+'"]');
+    var caret = document.querySelector('.qd-cat-caret[data-cat="'+cat+'"]');
+    var cnt = document.querySelector('.qd-cat-count[data-cat="'+cat+'"]');
+    rows.forEach(function(r){ r.style.display = expand ? '' : 'none'; });
+    if(caret) caret.textContent = expand ? '▾' : '▸';
+    if(cnt) cnt.textContent = expand ? '' : '(접힘)';
+  });
+}
+
+/* ── ④ 일괄 확정 ── */
+function qdSelectedAccepts(){
+  return Array.prototype.slice.call(document.querySelectorAll('.qd-accept-chk:checked'))
+    .map(function(c){ return c.value; });
+}
+function qdOnAcceptSel(){
+  var ids = qdSelectedAccepts();
+  var all = document.querySelectorAll('.qd-accept-chk');
+  var cnt = document.getElementById('qdAcceptCount');
+  var btn = document.getElementById('qdAcceptBtn');
+  var allChk = document.getElementById('qdAcceptAll');
+  if(cnt) cnt.textContent = ids.length ? (ids.length + '개 선택됨') : '';
+  if(btn) btn.disabled = (ids.length === 0);
+  if(allChk) allChk.checked = (all.length > 0 && ids.length === all.length);
+}
+function qdToggleAllAccept(master){
+  document.querySelectorAll('.qd-accept-chk').forEach(function(c){ c.checked = master.checked; });
+  qdOnAcceptSel();
+}
+function qdBatchAccept(){
+  var ids = qdSelectedAccepts();
+  if(!ids.length) return;
+  if(!confirm(ids.length + '개 클러스터를 일괄 확정하시겠습니까?\n\n확정된 클러스터는 카탈로그에 자동 등록됩니다.\n(개별적으로 재검토 상태로 되돌릴 수 있습니다)')) return;
+  document.getElementById('qdBatchAcceptIds').value = JSON.stringify(ids);
+  document.getElementById('qdBatchAcceptForm').submit();
+}
+
+/*QDND-INNER*/
+(function(){
+  'use strict';
+  var drag=null, pendPt=null, suppressClick=false;
+  var THRESH=6;
+
+  var ghost=document.createElement('div'); ghost.id='qdndGhost'; document.body.appendChild(ghost);
+  var tdiv=document.createElement('div'); tdiv.id='qdndToast'; document.body.appendChild(tdiv);
+  var tTimer=null;
+  function toast(msg){ tdiv.textContent=msg; tdiv.classList.add('show');
+    clearTimeout(tTimer); tTimer=setTimeout(function(){tdiv.classList.remove('show');},2800); }
+
+  var clMap={};  // clusterId → {status, cell} — 대표명 셀(head)만 등록
+  document.querySelectorAll('td[data-drop="cluster"][data-cl-head]').forEach(function(td){
+    clMap[td.dataset.clusterId]={status:td.dataset.clStatus, cell:td};
+  });
+  function itemInAccepted(id){
+    var td=document.querySelector('[data-item-id="'+id+'"]');
+    var cid=td?td.dataset.clusterId:null;
+    return cid && clMap[cid] && clMap[cid].status==='accepted';
+  }
+  function nameOf(id){
+    var td=document.querySelector('[data-item-id="'+id+'"]');
+    var nm=td?td.querySelector('.nm'):null;
+    return nm?nm.textContent.trim():'';
+  }
+
+  function arm(e, kind, payload, el){
+    pendPt={x:e.clientX,y:e.clientY,kind:kind,payload:payload,el:el};
+    window.addEventListener('pointermove',pendMove,{passive:false});
+    window.addEventListener('pointerup',pendCancel,{once:true});
+  }
+  function pendMove(e){
+    if(!pendPt)return;
+    if(Math.hypot(e.clientX-pendPt.x,e.clientY-pendPt.y)>THRESH){
+      var p=pendPt; pendPt=null;
+      window.removeEventListener('pointermove',pendMove);
+      begin(e,p.kind,p.payload,p.el);
+    }
+  }
+  function pendCancel(){ window.removeEventListener('pointermove',pendMove); pendPt=null; }
+
+  function begin(e,kind,payload,el){
+    if(kind==='items'){
+      for(var i=0;i<payload.ids.length;i++){
+        if(itemInAccepted(payload.ids[i])){
+          toast('⚠ 확정된 클러스터의 품목은 이동할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');
+          return;
+        }
+      }
+    }
+    drag={kind:kind,payload:payload,el:el,last:null};
+    suppressClick=true;
+    // 드래그 시작 시 브라우저 텍스트 선택 잔상 제거 (②)
+    try { window.getSelection && window.getSelection().removeAllRanges(); } catch(_){}
+    if(el)el.classList.add('qdnd-dragging');
+    document.body.classList.add('qdnd-drag');
+    ghost.className=(kind==='merge')?'merge':'';
+    ghost.textContent=(kind==='items')?(payload.ids.length+'개 이동')
+      :('「'+payload.name+'」 병합');
+    ghost.style.display='block'; moveGhost(e);
+    window.addEventListener('pointermove',onMove,{passive:false});
+    window.addEventListener('pointerup',onUp,{once:true});
+    window.addEventListener('pointercancel',onUp,{once:true});
+  }
+  function moveGhost(e){ ghost.style.left=(e.clientX+14)+'px'; ghost.style.top=(e.clientY+12)+'px'; }
+
+  function under(e){
+    ghost.style.display='none';
+    var el=document.elementFromPoint(e.clientX,e.clientY);
+    ghost.style.display='block';
+    if(!el)return null;
+    var direct=el.closest('[data-drop]');
+    if(direct){
+      // 클러스터 단가 셀/대표명 셀 어디에 놓든 그 클러스터의 대표 셀로 정규화
+      if(direct.dataset.drop==='cluster' && direct.dataset.clusterId
+         && clMap[direct.dataset.clusterId]){
+        return clMap[direct.dataset.clusterId].cell;
+      }
+      return direct;
+    }
+    var vc=el.closest('td[data-cluster-id]');
+    if(vc && clMap[vc.dataset.clusterId]) return clMap[vc.dataset.clusterId].cell;
+    if(el.closest('tr.unclustered-row'))
+      return document.querySelector('td[data-drop="unclustered"]');
+    return null;
+  }
+  function onMove(e){
+    if(!drag)return; e.preventDefault(); moveGhost(e);
+    var t=under(e);
+    if(drag.last&&drag.last!==t)drag.last.classList.remove('qdnd-over','qdnd-merge-over');
+    if(t){
+      if(drag.kind==='items')t.classList.add('qdnd-over');
+      else if(t.dataset.drop==='cluster'&&t.dataset.clusterId!==drag.payload.srcId)
+        t.classList.add('qdnd-merge-over');
+    }
+    drag.last=t;
+  }
+  function onUp(e){
+    if(!drag)return;
+    window.removeEventListener('pointermove',onMove);
+    var t=under(e), d=drag; drag=null;
+    if(d.el)d.el.classList.remove('qdnd-dragging');
+    document.body.classList.remove('qdnd-drag');
+    if(d.last)d.last.classList.remove('qdnd-over','qdnd-merge-over');
+    ghost.style.display='none';
+    setTimeout(function(){suppressClick=false;},250);
+    if(!t)return;
+    if(d.kind==='items'){
+      if(t.dataset.drop==='new')return dropNew(d.payload.ids);
+      if(t.dataset.drop==='unclustered')return dropExclude(d.payload.ids);
+      if(t.dataset.drop==='cluster')return dropMove(d.payload.ids,t);
+    }else if(d.kind==='merge'&&t.dataset.drop==='cluster'
+             &&t.dataset.clusterId!==d.payload.srcId){
+      dropMerge(d.payload,t);
+    }
+  }
+
+  document.addEventListener('click',function(e){
+    if(suppressClick){e.stopPropagation();e.preventDefault();suppressClick=false;}
+  },true);
+
+  function dropMove(ids,td){
+    if(td.dataset.clStatus==='accepted'){
+      toast('⚠ 확정된 클러스터에는 편입할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');return;}
+    var cid=td.dataset.clusterId;
+    var opt=document.querySelector('#clusterSelect option[value="'+cid+'"]');
+    if(!opt){toast('⚠ 이 클러스터로는 이동할 수 없습니다');return;}
+    document.getElementById('selectedItemsJson').value=JSON.stringify(ids);
+    document.getElementById('clusterSelect').value=cid;
+    document.getElementById('moveForm').submit();
+  }
+  function dropNew(ids){
+    var names=ids.map(nameOf).filter(Boolean);
+    var ko=names.filter(function(n){return /[가-힣]/.test(n);});
+    var suggest=(ko.length?ko:names)[0]||'';
+    // 소스 항목들의 현재 카테고리를 기본값으로 제안 (다수결)
+    var cats={};
+    ids.forEach(function(id){
+      var td=document.querySelector('[data-item-id="'+id+'"]');
+      var c=td?td.getAttribute('data-cat'):null;
+      if(c) cats[c]=(cats[c]||0)+1;
+    });
+    var defCat=Object.keys(cats).sort(function(a,b){return cats[b]-cats[a];})[0]||'';
+    qdNewClusterModal(ids, suggest, defCat);
+  }
+  function dropExclude(ids){
+    var inCl=ids.filter(function(id){
+      var td=document.querySelector('[data-item-id="'+id+'"]');
+      return td&&td.dataset.clusterId;});
+    if(!inCl.length){toast('이미 미분류인 항목입니다');return;}
+    if(!confirm(inCl.length+'개 항목을 미분류로 제외하시겠습니까?'))return;
+    document.getElementById('excludeItemsJson').value=JSON.stringify(inCl);
+    document.getElementById('excludeForm').submit();
+  }
+  function dropMerge(payload,td){
+    if(td.dataset.clStatus==='accepted'||payload.srcStatus==='accepted'){
+      toast('⚠ 확정 클러스터는 병합 대상이 될 수 없습니다');return;}
+    var dst=td.dataset.clusterId;
+    var repEl=td.querySelector('.cl-pick .rep')||td;
+    var dstName=repEl.textContent.trim();
+    if(!confirm('「'+payload.name+'」을(를) 「'+dstName+'」(으)로 병합하시겠습니까?'))return;
+    document.getElementById('mergeClusterIdsJson').value=JSON.stringify([payload.srcId,dst]);
+    document.getElementById('mergeTargetIdCmp').value=dst;
+    document.getElementById('clusterMergeForm').submit();
+  }
+
+  document.querySelectorAll('.cl-pick').forEach(function(el){
+    el.addEventListener('pointerdown',function(e){
+      var ids=[]; try{ids=JSON.parse(el.dataset.ids||'[]');}catch(_){}
+      if(el.dataset.clType==='cluster'){
+        var td=el.closest('td[data-drop="cluster"]');
+        if(!td)return;
+        if(td.dataset.clStatus==='accepted')return;  // 확정 ◉: 기존 클릭 선택만
+        arm(e,'merge',{srcId:td.dataset.clusterId,
+                       srcStatus:td.dataset.clStatus,
+                       name:(el.dataset.name||'').trim()},el.closest('tr'));
+      }else{
+        var pool=ids;
+        if(sel.size>0 && ids.some(function(id){return sel.has(id);}))
+          pool=Array.from(new Set(Array.from(sel).concat(ids)));
+        arm(e,'items',{ids:pool},el.closest('tr'));
+      }
+    });
+  });
+  document.querySelectorAll('td.vendor-cell[data-item-id]').forEach(function(td){
+    if(!td.dataset.itemId)return;
+    td.addEventListener('pointerdown',function(e){
+      var id=td.dataset.itemId;
+      var pool=(sel.has(id)&&sel.size>1)?Array.from(sel):[id];
+      arm(e,'items',{ids:pool},td);
+    });
+  });
+})();
+/*QDND-END*/
 
 refresh();
 </script>

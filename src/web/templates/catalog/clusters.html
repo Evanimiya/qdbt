@@ -19,7 +19,7 @@
     {% if has_role('manager') %}
     <div class="flex flex-col gap-2">
       <!-- 클러스터링 실행 -->
-      {% from '_model_selector.html' import model_selector %}
+      {% from '_model_selector.html' import model_selector with context %}
       <form method="POST" action="{{ url_for('catalog.run_clusters') }}"
             onsubmit="return confirm('선택한 입찰의 견적 품목을 분석합니다. 계속하시겠습니까?');">
         <div class="flex gap-2 items-center flex-wrap">

@@ -3,12 +3,12 @@
 
 {% block content %}
 <div class="max-w-2xl">
-  <nav class="text-sm mb-4 text-gray-500">
-    <a href="{{ url_for('catalog.index') }}" class="hover:text-blue-700">카탈로그</a>
-    <span class="mx-2">›</span>
-    <a href="{{ url_for('catalog.clusters') }}" class="hover:text-blue-700">클러스터링</a>
-    <span class="mx-2">›</span> 상세
-  </nav>
+  {% from '_breadcrumb.html' import breadcrumb %}
+  {{ breadcrumb([
+      ('카탈로그', url_for('catalog.index')),
+      ('클러스터링', url_for('catalog.clusters')),
+      ('상세', none),
+  ]) }}
 
   {% set return_bid_id = request.args.get('return_bid_id', '') %}
   {% if return_bid_id %}
@@ -24,7 +24,18 @@
 
   <h1 class="text-xl font-bold text-gray-900 mb-1 break-ko">🔀 유사 품목 그룹 상세</h1>
   {% if cluster.similarity_summary %}
-  <p class="text-sm text-gray-500 mb-4 break-ko">{{ cluster.similarity_summary }}</p>
+  <p class="text-sm text-gray-500 mb-2 break-ko">{{ cluster.similarity_summary }}</p>
+  {% endif %}
+
+  {% if has_role('manager') %}
+  <div class="flex items-center gap-2 mb-4">
+    <span class="text-xs text-gray-500">분류:</span>
+    <button type="button"
+            onclick="qdOpenCatChange({{ cur_cat|tojson }})"
+            class="text-xs font-semibold rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700
+                   px-2.5 py-1 border border-gray-200"
+            title="분류 변경">{{ cur_cat or '미지정' }} ▾</button>
+  </div>
   {% endif %}
 
   <!-- 멤버 품목 목록 -->
@@ -147,6 +158,7 @@
             action="{{ url_for('catalog.accept_cluster', cluster_id=cluster.cluster_id) }}"
             class="flex-1" id="acceptForm">
         <input type="hidden" name="representative_name" id="acceptName">
+        {% if return_bid_id %}<input type="hidden" name="return_bid_id" value="{{ return_bid_id }}">{% endif %}
         <button type="button"
                 onclick="submitAccept()"
                 {% if not high_conf %}title="유사도 90% 미만 항목이 있어 상세 검토가 권장됩니다."{% endif %}
@@ -164,6 +176,7 @@
       <form method="POST"
             action="{{ url_for('catalog.hold_cluster', cluster_id=cluster.cluster_id) }}"
             class="flex-1">
+        {% if return_bid_id %}<input type="hidden" name="return_bid_id" value="{{ return_bid_id }}">{% endif %}
         <button type="submit"
                 class="w-full bg-yellow-50 hover:bg-yellow-100 text-yellow-700 font-semibold
                        py-2.5 rounded-lg transition-colors text-sm">
@@ -175,6 +188,7 @@
       <form method="POST"
             action="{{ url_for('catalog.reject_cluster', cluster_id=cluster.cluster_id) }}"
             class="flex-1">
+        {% if return_bid_id %}<input type="hidden" name="return_bid_id" value="{{ return_bid_id }}">{% endif %}
         <button type="submit"
                 class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
                        py-2.5 rounded-lg transition-colors text-sm">
@@ -304,15 +318,89 @@
   {% endif %}
 
   <div class="mt-4 text-center">
+    {% if return_bid_id %}
+    <a href="{{ url_for('compare.bid_compare', bid_id=return_bid_id) }}?_t={{ request.args.get('_t','') }}"
+       class="text-sm text-gray-500 hover:text-blue-700">
+      ← 업체별 비교로 돌아가기
+    </a>
+    {% else %}
     <a href="{{ url_for('catalog.clusters') }}" class="text-sm text-gray-500 hover:text-blue-700">
       ← 목록으로 돌아가기
     </a>
+    {% endif %}
   </div>
 </div>
+
+{% if has_role('manager') %}
+<!-- 클러스터 분류 변경 모달 (상세) -->
+<div id="qdCatChangeOverlay"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:200;
+            align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:12px;max-width:340px;width:100%;padding:18px;
+              box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div style="font-size:14px;font-weight:700;color:#0F172A;margin-bottom:4px">🗂 분류 변경</div>
+    <div style="font-size:11px;color:#64748B;margin-bottom:12px">
+      이 그룹 소속 항목 전체의 분류가 바뀝니다.
+      <span id="qdCatChangeCur" style="font-weight:600;color:#334155"></span>
+    </div>
+    <form method="POST" id="qdCatChangeForm"
+          action="{{ url_for('compare.change_cluster_category_from_compare', bid_id=(cluster.bid_id or '0'), cluster_id=cluster.cluster_id) }}">
+      <input type="hidden" name="return" value="detail">
+      <label style="display:block;font-size:11px;color:#64748B;margin-bottom:3px">변경할 분류</label>
+      <select id="qdCatChangeSel" onchange="qdCatChangeSelChange()"
+              style="width:100%;font-size:13px;padding:7px 9px;border:1px solid #CBD5E1;border-radius:8px;margin-bottom:4px">
+        {% for c in (dict_categories or []) %}
+        <option value="{{ c }}" {% if c == cur_cat %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+        <option value="__new__">➕ 신규 분류 만들기…</option>
+      </select>
+      <input type="text" id="qdCatChangeCustom" placeholder="새 분류명 입력"
+             style="width:100%;font-size:12px;padding:6px 9px;border:1px solid #93C5FD;border-radius:8px;
+                    margin-bottom:12px;display:none">
+      <input type="hidden" name="category" id="qdCatChangeValue">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" onclick="qdCatChangeCancel()"
+                style="font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid #E2E8F0;
+                       background:#fff;color:#64748B;cursor:pointer">취소</button>
+        <button type="button" onclick="qdCatChangeConfirm()"
+                style="font-size:12px;padding:7px 16px;border-radius:8px;border:none;
+                       background:#2563EB;color:#fff;font-weight:600;cursor:pointer">변경</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
+/* ── 클러스터 분류 변경 (상세) ── */
+function qdOpenCatChange(curCat){
+  var cur=document.getElementById('qdCatChangeCur');
+  if(cur) cur.textContent='(현재: '+(curCat||'미지정')+')';
+  document.getElementById('qdCatChangeCustom').style.display='none';
+  document.getElementById('qdCatChangeCustom').value='';
+  document.getElementById('qdCatChangeOverlay').style.display='flex';
+}
+function qdCatChangeSelChange(){
+  var sel=document.getElementById('qdCatChangeSel');
+  var ci=document.getElementById('qdCatChangeCustom');
+  var isNew=(sel.value==='__new__');
+  ci.style.display=isNew?'block':'none';
+  if(isNew) ci.focus();
+}
+function qdCatChangeCancel(){
+  document.getElementById('qdCatChangeOverlay').style.display='none';
+}
+function qdCatChangeConfirm(){
+  var sel=document.getElementById('qdCatChangeSel');
+  var cat=sel.value;
+  if(cat==='__new__') cat=document.getElementById('qdCatChangeCustom').value.trim();
+  if(!cat){ alert('분류를 선택하거나 새 분류명을 입력하세요.'); return; }
+  document.getElementById('qdCatChangeValue').value=cat;
+  document.getElementById('qdCatChangeForm').submit();
+}
+
 function submitAccept() {
   const name = document.getElementById('repNameInput').value.trim();
   if (!name) { alert('표준 품목명을 입력하세요.'); return; }

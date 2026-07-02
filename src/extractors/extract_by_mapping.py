@@ -298,7 +298,78 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     }
 
 
-def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
+def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
+    """합계·소계·총계로 의심되는 행을 감지해 목록으로 반환.
+
+    자동 삭제가 아니라 '제외 후보 제안'용. UI가 이 목록을 기본 선택(제외 예정)
+    상태로 표시하고, 사용자가 확인/해제 후 최종 반영한다.
+
+    판별 기준(보수적: 오탐 시 사용자가 해제 가능):
+      ① 이름/번호 셀에 합계 키워드(합계·소계·총계·계·total·subtotal·grand·sum) 포함
+      ② 금액은 있으나 품명·번호가 비어 있고, 값이 병합/굵게 등 요약 성격
+    반환: [{"row": int, "reason": str, "name": str, "amount": str}]
+    """
+    wb = load_workbook(path, data_only=True)
+    sheet = wb[sheet_name] if sheet_name in wb.sheetnames else wb[wb.sheetnames[0]]
+
+    # 역할→열 역매핑
+    role_col = {}
+    for col, role in (mapping or {}).items():
+        role_col.setdefault(role, int(col))
+    name_col = role_col.get("name")
+    seq_col = role_col.get("seq")
+    amount_col = role_col.get("amount")
+    price_col = role_col.get("price")
+    # 이름 후보 열(품명 없으면 cat 계열/첫 텍스트 열로 폴백)
+    text_cols = [role_col[r] for r in ("name", "seq", "cat1", "cat2", "cat3", "cat4")
+                 if r in role_col]
+
+    TOTAL_KW = ("합계", "소계", "총계", "총 계", "총액", "계",
+                "total", "subtotal", "sub-total", "grand", "sum")
+
+    def _norm(v):
+        return "" if v is None else str(v).strip()
+
+    detected = []
+    for r in range(header_row + 1, sheet.max_row + 1):
+        # 행의 텍스트 후보(이름/번호/분류) 모으기
+        texts = [_norm(sheet.cell(row=r, column=c).value) for c in text_cols]
+        joined = " ".join(t for t in texts if t).lower()
+        amt_raw = _norm(sheet.cell(row=r, column=amount_col).value) if amount_col else ""
+        amt_num = _to_number(amt_raw) if amt_raw else None
+        name_val = _norm(sheet.cell(row=r, column=name_col).value) if name_col else ""
+
+        # 완전 빈 행 스킵
+        if not joined and amt_num is None:
+            continue
+
+        reason = None
+        # ① 합계 키워드 매칭 ('계'는 단독일 때만 — '설계','계측' 등 오탐 방지)
+        kw_hit = None
+        for kw in TOTAL_KW:
+            if kw == "계":
+                # 단독 '계' 또는 '합 계'류만
+                if joined.strip() in ("계", "합 계", "총 계") or joined.strip().endswith(" 계"):
+                    kw_hit = kw; break
+            elif kw in joined:
+                kw_hit = kw; break
+        if kw_hit:
+            reason = f"'{kw_hit}' 키워드"
+        # ② 품명·번호 비었는데 금액만 있는 행(요약행 성격)
+        elif amt_num is not None and not name_val and not (
+                seq_col and _norm(sheet.cell(row=r, column=seq_col).value)):
+            reason = "품명·번호 없이 금액만"
+
+        if reason:
+            detected.append({
+                "row": r,
+                "reason": reason,
+                "name": name_val or joined[:40],
+                "amount": amt_raw,
+            })
+
+    wb.close()
+    return detected
     """헤더 행을 코드로 1차 탐지해 열 매핑 후보를 제안한다.
 
     (LLM 헤더 인식의 코드 폴백 / 초기값. 키워드 매칭 기반.)

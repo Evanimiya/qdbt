@@ -2,26 +2,80 @@
 {% block title %}{{ bid.bid_name }} · {{ bid.project_name }}{% endblock %}
 
 {% block content %}
-<nav class="text-sm mb-4 text-gray-500">
-  <a href="{{ url_for('projects.index') }}" class="hover:text-blue-700">프로젝트</a>
-  <span class="mx-2">›</span>
-  <a href="{{ url_for('projects.detail', project_id=bid.project_id) }}"
-     class="hover:text-blue-700 break-ko">{{ bid.project_name }}</a>
-  <span class="mx-2">›</span>
-  <span class="text-gray-900 break-ko">{{ bid.name }}</span>
-</nav>
+{% from '_breadcrumb.html' import breadcrumb %}
+{{ breadcrumb([
+    ('프로젝트', url_for('projects.index')),
+    (bid.project_name, url_for('projects.detail', project_id=bid.project_id)),
+    (bid.name, none),
+]) }}
 
 <!-- 입찰 헤더 -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex items-start justify-between flex-wrap gap-3 mb-2">
-    <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">{{ bid.name }}</h1>
+    <div class="flex items-center gap-2 flex-wrap" id="bidNameWrap">
+      <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko" id="bidNameText">{{ bid.name }}</h1>
+      {% if has_role('manager') %}
+      <button type="button" onclick="qdStartEdit('bidName')" title="입찰명 수정"
+              class="text-gray-400 hover:text-blue-700 text-base leading-none">✏️</button>
+      {% endif %}
+    </div>
+    {% if has_role('manager') %}
+    <form method="POST" action="{{ url_for('bids.rename_bid', bid_id=bid.bid_id) }}"
+          id="bidNameForm" class="hidden items-center gap-2 flex-wrap w-full">
+      <input type="text" name="name" value="{{ bid.name }}" required
+             class="text-lg font-bold border border-blue-300 rounded-lg px-2 py-1 break-ko flex-1 min-w-[180px]">
+      <button type="submit"
+              class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-3 py-1.5 rounded-lg">저장</button>
+      <button type="button" onclick="qdCancelEdit('bidName')"
+              class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg">취소</button>
+    </form>
+    {% endif %}
     <span class="text-xs px-2 py-1 rounded-full
       {% if bid.status=='open' %}bg-blue-100 text-blue-700
       {% elif bid.status=='awarded' %}bg-green-100 text-green-700
+      {% elif bid.status=='cancelled' %}bg-red-100 text-red-700
       {% else %}bg-gray-100 text-gray-600{% endif %}">
       {{ bid.status }}
     </span>
   </div>
+
+  {% if bid.status == 'cancelled' %}
+  <div class="mt-2 mb-1 text-xs break-ko rounded-lg px-3 py-2"
+       style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;">
+    ⚠ <b>철회된 입찰입니다.</b> 열람은 가능하지만(읽기 참고),
+    이 입찰의 가격은 과거가 통계·품목 검색에서 제외됩니다.
+  </div>
+  {% endif %}
+
+  {% if has_role('manager') %}
+  <div class="flex gap-2 flex-wrap mt-2">
+    {% if bid.status != 'cancelled' %}
+    <form method="POST" action="{{ url_for('bids.update_status', bid_id=bid.bid_id) }}"
+          onsubmit="return confirm('이 입찰을 철회하시겠습니까?\n\n데이터는 모두 보존되며 언제든 복원할 수 있습니다.\n철회된 입찰의 가격은 과거가 통계·검색에서 제외됩니다.');">
+      <input type="hidden" name="status" value="cancelled">
+      <button type="submit"
+              class="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
+                     font-semibold px-3 py-1.5 rounded-lg">⛔ 입찰 철회</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('bids.update_status', bid_id=bid.bid_id) }}">
+      <input type="hidden" name="status" value="open">
+      <button type="submit"
+              class="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200
+                     font-semibold px-3 py-1.5 rounded-lg">↩ 철회 취소(복원)</button>
+    </form>
+    {% if has_role('admin') %}
+    <form method="POST" action="{{ url_for('bids.hard_delete', bid_id=bid.bid_id) }}"
+          onsubmit="return qdHardDelete(this, 'bidNameText', '입찰');">
+      <input type="hidden" name="confirm_name">
+      <button type="submit"
+              class="text-xs bg-red-600 hover:bg-red-700 text-white
+                     font-semibold px-3 py-1.5 rounded-lg">🗑 완전 삭제 (admin)</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
   {% if bid.due_date %}<p class="text-sm text-gray-500">마감일: {{ bid.due_date }}</p>{% endif %}
   {% if bid.description %}<p class="text-sm text-gray-500 mt-1 break-ko">{{ bid.description }}</p>{% endif %}
 </div>
@@ -121,8 +175,25 @@
     {% for s in submissions %}
       <tr class="{% if loop.first and done|length > 1 %}bg-green-50{% endif %}">
         <td class="px-4 py-3 font-semibold break-ko">
-          <a href="{{ url_for('submissions.detail', submission_id=s.submission_id) }}"
-             class="text-blue-700 hover:underline">{{ s.vendor_name }}</a>
+          <span class="inline-flex items-center gap-1.5" id="vn_{{ s.submission_id }}_view">
+            <a href="{{ url_for('submissions.detail', submission_id=s.submission_id) }}"
+               class="text-blue-700 hover:underline">{{ s.vendor_name }}</a>
+            {% if has_role('manager') %}
+            <button type="button" onclick="qdStartEdit('vn_{{ s.submission_id }}')" title="업체명 수정"
+                    class="text-gray-400 hover:text-blue-700 text-sm leading-none">✏️</button>
+            {% endif %}
+          </span>
+          {% if has_role('manager') %}
+          <form method="POST" action="{{ url_for('bids.rename_submission', submission_id=s.submission_id) }}"
+                id="vn_{{ s.submission_id }}Form" class="hidden items-center gap-1.5">
+            <input type="text" name="vendor_name" value="{{ s.vendor_name }}" required
+                   class="text-sm border border-blue-300 rounded px-2 py-0.5 break-ko w-32">
+            <button type="submit"
+                    class="text-xs bg-blue-700 hover:bg-blue-800 text-white font-semibold px-2 py-0.5 rounded">저장</button>
+            <button type="button" onclick="qdCancelEdit('vn_{{ s.submission_id }}')"
+                    class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-0.5 rounded">취소</button>
+          </form>
+          {% endif %}
         </td>
         <td class="px-4 py-3 text-right">
           {{ '{:,}'.format(s.subtotal_excl_vat|int) if s.subtotal_excl_vat else '-' }}
@@ -224,4 +295,50 @@
   </div>
 </details>
 {% endif %}
+
+<script>
+/* 완전 삭제: 이름 타이핑 확인 (서버에서도 재검증)
+   nameElId = 현재 이름을 표시하는 요소의 id.
+   렌더 시점 이름을 하드코딩하지 않고 호출 시점 DOM에서 최신 이름을 읽어
+   인라인 수정 직후에도 stale 이름으로 오거부되지 않도록 한다. */
+function qdHardDelete(form, nameElId, kind){
+  var el = document.getElementById(nameElId);
+  var h1 = el ? el.querySelector('h1') : null;
+  var current = ((h1 || el) ? (h1 || el).textContent : '').trim();
+  var typed = prompt(
+    '⚠ 되돌릴 수 없는 완전 삭제입니다.\n' +
+    '하위 제출서·품목·클러스터가 모두 영구 삭제됩니다.\n' +
+    '(업로드 원본 파일은 보존됩니다)\n\n' +
+    '계속하려면 아래 ' + kind + '명을 정확히 입력하세요:\n' + current
+  );
+  if (typed === null) return false;
+  if (typed.trim() !== current) {
+    alert('입력한 이름이 현재 ' + kind + '명과 다릅니다.\n현재 ' + kind + '명: ' + current +
+          '\n\n삭제를 취소했습니다. 다시 시도하세요.');
+    return false;
+  }
+  form.querySelector('input[name=confirm_name]').value = typed.trim();
+  return true;
+}
+
+/* 인라인 명칭 편집: {키}Text/{키}_view(표시) ↔ {키}Form(입력) 토글 */
+function qdStartEdit(key){
+  var view = document.getElementById(key + 'Text') || document.getElementById(key + '_view');
+  var form = document.getElementById(key + 'Form');
+  if(!form) return;
+  if(view) view.classList.add('hidden');
+  form.classList.remove('hidden');
+  form.classList.add('flex');
+  var inp = form.querySelector('input[type=text]');
+  if(inp){ inp.focus(); inp.select(); }
+}
+function qdCancelEdit(key){
+  var view = document.getElementById(key + 'Text') || document.getElementById(key + '_view');
+  var form = document.getElementById(key + 'Form');
+  if(!form) return;
+  form.classList.add('hidden');
+  form.classList.remove('flex');
+  if(view) view.classList.remove('hidden');
+}
+</script>
 {% endblock %}

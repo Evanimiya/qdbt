@@ -22,6 +22,9 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # 쓰기 경합 시 즉시 'database is locked'로 실패하지 않고 최대 5초 대기
+    # (백그라운드 클러스터링 worker와 요청 스레드의 동시 쓰기 대비)
+    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         yield conn
         conn.commit()
@@ -38,14 +41,38 @@ def new_id():
 
 # ─── 프로젝트 ──────────────────────────────────
 
-def create_project(name, description="", owner_id=None):
+def create_project(name, description="", owner_id=None, domain="IT"):
     pid = new_id()
     with get_conn() as c:
         c.execute("""
-            INSERT INTO projects (project_id, name, description, owner_id)
-            VALUES (?, ?, ?, ?)
-        """, (pid, name, description, owner_id))
+            INSERT INTO projects (project_id, name, description, owner_id, domain)
+            VALUES (?, ?, ?, ?, ?)
+        """, (pid, name, description, owner_id, domain or "IT"))
     return pid
+
+
+def update_project_domain(project_id: str, domain: str):
+    """프로젝트 기본 도메인 변경."""
+    with get_conn() as c:
+        c.execute("UPDATE projects SET domain = ?, updated_at = ? WHERE project_id = ?",
+                  (domain or "IT", datetime.now().isoformat(), project_id))
+
+
+def reorder_clusters(bid_id: str, ordered_cluster_ids: list) -> int:
+    """클러스터 표시 순서 저장 (항목 6, 드래그&드롭).
+
+    ordered_cluster_ids 순서대로 display_order를 0,1,2…로 부여한다.
+    목록에 없는 클러스터는 뒤로 밀리도록 큰 값 유지.
+    """
+    if not ordered_cluster_ids:
+        return 0
+    n = 0
+    with get_conn() as c:
+        for i, cid in enumerate(ordered_cluster_ids):
+            c.execute("UPDATE catalog_clusters SET display_order = ? "
+                      "WHERE cluster_id = ? AND bid_id = ?", (i, cid, bid_id))
+            n += 1
+    return n
 
 
 def list_projects(status=None):
@@ -83,7 +110,243 @@ def update_project(project_id, **kwargs):
                   list(kwargs.values()) + [project_id])
 
 
+# ─── 프로젝트 기준정보 (속성 사전 + 값) ─────────────
+
+def list_attr_defs(active_only: bool = True) -> list:
+    """속성 사전(기준정보 원장) 목록. 도메인 확장 시 행 추가만으로 대응."""
+    with get_conn() as c:
+        q = "SELECT * FROM project_attr_defs"
+        if active_only:
+            q += " WHERE is_active = 1"
+        return c.execute(q + " ORDER BY sort_order, attr_key").fetchall()
+
+
+def get_attr_def(attr_key: str):
+    with get_conn() as c:
+        return c.execute("SELECT * FROM project_attr_defs WHERE attr_key = ?",
+                         (attr_key,)).fetchone()
+
+
+def _slug_attr_key(label: str) -> str:
+    """label에서 attr_key 자동 생성. 한글이면 해시 기반 안정 키."""
+    import re as _re, hashlib
+    s = _re.sub(r"[^a-zA-Z0-9]+", "_", (label or "").strip().lower()).strip("_")
+    if s and _re.match(r"^[a-z]", s):
+        return s[:40]
+    # 한글 등 → attr_ + 라벨 해시(안정적, 충돌 회피)
+    h = hashlib.md5((label or "").encode("utf-8")).hexdigest()[:8]
+    return f"attr_{h}"
+
+
+def create_attr_def(label: str, attr_key: str = None,
+                    value_type: str = "text", unit: str = None,
+                    domain: str = "공통", sort_order: int = None) -> str:
+    """기준정보 항목(정의) 추가."""
+    label = (label or "").strip()
+    if not label:
+        raise ValueError("항목명을 입력하세요.")
+    key = (attr_key or "").strip() or _slug_attr_key(label)
+    with get_conn() as c:
+        # key 충돌 시 접미 번호
+        base, i = key, 2
+        while c.execute("SELECT 1 FROM project_attr_defs WHERE attr_key = ?",
+                        (key,)).fetchone():
+            key = f"{base}_{i}"; i += 1
+        if sort_order is None:
+            mx = c.execute("SELECT COALESCE(MAX(sort_order),0) FROM project_attr_defs").fetchone()[0]
+            sort_order = (mx or 0) + 1
+        c.execute("""
+            INSERT INTO project_attr_defs
+                (attr_key, label, value_type, unit, domain, sort_order, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, (key, label, value_type or "text", unit, domain or "공통", sort_order))
+    return key
+
+
+def update_attr_def(attr_key: str, **kwargs):
+    allowed = {"label", "value_type", "unit", "domain", "sort_order", "is_active"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as c:
+        c.execute(f"UPDATE project_attr_defs SET {sets} WHERE attr_key = ?",
+                  list(fields.values()) + [attr_key])
+
+
+def toggle_attr_def(attr_key: str, is_active: bool):
+    update_attr_def(attr_key, is_active=1 if is_active else 0)
+
+
+def get_project_attrs(project_id: str) -> dict:
+    """프로젝트의 기준정보 값 {attr_key: 표시값}."""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT attr_key, value_text FROM project_attrs WHERE project_id = ?",
+            (project_id,)).fetchall()
+    return {r["attr_key"]: r["value_text"] for r in rows}
+
+
+def set_project_attrs(project_id: str, values: dict):
+    """기준정보 값 일괄 upsert. 빈 값은 해당 속성 삭제(미지정으로 복귀).
+
+    number 타입은 value_num에도 파싱 저장(수치 조건 검색 대비),
+    표시·드롭다운은 value_text 원문을 쓴다.
+    """
+    defs = {d["attr_key"]: dict(d) for d in list_attr_defs(active_only=False)}
+    now = datetime.now().isoformat()
+    with get_conn() as c:
+        for key, raw in values.items():
+            if key not in defs:
+                continue  # 사전에 없는 키는 무시 (기준정보 통제)
+            val = (raw or "").strip()
+            if not val:
+                c.execute("DELETE FROM project_attrs "
+                          "WHERE project_id = ? AND attr_key = ?",
+                          (project_id, key))
+                continue
+            vnum = None
+            if defs[key].get("value_type") == "number":
+                try:
+                    vnum = float(val.replace(",", ""))
+                except ValueError:
+                    vnum = None
+            c.execute("""
+                INSERT INTO project_attrs
+                    (project_id, attr_key, value_text, value_num, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, attr_key) DO UPDATE SET
+                    value_text = excluded.value_text,
+                    value_num  = excluded.value_num,
+                    updated_at = excluded.updated_at
+            """, (project_id, key, val, vnum, now))
+
+
+def attr_value_options(attr_key: str, limit: int = 50) -> list:
+    """속성별 기존 저장값 목록(중복 제거) — 드롭다운+직접입력(datalist)용.
+
+    새 값을 직접 입력해 저장하면 다음부터 자동으로 목록에 나타난다."""
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT DISTINCT value_text FROM project_attrs
+            WHERE attr_key = ? AND value_text IS NOT NULL AND value_text != ''
+            ORDER BY value_text LIMIT ?
+        """, (attr_key, limit)).fetchall()
+    return [r["value_text"] for r in rows]
+
+
+def search_projects_by_attrs(filters: list) -> list:
+    """기준정보 조건으로 프로젝트 검색 → project_id 목록.
+
+    filters: [(attr_key, value_str), ...] — 조건 간 AND.
+    text: 부분일치(LIKE), number: 수치 일치(=). 값이 빈 조건은 무시.
+    """
+    ids = None
+    defs = {d["attr_key"]: dict(d) for d in list_attr_defs(active_only=False)}
+    with get_conn() as c:
+        for key, raw in filters:
+            val = (raw or "").strip()
+            if not val or key not in defs:
+                continue
+            if defs[key].get("value_type") == "number":
+                try:
+                    vnum = float(val.replace(",", ""))
+                except ValueError:
+                    continue
+                rows = c.execute(
+                    "SELECT project_id FROM project_attrs "
+                    "WHERE attr_key = ? AND value_num = ?",
+                    (key, vnum)).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT project_id FROM project_attrs "
+                    "WHERE attr_key = ? AND value_text LIKE ?",
+                    (key, f"%{val}%")).fetchall()
+            found = {r["project_id"] for r in rows}
+            ids = found if ids is None else (ids & found)
+    return sorted(ids) if ids is not None else None  # None = 조건 없음(전체)
+
+
 # ─── 입찰 ──────────────────────────────────────
+
+def update_bid(bid_id, **kwargs):
+    """입찰 필드 갱신 (범용). 예: update_bid(bid_id, name='재입찰')."""
+    kwargs["updated_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    with get_conn() as c:
+        c.execute(f"UPDATE bids SET {sets} WHERE bid_id = ?",
+                  list(kwargs.values()) + [bid_id])
+
+
+def _hard_delete_bid_in_conn(c, bid_id: str) -> dict:
+    """입찰 완전 삭제 — 자식→부모 순 cascade (호출측 트랜잭션 안에서 실행).
+
+    업로드 물리 파일은 감사·재현 근거로 보존한다(수동 관리 정책).
+    반환: 삭제 건수 요약.
+    """
+    sids = [r["submission_id"] for r in c.execute(
+        "SELECT submission_id FROM submissions WHERE bid_id = ?", (bid_id,))]
+    n = {"submissions": len(sids), "items": 0, "clusters": 0}
+    if sids:
+        ph = ",".join("?" * len(sids))
+        n["items"] = c.execute(
+            f"SELECT COUNT(*) FROM submission_items WHERE submission_id IN ({ph})",
+            sids).fetchone()[0]
+        c.execute(f"""DELETE FROM price_history WHERE item_id IN (
+            SELECT item_id FROM submission_items WHERE submission_id IN ({ph}))""", sids)
+        c.execute(f"""DELETE FROM catalog_suggestions WHERE item_id IN (
+            SELECT item_id FROM submission_items WHERE submission_id IN ({ph}))""", sids)
+    n["clusters"] = c.execute(
+        "SELECT COUNT(*) FROM catalog_clusters WHERE bid_id = ?", (bid_id,)).fetchone()[0]
+    c.execute("""DELETE FROM catalog_cluster_members WHERE cluster_id IN (
+        SELECT cluster_id FROM catalog_clusters WHERE bid_id = ?)""", (bid_id,))
+    c.execute("DELETE FROM catalog_clusters WHERE bid_id = ?", (bid_id,))
+    if sids:
+        c.execute(f"DELETE FROM submission_items WHERE submission_id IN ({ph})", sids)
+    c.execute("DELETE FROM submissions WHERE bid_id = ?", (bid_id,))
+    c.execute("DELETE FROM bid_watchlist WHERE bid_id = ?", (bid_id,))
+    c.execute("DELETE FROM bids WHERE bid_id = ?", (bid_id,))
+    return n
+
+
+def hard_delete_bid(bid_id: str) -> dict:
+    """입찰 완전 삭제 (admin 전용 경로에서만 호출). 단일 트랜잭션."""
+    with get_conn() as c:
+        return _hard_delete_bid_in_conn(c, bid_id)
+
+
+def hard_delete_project(project_id: str) -> dict:
+    """프로젝트 완전 삭제 — 하위 입찰 전부 cascade 후 기준정보·프로젝트 삭제.
+
+    단일 트랜잭션: 중간 실패 시 전체 롤백(get_conn이 예외 시 rollback)."""
+    with get_conn() as c:
+        bid_ids = [r["bid_id"] for r in c.execute(
+            "SELECT bid_id FROM bids WHERE project_id = ?", (project_id,))]
+        total = {"bids": len(bid_ids), "submissions": 0, "items": 0, "clusters": 0}
+        for bid in bid_ids:
+            n = _hard_delete_bid_in_conn(c, bid)
+            for k in ("submissions", "items", "clusters"):
+                total[k] += n[k]
+        c.execute("DELETE FROM project_attrs WHERE project_id = ?", (project_id,))
+        c.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+        return total
+
+
+def vendor_name_exists(bid_id, vendor_name, exclude_submission_id=None):
+    """같은 입찰 내 동일 업체명이 이미 있는지 검사.
+
+    submissions에 UNIQUE(bid_id, vendor_name) 제약이 있어, 업체명 변경 전
+    사전 검사로 사용자에게 명확한 안내를 주기 위한 헬퍼.
+    exclude_submission_id: 자기 자신은 검사에서 제외(동일 이름 재저장 허용).
+    """
+    with get_conn() as c:
+        q = ("SELECT 1 FROM submissions WHERE bid_id = ? AND vendor_name = ?"
+             " AND deleted_at IS NULL")
+        params = [bid_id, vendor_name]
+        if exclude_submission_id:
+            q += " AND submission_id != ?"
+            params.append(exclude_submission_id)
+        return c.execute(q + " LIMIT 1", params).fetchone() is not None
 
 def create_bid(project_id, name, due_date=None, description="",
                created_by=None, domain="IT"):
@@ -170,7 +433,7 @@ def get_submission(submission_id):
     with get_conn() as c:
         return c.execute("""
             SELECT s.*, b.name as bid_name, p.name as project_name,
-                   b.project_id
+                   b.project_id, b.domain as bid_domain
             FROM submissions s
             JOIN bids b USING (bid_id)
             JOIN projects p USING (project_id)
@@ -815,6 +1078,33 @@ def _apply_compare_units(all_items, units_by_sub):
     return out
 
 
+def category_order_for_bid(bid_id: str, present_cats=None) -> list:
+    """입찰의 도메인 기준으로 카테고리 표시 순서를 사전(catalog_categories)에서 결정.
+
+    - 해당 도메인(+ALL 공통)의 활성 카테고리를 sort_order대로 우선 배치
+    - 사전에 없지만 실제 데이터에 존재하는 분류(present_cats)는 뒤에 덧붙여 유실 방지
+    - 도메인 확장(IT/설비/용역) 시 하드코딩 없이 사전만으로 순서가 반영됨
+    """
+    with get_conn() as c:
+        row = c.execute("SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)).fetchone()
+        domain = (dict(row).get("domain") if row else None) or "IT"
+        cats = c.execute("""
+            SELECT name FROM catalog_categories
+            WHERE is_active = 1 AND (domain = ? OR domain = 'ALL')
+            ORDER BY sort_order, name
+        """, (domain,)).fetchall()
+    order = []
+    for r in cats:
+        nm = r["name"]
+        if nm not in order:
+            order.append(nm)
+    # 데이터에만 있는 분류 보존 (사전 미등록)
+    for nm in (present_cats or []):
+        if nm and nm not in order:
+            order.append(nm)
+    return order
+
+
 def compare_bid_submissions(bid_id):
     """
     같은 입찰의 모든 제출서를 업체별로 피벗.
@@ -900,10 +1190,11 @@ def compare_bid_submissions(bid_id):
         # 확정된 클러스터 조회
         # accepted + pending 클러스터 모두 표시
         bid_clusters = c.execute("""
-            SELECT cl.cluster_id, cl.representative_name, cl.status
+            SELECT cl.cluster_id, cl.representative_name, cl.status,
+                   COALESCE(cl.display_order, 0) as display_order
             FROM catalog_clusters cl
             WHERE cl.bid_id = ? AND cl.status IN ('accepted', 'pending', 'held')
-            ORDER BY cl.status DESC, cl.created_at
+            ORDER BY cl.display_order, cl.status DESC, cl.created_at
         """, (bid_id,)).fetchall()
 
         # 클러스터 멤버 (item_id 기준)
@@ -963,8 +1254,10 @@ def compare_bid_submissions(bid_id):
                 # 이름이 충돌하면 경로로 구분, 아니면 이름으로 묶음
                 if name in _conflict_names and path:
                     gkey = path
-                    # 표시: 이름 + 상위 경로(꼬리표)
-                    parent = " > ".join(_split_path(path)[:-1])
+                    # 표시: 이름 + 상위 경로(꼬리표). 단, 상위가 자기 이름과 같으면
+                    # (재료비 > 재료비) 중복이므로 꼬리표 생략.
+                    _pparts = [x for x in _split_path(path)[:-1] if x and x != name]
+                    parent = " > ".join(_pparts)
                     disp = name + (f"  ({parent})" if parent else "")
                 else:
                     gkey = name
@@ -976,6 +1269,7 @@ def compare_bid_submissions(bid_id):
                     "item_id":         ci["item_id"],
                     "name_raw":        ci["name_raw"],
                     "name_normalized": ci["name_normalized"],
+                    "path":            ci["path"],
                     "unit_price":      ci["unit_price"],
                     "amount":          ci["amount"],
                     "quantity":        ci["quantity"],
@@ -1045,16 +1339,18 @@ def compare_bid_submissions(bid_id):
                 "vendors":             vendors,
             })
 
-        # 카테고리 순서 정렬 (자재→인건비→출장비→영업이익→관리비→기타)
-        # + 카테고리 내에서 representative_name A→Z
-        _cat_rank = {"자재":0,"인건비":1,"출장비":2,"영업이익":3,"관리비":4}
+        # 카테고리 순서: 사전(catalog_categories) 도메인 기준 + 데이터 존재 분류 보존
+        _present = {c["cat"] for c in clusters_data if c.get("cat")}
+        _dict_order = category_order_for_bid(bid_id, present_cats=_present)
+        _cat_rank = {name: i for i, name in enumerate(_dict_order)}
+        _rank_max = len(_dict_order)
         clusters_data.sort(key=lambda c: (
-            _cat_rank.get(c["cat"], 9),
+            _cat_rank.get(c["cat"], _rank_max),
             (c["representative_name"] or "").lower()
         ))
 
-        # 카테고리별 피벗 (클러스터 미포함 항목만)
-        cat_order = ["자재", "인건비", "출장비", "영업이익", "관리비"]
+        # 카테고리별 피벗 (클러스터 미포함 항목만) — 사전 순서
+        cat_order = list(_dict_order)
         categories = {cat: {} for cat in cat_order}
         cat_totals = {v: {cat: 0 for cat in cat_order} for v in vendors}
 
@@ -1092,6 +1388,8 @@ def compare_bid_submissions(bid_id):
                 disp_name = nm
             if cat not in categories:
                 categories[cat] = {}
+            for _v in vendors:
+                cat_totals[_v].setdefault(cat, 0)
             if name_key not in categories[cat]:
                 categories[cat][name_key] = {
                     "name":      disp_name,
@@ -1155,10 +1453,13 @@ def compare_bid_submissions(bid_id):
                     FROM price_history ph
                     JOIN submissions s ON ph.submission_id = s.submission_id
                     JOIN bids b ON s.bid_id = b.bid_id
+                    JOIN projects pp ON b.project_id = pp.project_id
                     WHERE ph.catalog_item_id IS NOT NULL
                       AND ph.unit_price > 0
                       AND b.project_id != ?
                       AND s.deleted_at IS NULL
+                      AND b.status != 'cancelled'
+                      AND pp.status != 'archived'
                     GROUP BY ph.catalog_item_id
                     HAVING total_count >= 1
                 """, (cur_project_id,)).fetchall()
@@ -1189,6 +1490,8 @@ def compare_bid_submissions(bid_id):
                           AND b.project_id != ?
                           AND ph.unit_price > 0
                           AND s.deleted_at IS NULL
+                          AND b.status != 'cancelled'
+                          AND p.status != 'archived'
                         ORDER BY ph.unit_price
                     """, bm_cids + [cur_project_id]).fetchall()
                     for dr in det_rows:
@@ -1331,8 +1634,9 @@ def compare_bid_submissions(bid_id):
             ORDER BY i.category, i.name_normalized, i.sort_order
         """, (bid_id,)).fetchall()
 
-        # 카테고리별, 품목별 피벗
-        cat_order = ["자재", "인건비", "출장비", "영업이익", "관리비"]
+        # 카테고리별, 품목별 피벗 — 사전(도메인) 순서 + 데이터 존재 분류 보존
+        _present2 = {(it["category"] or "기타") for it in all_items}
+        cat_order = category_order_for_bid(bid_id, present_cats=_present2)
         categories = {cat: {} for cat in cat_order}  # cat -> {name_key -> row_data}
         cat_totals = {v: {cat: 0 for cat in cat_order} for v in vendors}
 
@@ -1409,17 +1713,28 @@ def cross_bid_price(project_id, name_query):
               AND i.is_header = 0
               AND (i.name_normalized LIKE ? OR i.name_raw LIKE ?)
               AND s.extraction_status = 'done'
+              AND b.status != 'cancelled'          -- 철회 입찰 통계 제외
             ORDER BY b.due_date DESC, s.vendor_name
         """, (project_id, f"%{name_query}%", f"%{name_query}%")).fetchall()
 
 
-def cross_project_price(name_query):
+def cross_project_price(name_query, project_ids=None):
     """
     전체 프로젝트에 걸쳐 품목 가격 이력 조회 (참조자료 활용).
+    project_ids: 기준정보 검색 결과 등 프로젝트 집합으로 범위 제한.
+                 None이면 전체, 빈 리스트면 결과 없음.
     Phase 2에서는 catalog 기반으로 교체됨.
     """
+    if project_ids is not None and len(project_ids) == 0:
+        return []
+    pid_filter = ""
+    params = [f"%{name_query}%", f"%{name_query}%"]
+    if project_ids is not None:
+        pid_filter = (" AND p.project_id IN ("
+                      + ",".join("?" * len(project_ids)) + ")")
+        params += list(project_ids)
     with get_conn() as c:
-        return c.execute("""
+        return c.execute(f"""
             SELECT
                 p.name as project_name,
                 b.name as bid_name,
@@ -1438,8 +1753,11 @@ def cross_project_price(name_query):
             WHERE i.is_header = 0
               AND (i.name_normalized LIKE ? OR i.name_raw LIKE ?)
               AND s.extraction_status = 'done'
+              AND b.status != 'cancelled'          -- 철회 입찰 통계 제외
+              AND p.status != 'archived'           -- 보관 프로젝트 통계 제외
+              {pid_filter}
             ORDER BY b.due_date DESC, s.vendor_name
-        """, (f"%{name_query}%", f"%{name_query}%")).fetchall()
+        """, params).fetchall()
 
 
 # ─── 사용자 ────────────────────────────────────
@@ -1578,6 +1896,216 @@ def get_catalog_category(category_id):
         ).fetchone()
 
 
+def _norm_cat_key(s: str) -> str:
+    """분류명 비교용 정규화 키: 공백·구분기호 제거 + 소문자.
+    '자재 비', '자재-비', '자재비'를 같게 본다."""
+    import re as _re
+    if s is None:
+        return ""
+    return _re.sub(r"[\s\-_/()·.]", "", str(s)).strip().lower()
+
+
+def get_domain_category_binding(domain: str) -> dict:
+    """도메인의 분류 체계를 정규화 조회용 구조로 반환.
+
+    반환:
+      {
+        "domain": domain,
+        "standard": [표준 분류명, ...],           # 활성 카테고리 name (정렬순)
+        "lookup": { 정규화키: 표준명 },            # 정확·별칭 모두 → 표준명
+        "alias_map": { 표준명: [별칭, ...] },      # 표시용
+      }
+    별칭(aliases)까지 lookup에 포함하여, 표기 편차를 표준명으로 자동 귀속할 수 있게 한다.
+    """
+    import json as _json
+    domain = domain or "IT"
+    standard, lookup, alias_map = [], {}, {}
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT name, aliases FROM catalog_categories
+            WHERE is_active = 1 AND (domain = ? OR domain = 'ALL')
+            ORDER BY sort_order, name
+        """, (domain,)).fetchall()
+    for r in rows:
+        d = dict(r)
+        name = d["name"]
+        standard.append(name)
+        lookup[_norm_cat_key(name)] = name
+        aliases = []
+        if d.get("aliases"):
+            try:
+                aliases = [a for a in _json.loads(d["aliases"]) if a and a.strip()]
+            except Exception:
+                aliases = []
+        for a in aliases:
+            lookup[_norm_cat_key(a)] = name  # 별칭 → 표준명
+        alias_map[name] = aliases
+    return {"domain": domain, "standard": standard,
+            "lookup": lookup, "alias_map": alias_map}
+
+
+def resolve_category_binding(raw_category: str, binding: dict) -> dict:
+    """단일 대분류 문자열을 도메인 표준 분류에 해석.
+
+    반환:
+      {
+        "raw": 입력값,
+        "resolved": 표준명 또는 None,
+        "status": "exact" | "alias" | "unmatched",
+      }
+    - exact:  표준명과 (정규화 후) 정확히 일치
+    - alias:  별칭 매핑으로 표준명에 귀속
+    - unmatched: 도메인 분류 체계에 없음 → 경고·재지정 대상
+    """
+    raw = (raw_category or "").strip()
+    if not raw:
+        return {"raw": raw, "resolved": None, "status": "unmatched"}
+    key = _norm_cat_key(raw)
+    lookup = binding.get("lookup", {})
+    if key in lookup:
+        std = lookup[key]
+        # 원문이 표준명과 (정규화 무시하고) 동일하면 exact, 아니면 alias 귀속
+        status = "exact" if _norm_cat_key(std) == key and raw == std else \
+                 ("exact" if raw == std else "alias")
+        return {"raw": raw, "resolved": std, "status": status}
+    return {"raw": raw, "resolved": None, "status": "unmatched"}
+
+
+def validate_submission_categories(submission_id: str) -> dict:
+    """제출서의 모든 항목 대분류가 도메인 분류 체계에 부합하는지 검증.
+
+    반환:
+      {
+        "domain": ...,
+        "standard": [표준 분류...],
+        "summary": { 원본대분류: {"count":N, "resolved":표준명|None, "status":...} },
+        "unmatched": [ 원본대분류(미매칭)... ],
+        "n_items": 총 항목,
+        "n_unmatched_items": 미매칭 항목 수,
+      }
+    추출 후 검증 게이트(층위 2)에서 사용.
+    """
+    with get_conn() as c:
+        srow = c.execute("""
+            SELECT s.submission_id, b.domain
+            FROM submissions s JOIN bids b USING (bid_id)
+            WHERE s.submission_id = ?
+        """, (submission_id,)).fetchone()
+        if not srow:
+            raise ValueError(f"제출서를 찾을 수 없습니다: {submission_id}")
+        domain = (dict(srow).get("domain")) or "IT"
+        items = c.execute("""
+            SELECT category, COUNT(*) as cnt
+            FROM submission_items
+            WHERE submission_id = ? AND is_header = 0
+            GROUP BY category
+        """, (submission_id,)).fetchall()
+
+    binding = get_domain_category_binding(domain)
+    summary, unmatched = {}, []
+    alias_normalize = {}          # {원본표기: 표준명} — 별칭 해석되나 저장값이 표준과 다름
+    n_items = n_unmatched = n_alias = 0
+    for it in items:
+        d = dict(it)
+        raw = d.get("category") or "(미지정)"
+        cnt = d["cnt"]
+        n_items += cnt
+        res = resolve_category_binding(d.get("category"), binding)
+        summary[raw] = {"count": cnt, "resolved": res["resolved"],
+                        "status": res["status"]}
+        if res["status"] == "unmatched":
+            unmatched.append(raw)
+            n_unmatched += cnt
+        elif res["status"] == "alias" and res["resolved"] and res["resolved"] != raw:
+            # 별칭으로 표준에 귀속되나 저장값(raw)이 아직 표준명이 아님 → 정규화 대상
+            alias_normalize[raw] = res["resolved"]
+            n_alias += cnt
+    return {
+        "domain": domain, "standard": binding["standard"],
+        "summary": summary,
+        "unmatched": unmatched,
+        "alias_normalize": alias_normalize,
+        "n_items": n_items,
+        "n_unmatched_items": n_unmatched,
+        "n_alias_items": n_alias,
+    }
+
+
+def apply_category_binding(submission_id: str, mapping: dict,
+                           add_as_alias: bool = False) -> dict:
+    """미매칭·편차 대분류를 표준 분류로 일괄 재지정.
+
+    - mapping: { 원본대분류: 표준분류명 }
+    - add_as_alias: True면 원본대분류를 해당 표준 분류의 별칭으로 등록
+      (다음부터 자동 귀속되게 학습)
+
+    submission_items.category와 path의 첫 세그먼트를 표준명으로 갱신한다.
+    반환: {"items_updated": N, "aliases_added": M}
+    """
+    import json as _json
+    PATH_SEP = " > "
+    if not mapping:
+        return {"items_updated": 0, "aliases_added": 0}
+    with get_conn() as c:
+        brow = c.execute("""
+            SELECT b.domain FROM submissions s JOIN bids b USING (bid_id)
+            WHERE s.submission_id = ?
+        """, (submission_id,)).fetchone()
+        domain = (dict(brow).get("domain") if brow else None) or "IT"
+
+        items_updated = 0
+        for raw_cat, std_cat in mapping.items():
+            std_cat = (std_cat or "").strip()
+            if not std_cat:
+                continue
+            rows = c.execute("""
+                SELECT item_id, path FROM submission_items
+                WHERE submission_id = ? AND category = ?
+            """, (submission_id, raw_cat)).fetchall()
+            for r in rows:
+                d = dict(r)
+                # path 첫 세그먼트를 표준명으로 치환
+                new_path = d.get("path")
+                if new_path:
+                    parts = [p.strip() for p in new_path.split(PATH_SEP)]
+                    if parts:
+                        parts[0] = std_cat
+                        new_path = PATH_SEP.join(parts)
+                c.execute("""
+                    UPDATE submission_items SET category = ?, path = ?
+                    WHERE item_id = ?
+                """, (std_cat, new_path, d["item_id"]))
+                items_updated += 1
+
+        aliases_added = 0
+        if add_as_alias:
+            for raw_cat, std_cat in mapping.items():
+                std_cat = (std_cat or "").strip()
+                if not std_cat or raw_cat == std_cat:
+                    continue
+                crow = c.execute("""
+                    SELECT category_id, aliases FROM catalog_categories
+                    WHERE name = ? AND (domain = ? OR domain = 'ALL')
+                          AND is_active = 1 LIMIT 1
+                """, (std_cat, domain)).fetchone()
+                if not crow:
+                    continue
+                cd = dict(crow)
+                try:
+                    cur = _json.loads(cd["aliases"]) if cd.get("aliases") else []
+                except Exception:
+                    cur = []
+                if raw_cat not in cur:
+                    cur.append(raw_cat)
+                    c.execute("""
+                        UPDATE catalog_categories SET aliases = ?, updated_at = ?
+                        WHERE category_id = ?
+                    """, (_json.dumps(cur, ensure_ascii=False),
+                          datetime.now().isoformat(), cd["category_id"]))
+                    aliases_added += 1
+    return {"items_updated": items_updated, "aliases_added": aliases_added}
+
+
 def create_catalog_category(name, domain='IT', parent_id=None,
                              sort_order=0, description=None):
     cid = new_id()
@@ -1625,7 +2153,90 @@ def delete_catalog_category(category_id):
 
 # ─── 도메인 관련 ─────────────────────────────────
 
+# 폴백 기본 도메인 (domains 테이블이 비었을 때만 사용)
 DOMAIN_LIST = ['IT', '설비', '용역', '기타']
+
+
+def list_domains(active_only: bool = True):
+    """도메인 목록(행) 반환 — domains 테이블 기반."""
+    sql = "SELECT * FROM domains"
+    if active_only:
+        sql += " WHERE is_active = 1"
+    sql += " ORDER BY sort_order, name"
+    with get_conn() as c:
+        return c.execute(sql).fetchall()
+
+
+def list_domain_names(active_only: bool = True) -> list:
+    """도메인 이름 목록. 테이블이 비어 있으면 DOMAIN_LIST 폴백.
+
+    코드 전반이 이 함수를 호출하도록 하여, 도메인을 동적으로 추가·관리할 수 있게 한다.
+    """
+    try:
+        rows = list_domains(active_only=active_only)
+        names = [dict(r)["name"] for r in rows]
+        return names or list(DOMAIN_LIST)
+    except Exception:
+        return list(DOMAIN_LIST)
+
+
+def get_domain(domain_id: str):
+    with get_conn() as c:
+        return c.execute("SELECT * FROM domains WHERE domain_id = ?",
+                         (domain_id,)).fetchone()
+
+
+def create_domain(name: str, description: str = None, sort_order: int = None) -> str:
+    """새 도메인 추가. 이름 중복(UNIQUE) 시 예외."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("도메인명을 입력하세요.")
+    did = new_id()
+    with get_conn() as c:
+        if sort_order is None:
+            mx = c.execute("SELECT COALESCE(MAX(sort_order),0) FROM domains").fetchone()[0]
+            sort_order = (mx or 0) + 1
+        c.execute("""
+            INSERT INTO domains (domain_id, name, description, sort_order, is_active, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?)
+        """, (did, name, description, sort_order, datetime.now().isoformat()))
+    return did
+
+
+def update_domain(domain_id: str, **kwargs):
+    allowed = {"name", "description", "sort_order", "is_active"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    fields["updated_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with get_conn() as c:
+        c.execute(f"UPDATE domains SET {sets} WHERE domain_id = ?",
+                  list(fields.values()) + [domain_id])
+
+
+def toggle_domain(domain_id: str, is_active: bool):
+    update_domain(domain_id, is_active=1 if is_active else 0)
+
+
+def delete_domain(domain_id: str) -> bool:
+    """도메인 삭제. 사용 중(입찰·카테고리 참조)이면 삭제 불가 → False.
+    안전을 위해 하드 삭제 대신 사용처가 없을 때만 허용."""
+    with get_conn() as c:
+        d = c.execute("SELECT name FROM domains WHERE domain_id = ?",
+                      (domain_id,)).fetchone()
+        if not d:
+            return False
+        dname = dict(d)["name"]
+        # 입찰·카테고리에서 사용 중인지 확인
+        n_bids = c.execute("SELECT COUNT(*) FROM bids WHERE domain = ?", (dname,)).fetchone()[0]
+        n_cats = c.execute("SELECT COUNT(*) FROM catalog_categories WHERE domain = ?",
+                           (dname,)).fetchone()[0]
+        if n_bids or n_cats:
+            return False
+        c.execute("DELETE FROM domains WHERE domain_id = ?", (domain_id,))
+        return True
+
 
 def get_bid_domain(bid_id: str) -> str:
     """입찰의 도메인 반환 (없으면 'IT')"""
@@ -2084,6 +2695,7 @@ def list_submission_items_for_clustering(bid_id: str) -> list:
         if not units:
             # 비교 단위 없음 → 잎 그대로 (기존 동작)
             for it in items:
+                _path = it.get("path") or ""
                 result.append({
                     "item_id": it.get("item_id"),
                     "name_raw": it.get("name_raw"),
@@ -2092,6 +2704,9 @@ def list_submission_items_for_clustering(bid_id: str) -> list:
                     "unit": it.get("unit"), "quantity": it.get("quantity"),
                     "unit_price": it.get("unit_price"), "amount": it.get("amount"),
                     "vendor_name": vendor, "submission_id": sid,
+                    # 경로 보존: 클러스터링 입력의 (맥락)상위·트리 표시에 사용
+                    "path": _path,
+                    "full_label": _path or it.get("name_normalized") or it.get("name_raw"),
                 })
             continue
 
@@ -2125,14 +2740,31 @@ def list_submission_items_for_clustering(bid_id: str) -> list:
         # 묶음명(label)이 비교 기준(주). 하위 세부는 참조 정보(보조).
         for upath, g in groups.items():
             is_single = (g["n"] == 1)  # 잎 1개 = 항목 단위, 여러 개 = 분류 묶음
-            ref_members = g["members"][:12]  # 참조용 하위 세부 (너무 많으면 일부)
+            ref_members = g["members"][:16]  # 참조용 하위 세부 (빌더 노출 상한 16과 정합)
+            # 비교 기준명: 세분류(끝부분)가 주 기준.
+            # 단, 상위 레벨이 다른 동일 세분류를 구분할 수 있게 전체 경로도 보존.
+            # compare_label = 세분류명(주), compare_path = 전체 경로(맥락)
+            _parts = _split_path(upath)
+            leaf_label = g["label"]  # 세분류명 (끝부분)
+            full_label = " > ".join(_parts) if len(_parts) > 1 else leaf_label
+            # 동일명 반복 경로(대분류=중분류=… 같은 이름) 정리:
+            # 단일 항목이고 하위 참조가 잎 이름과 같으면 무의미한 중복이므로 제거.
+            # (예: 비교단위=재료비인데 사양=재료비로 중복 노출되는 노이즈 방지)
+            if is_single and ref_members and all(
+                m == leaf_label or m.startswith(leaf_label + "(") for m in ref_members
+            ):
+                ref_members = []
+            spec_val = (" / ".join(ref_members) if ref_members else None)
             result.append({
                 "item_id": g["first_item_id"],
-                # 비교 기준(주): 묶음명. 잎 1개면 그 품목명이 곧 묶음명.
-                "name_raw": g["label"],
-                "name_normalized": g["label"],
+                # 비교 기준(주): 세분류명. 잎 1개면 그 품목명이 곧 묶음명.
+                "name_raw": leaf_label,
+                "name_normalized": leaf_label,
+                # 상위 경로 포함 전체명 (상위 다른 동일 세분류 구분용).
+                # 단, 모든 세그먼트가 같은 이름이면(재료비>재료비) 잎만 남겨 중복 제거.
+                "full_label": (leaf_label if _parts and len(set(_parts)) == 1 else full_label),
                 # 참조(보조): 묶음 안의 세부 항목·규격. LLM이 애매할 때 참조.
-                "spec": (" / ".join(ref_members) if ref_members else None),
+                "spec": spec_val,
                 "category": g.get("category"),
                 "unit": None, "quantity": None, "unit_price": None,
                 "amount": g["amount"],

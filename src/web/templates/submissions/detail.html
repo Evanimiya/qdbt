@@ -2,13 +2,13 @@
 {% block title %}{{ sub.vendor_name }} · {{ sub.bid_name }}{% endblock %}
 
 {% block content %}
-<nav class="text-sm mb-4 text-gray-500">
-  <a href="{{ url_for('projects.detail', project_id=sub.project_id) }}" class="hover:text-blue-700 break-ko">{{ sub.project_name }}</a>
-  <span class="mx-2">›</span>
-  <a href="{{ url_for('bids.detail', bid_id=sub.bid_id) }}" class="hover:text-blue-700 break-ko">{{ sub.bid_name }}</a>
-  <span class="mx-2">›</span>
-  <span class="text-gray-900 break-ko">{{ sub.vendor_name }}</span>
-</nav>
+{% from '_breadcrumb.html' import breadcrumb %}
+{{ breadcrumb([
+    ('프로젝트', url_for('projects.index')),
+    (sub.project_name, url_for('projects.detail', project_id=sub.project_id)),
+    (sub.bid_name, url_for('bids.detail', bid_id=sub.bid_id)),
+    (sub.vendor_name, none),
+]) }}
 
 <!-- 헤더 -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
@@ -27,9 +27,18 @@
       </p>
     </div>
     <div class="flex gap-2 flex-wrap items-center">
+      {% if has_role('manager') and sub.file_format == 'xlsx' and sub.extraction_status in ('pending', 'failed', 'done') %}
+      <div class="w-full text-xs break-ko rounded-lg px-3 py-2 mb-1"
+           style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e;">
+        💡 <b>xlsx는 ‘🧩 열 매핑 추출(코드 기반)’을 권장합니다.</b>
+        번호 계층·병합이 있는 복잡 양식에서는 LLM 추출이 품목 계층(path)을 깨뜨려
+        클러스터링이 약해질 수 있습니다. 단순 양식이면 LLM 추출도 사용할 수 있습니다.
+      </div>
+      {% endif %}
       {% if has_role('manager') and sub.extraction_status in ('pending', 'failed') %}
-      {% from '_model_selector.html' import model_selector %}
+      {% from '_model_selector.html' import model_selector with context %}
       <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
+            {% if sub.file_format == 'xlsx' %}onsubmit="return confirm('xlsx는 ‘열 매핑 추출(코드 기반)’을 권장합니다.\n\nLLM 추출은 번호 계층·병합이 있는 복잡 양식에서 품목 계층이 깨질 수 있습니다.\n그래도 LLM으로 추출하시겠습니까?');"{% endif %}
             class="flex items-center gap-2 flex-wrap">
         {{ model_selector('ext') }}
         {% if sheet_list and sheet_list|length > 1 %}
@@ -69,9 +78,16 @@
       </span>
       {% endif %}
       {% if has_role('manager') and sub.extraction_status == 'done' %}
-      {% from '_model_selector.html' import model_selector %}
+      <!-- 도메인 분류 정합 검증 게이트 (층위 2) -->
+      <div id="catBindGate" style="display:none"
+           class="w-full mb-3 rounded-lg border p-3 text-sm break-ko">
+        <div id="catBindGateHead" class="font-semibold mb-1"></div>
+        <div id="catBindGateBody" class="text-xs"></div>
+        <div id="catBindGateActions" class="mt-2"></div>
+      </div>
+      {% from '_model_selector.html' import model_selector with context %}
       <form method="POST" action="{{ url_for('submissions.extract', submission_id=sub.submission_id) }}"
-            onsubmit="return confirm('이미 추출된 데이터가 있습니다. 재추출하시겠습니까?');"
+            {% if sub.file_format == 'xlsx' %}onsubmit="return confirm('xlsx는 ‘열 매핑 추출(코드 기반)’을 권장합니다.\n\nLLM 재추출은 번호 계층·병합이 있는 복잡 양식에서 품목 계층이 깨질 수 있습니다.\n그래도 LLM으로 재추출하시겠습니까?');"{% else %}onsubmit="return confirm('이미 추출된 데이터가 있습니다. 재추출하시겠습니까?');"{% endif %}
             class="flex items-center gap-2 flex-wrap">
         {{ model_selector('reext') }}
         {% if sheet_list and sheet_list|length > 1 %}
@@ -117,6 +133,24 @@
                 class="text-sm bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold
                        px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap border border-amber-200">
           🔁 추출 초기화
+        </button>
+      </form>
+      {% endif %}
+      {% if has_role('manager') and sub.extraction_status != 'processing' %}
+      {% set _has_data = (sub.extraction_status == 'done') or (items and items|length > 0) %}
+      <form method="POST" action="{{ url_for('submissions.reupload', submission_id=sub.submission_id) }}"
+            enctype="multipart/form-data" class="inline"
+            onsubmit="return qdReupload(this)">
+        {% if _has_data %}<input type="hidden" name="confirm_reset" value="1">{% endif %}
+        <input type="file" name="file" id="reuploadFile_{{ sub.submission_id }}"
+               accept=".xlsx,.pdf,.docx" style="display:none"
+               onchange="if(this.files.length){ this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit(); }">
+        <button type="button"
+                onclick="document.getElementById('reuploadFile_{{ sub.submission_id }}').click()"
+                class="text-sm bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold
+                       px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap border border-slate-200"
+                title="첨부 파일이 깨진 경우 재추출을 위해 새 파일로 교체합니다">
+          📎 파일 다시 올리기
         </button>
       </form>
       {% endif %}
@@ -321,11 +355,179 @@
   </a>
 </div>
 {% endif %}
+
+{% if has_role('manager') %}
+<!-- 대분류 재지정 모달 (도메인 표준으로 귀속) -->
+<div id="catRemapOverlay"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:200;
+            align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:20px;
+              box-shadow:0 12px 40px rgba(0,0,0,.25);max-height:85vh;overflow:auto">
+    <div style="font-size:15px;font-weight:700;color:#0F172A;margin-bottom:4px">
+      🗂 표준 분류로 재지정
+    </div>
+    <div style="font-size:12px;color:#64748B;margin-bottom:14px">
+      도메인(<b id="catRemapDomain"></b>) 표준 분류를 벗어난 대분류를 표준으로 맞춥니다.
+      선택 후 해당 대분류의 모든 항목이 표준 분류로 귀속됩니다.
+    </div>
+    <div id="catRemapRows" style="display:flex;flex-direction:column;gap:10px"></div>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:14px;font-size:12px;color:#475569;cursor:pointer">
+      <input type="checkbox" id="catRemapAlias" checked style="width:14px;height:14px">
+      원본 표기를 표준 분류의 <b>별칭으로 학습</b> (다음 추출부터 자동 귀속)
+    </label>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button type="button" onclick="closeCatRemap()"
+              style="font-size:13px;padding:8px 16px;border-radius:8px;border:1px solid #E2E8F0;
+                     background:#fff;color:#64748B;cursor:pointer">취소</button>
+      <button type="button" onclick="applyCatRemap()"
+              style="font-size:13px;padding:8px 18px;border-radius:8px;border:none;
+                     background:#2563EB;color:#fff;font-weight:600;cursor:pointer">재지정 적용</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
 const SUBMISSION_ID = "{{ sub.submission_id }}";
+
+/* ── 도메인 분류 정합 검증 게이트 (층위 2) ── */
+var _catBindData = null;
+function loadCatBindGate(){
+  var gate=document.getElementById('catBindGate');
+  if(!gate) return;
+  fetch("{{ url_for('submissions.category_binding_check', submission_id=sub.submission_id) }}")
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ gate.style.display='none'; return; }
+      _catBindData=d;
+      var head=document.getElementById('catBindGateHead');
+      var body=document.getElementById('catBindGateBody');
+      var acts=document.getElementById('catBindGateActions');
+      if(!d.unmatched || d.unmatched.length===0){
+        var aliasN = d.alias_normalize ? Object.keys(d.alias_normalize).length : 0;
+        if(aliasN > 0){
+          // 미매칭은 없으나 별칭 표기 편차가 남음 → 표준 정규화 원클릭 제안
+          gate.style.display='';
+          gate.style.background='#fffbeb'; gate.style.borderColor='#fde68a';
+          head.style.color='#92400e';
+          head.innerHTML='📎 표기 편차 '+aliasN+'종이 표준 분류로 자동 인식됩니다';
+          var pairs=Object.keys(d.alias_normalize).map(function(k){
+            return '<b>'+k+'</b> → '+d.alias_normalize[k];
+          }).join(', ');
+          body.innerHTML=pairs+'<br>저장값을 표준 분류로 정규화하면 비교·클러스터링이 일관됩니다.';
+          acts.innerHTML='<button type="button" onclick="normalizeAliases()" '
+            +'style="font-size:12px;padding:6px 14px;border-radius:8px;border:none;'
+            +'background:#d97706;color:#fff;font-weight:600;cursor:pointer">표준으로 정규화 →</button>';
+        } else {
+          // 완전 정합 → 녹색 확인 배너
+          gate.style.display='';
+          gate.style.background='#f0fdf4'; gate.style.borderColor='#bbf7d0';
+          head.style.color='#166534';
+          head.innerHTML='✅ 분류 정합 확인 — 모든 대분류가 '+d.domain+' 도메인 표준에 부합';
+          body.innerHTML=''; acts.innerHTML='';
+        }
+      } else {
+        // 미매칭 존재 → 파란 안내 + 재지정 버튼
+        gate.style.display='';
+        gate.style.background='#eff6ff'; gate.style.borderColor='#bfdbfe';
+        head.style.color='#1e40af';
+        head.innerHTML='📋 표준 분류를 벗어난 대분류 '+d.unmatched.length+'종 ('
+          +d.n_unmatched_items+'개 항목)';
+        body.innerHTML='표준 밖: '+d.unmatched.map(function(u){return '<b>'+u+'</b>';}).join(', ')
+          +'<br>이 입찰은 <b>'+d.domain+'</b> 도메인 표준 분류를 따릅니다. '
+          +'업체 표기 편차라면 표준으로 재지정하세요.';
+        acts.innerHTML='<button type="button" onclick="openCatRemap()" '
+          +'style="font-size:12px;padding:6px 14px;border-radius:8px;border:none;'
+          +'background:#2563EB;color:#fff;font-weight:600;cursor:pointer">표준 분류로 재지정 →</button>';
+      }
+    }).catch(function(){ gate.style.display='none'; });
+}
+function openCatRemap(){
+  if(!_catBindData) return;
+  document.getElementById('catRemapDomain').textContent=_catBindData.domain;
+  var std=_catBindData.standard||[];
+  var wrap=document.getElementById('catRemapRows');
+  wrap.innerHTML='';
+  _catBindData.unmatched.forEach(function(raw){
+    var cnt=(_catBindData.summary[raw]||{}).count||0;
+    var row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:8px;background:#f8fafc;border-radius:8px';
+    var opts='<option value="">— 표준 분류 선택 —</option>'
+      + std.map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join('');
+    row.innerHTML='<span style="flex:0 0 auto;font-size:13px;font-weight:600;color:#334155">'
+      + raw+'</span><span style="font-size:11px;color:#94a3b8">('+cnt+'개)</span>'
+      + '<span style="color:#cbd5e1">→</span>'
+      + '<select data-raw="'+raw.replace(/"/g,'&quot;')+'" '
+      + 'style="flex:1;font-size:13px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px">'
+      + opts+'</select>';
+    wrap.appendChild(row);
+  });
+  document.getElementById('catRemapOverlay').style.display='flex';
+}
+function closeCatRemap(){ document.getElementById('catRemapOverlay').style.display='none'; }
+function normalizeAliases(){
+  if(!_catBindData || !_catBindData.alias_normalize) return;
+  var mapping=_catBindData.alias_normalize;
+  if(Object.keys(mapping).length===0) return;
+  fetch("{{ url_for('submissions.category_binding_apply', submission_id=sub.submission_id) }}",{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mapping:mapping, add_as_alias:false})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){
+      alert('표준 정규화 완료: '+d.items_updated+'개 항목');
+      location.reload();
+    } else {
+      alert('정규화 실패: '+(d.error||'알 수 없는 오류'));
+    }
+  }).catch(function(e){ alert('요청 실패: '+e); });
+}
+function applyCatRemap(){
+  var sels=document.querySelectorAll('#catRemapRows select');
+  var mapping={};
+  var missing=0;
+  sels.forEach(function(s){
+    var raw=s.getAttribute('data-raw'); var val=s.value;
+    if(val) mapping[raw]=val; else missing++;
+  });
+  if(Object.keys(mapping).length===0){ alert('재지정할 표준 분류를 선택하세요.'); return; }
+  var alias=document.getElementById('catRemapAlias').checked;
+  fetch("{{ url_for('submissions.category_binding_apply', submission_id=sub.submission_id) }}",{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mapping:mapping, add_as_alias:alias})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){
+      closeCatRemap();
+      alert('재지정 완료: '+d.items_updated+'개 항목'
+        +(d.aliases_added?(' · 별칭 '+d.aliases_added+'건 학습'):''));
+      location.reload();
+    } else {
+      alert('재지정 실패: '+(d.error||'알 수 없는 오류'));
+    }
+  }).catch(function(e){ alert('요청 실패: '+e); });
+}
+document.addEventListener('DOMContentLoaded', loadCatBindGate);
+
+
+/* ── 파일 다시 올리기: 데이터 있으면 초기화 확인 ── */
+var QD_HAS_DATA = {{ 'true' if (sub.extraction_status == 'done') or (items and items|length > 0) else 'false' }};
+function qdReupload(form){
+  var f = form.querySelector('input[type=file]');
+  if (!f || !f.files.length) return false;
+  var msg;
+  if (QD_HAS_DATA) {
+    msg = '⚠ 기존 추출 데이터가 초기화됩니다.\n\n'
+        + '이 제출서의 품목·비교단위·수기 nego가 모두 삭제되며,\n'
+        + '해당 품목이 클러스터에 포함돼 있으면 클러스터에서도 빠집니다.\n'
+        + '확정된 클러스터에 영향이 있는지 먼저 확인하세요.\n\n'
+        + '새 파일로 교체하고 초기화하시겠습니까? (이전 파일은 보존됩니다)';
+  } else {
+    msg = '새 파일로 교체하시겠습니까? (이전 파일은 보존됩니다)';
+  }
+  if (!confirm(msg)) { f.value = ''; return false; }
+  return true;
+}
 
 // ── Special Nego 수기 입력 ──
 function escapeHtmlN(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

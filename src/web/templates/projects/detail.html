@@ -2,18 +2,34 @@
 {% block title %}{{ project.name }}{% endblock %}
 
 {% block content %}
-<!-- 브레드크럼 -->
-<nav class="text-sm mb-4 text-gray-500">
-  <a href="{{ url_for('projects.index') }}" class="hover:text-blue-700">프로젝트</a>
-  <span class="mx-2">›</span>
-  <span class="text-gray-900">{{ project.name }}</span>
-</nav>
+{% from '_breadcrumb.html' import breadcrumb %}
+{{ breadcrumb([
+    ('프로젝트', url_for('projects.index')),
+    (project.name, none),
+]) }}
 
 <!-- 프로젝트 헤더 -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
   <div class="flex items-start justify-between flex-wrap gap-3">
     <div class="flex-1">
-      <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">{{ project.name }}</h1>
+      <div class="flex items-center gap-2 flex-wrap" id="projNameText">
+        <h1 class="text-xl sm:text-2xl font-bold text-gray-900 break-ko">{{ project.name }}</h1>
+        {% if has_role('manager') %}
+        <button type="button" onclick="qdStartEdit('projName')" title="프로젝트명 수정"
+                class="text-gray-400 hover:text-blue-700 text-base leading-none">✏️</button>
+        {% endif %}
+      </div>
+      {% if has_role('manager') %}
+      <form method="POST" action="{{ url_for('projects.rename_project', project_id=project.project_id) }}"
+            id="projNameForm" class="hidden items-center gap-2 flex-wrap">
+        <input type="text" name="name" value="{{ project.name }}" required
+               class="text-lg font-bold border border-blue-300 rounded-lg px-2 py-1 break-ko flex-1 min-w-[180px]">
+        <button type="submit"
+                class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-3 py-1.5 rounded-lg">저장</button>
+        <button type="button" onclick="qdCancelEdit('projName')"
+                class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg">취소</button>
+      </form>
+      {% endif %}
       {% if project.description %}
       <p class="text-sm text-gray-500 mt-1 break-ko">{{ project.description }}</p>
       {% endif %}
@@ -22,9 +38,37 @@
       <span class="text-xs px-2 py-1 rounded-full
         {% if project.status=='active' %}bg-green-100 text-green-700
         {% elif project.status=='closed' %}bg-gray-100 text-gray-600
+        {% elif project.status=='archived' %}bg-red-100 text-red-700
         {% else %}bg-yellow-100 text-yellow-700{% endif %}">
         {{ project.status }}
       </span>
+      {% if has_role('manager') %}
+      {% if project.status != 'archived' %}
+      <form method="POST" action="{{ url_for('projects.update_status', project_id=project.project_id) }}"
+            onsubmit="return confirm('이 프로젝트를 보관 처리하시겠습니까?\n\n데이터는 모두 보존되며 언제든 복원할 수 있습니다.\n보관된 프로젝트의 가격은 과거가 통계·검색에서 제외되고,\n프로젝트 목록에서 기본 숨김 처리됩니다.');">
+        <input type="hidden" name="status" value="archived">
+        <button type="submit"
+                class="text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
+                       font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">📦 보관(철회)</button>
+      </form>
+      {% else %}
+      <form method="POST" action="{{ url_for('projects.update_status', project_id=project.project_id) }}">
+        <input type="hidden" name="status" value="active">
+        <button type="submit"
+                class="text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200
+                       font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">↩ 보관 취소(복원)</button>
+      </form>
+      {% if has_role('admin') %}
+      <form method="POST" action="{{ url_for('projects.hard_delete', project_id=project.project_id) }}"
+            onsubmit="return qdHardDelete(this, 'projNameText', '프로젝트');">
+        <input type="hidden" name="confirm_name">
+        <button type="submit"
+                class="text-xs bg-red-600 hover:bg-red-700 text-white
+                       font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap">🗑 완전 삭제 (admin)</button>
+      </form>
+      {% endif %}
+      {% endif %}
+      {% endif %}
       {% if has_role('manager') %}
       <form method="POST"
             action="{{ url_for('projects.reset_demo', project_id=project.project_id) }}"
@@ -38,6 +82,82 @@
       {% endif %}
     </div>
   </div>
+</div>
+
+<!-- 기준정보 (프로젝트 속성) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <h2 class="text-base font-bold text-gray-900 break-ko">🗂 기준정보</h2>
+    {% if has_role('manager') %}
+    <button type="button" id="attrEditBtn" onclick="qdStartEdit('attrCard')"
+            class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold
+                   px-3 py-1.5 rounded-lg transition-colors">✏️ 편집</button>
+    {% endif %}
+  </div>
+
+  {# ── 보기 모드 ── #}
+  <div id="attrCardText" class="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+    <div>
+      <span class="text-gray-500 text-xs break-ko">분류 체계(도메인)</span>
+      <div class="font-medium text-gray-900 break-ko">
+        <span class="inline-block px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-semibold">
+          {{ project.domain or 'IT' }}</span>
+      </div>
+    </div>
+    {% for d in attr_defs %}
+    <div>
+      <span class="text-gray-500 text-xs">{{ d.label }}{% if d.unit %} ({{ d.unit }}){% endif %}</span>
+      <div class="font-medium text-gray-900 break-ko">
+        {{ attrs.get(d.attr_key) or '—' }}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── 편집 모드: 드롭다운(기존값) + 직접입력 콤보 (datalist) ── #}
+  {% if has_role('manager') %}
+  <form method="POST" action="{{ url_for('projects.save_attrs', project_id=project.project_id) }}"
+        id="attrCardForm" class="hidden">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <label class="block">
+        <span class="text-xs text-gray-500 break-ko">분류 체계(도메인)</span>
+        <select name="domain"
+                class="mt-0.5 w-full text-sm border border-gray-300 rounded-lg px-2.5 py-1.5
+                       focus:ring-2 focus:ring-blue-500 break-ko">
+          {% for dn in (domains or ['IT','설비','용역','기타']) %}
+          <option value="{{ dn }}" {% if dn == (project.domain or 'IT') %}selected{% endif %}>{{ dn }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% for d in attr_defs %}
+      <label class="block">
+        <span class="text-xs text-gray-500">{{ d.label }}{% if d.unit %} ({{ d.unit }}){% endif %}</span>
+        <input type="text" name="attr_{{ d.attr_key }}"
+               value="{{ attrs.get(d.attr_key) or '' }}"
+               list="dl_{{ d.attr_key }}"
+               {% if d.value_type == 'number' %}inputmode="decimal"{% endif %}
+               placeholder="선택 또는 직접 입력"
+               class="mt-0.5 w-full text-sm border border-gray-300 rounded-lg px-2.5 py-1.5
+                      focus:ring-2 focus:ring-blue-500 break-ko">
+        <datalist id="dl_{{ d.attr_key }}">
+          {% for opt in attr_options.get(d.attr_key, []) %}
+          <option value="{{ opt }}">
+          {% endfor %}
+        </datalist>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="flex gap-2 mt-3">
+      <button type="submit"
+              class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-4 py-1.5 rounded-lg">저장</button>
+      <button type="button" onclick="qdCancelEdit('attrCard')"
+              class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-1.5 rounded-lg">취소</button>
+    </div>
+    <p class="text-xs text-gray-400 mt-2 break-ko">
+      직접 입력해 저장한 값은 다음부터 드롭다운 목록에 자동으로 나타납니다.
+    </p>
+  </form>
+  {% endif %}
 </div>
 
 <!-- 입찰 목록 헤더 -->
@@ -110,4 +230,47 @@
   <p class="text-gray-500 break-ko">아직 등록된 입찰이 없습니다.</p>
 </div>
 {% endif %}
+
+<script>
+/* 완전 삭제: 이름 타이핑 확인 (서버에서도 재검증)
+   nameElId = 이름 표시 요소 id. h1 자식이 있으면 그 텍스트를 사용해
+   인라인 편집 버튼(✏️) 등 부가 텍스트를 배제하고 최신 이름만 읽는다. */
+function qdHardDelete(form, nameElId, kind){
+  var el = document.getElementById(nameElId);
+  var h1 = el ? el.querySelector('h1') : null;
+  var current = ((h1 || el) ? (h1 || el).textContent : '').trim();
+  var typed = prompt(
+    '⚠ 되돌릴 수 없는 완전 삭제입니다.\n' +
+    '하위 입찰·제출서·품목·클러스터가 모두 영구 삭제됩니다.\n' +
+    '(업로드 원본 파일은 보존됩니다)\n\n' +
+    '계속하려면 아래 ' + kind + '명을 정확히 입력하세요:\n' + current
+  );
+  if (typed === null) return false;
+  if (typed.trim() !== current) {
+    alert('입력한 이름이 현재 ' + kind + '명과 다릅니다.\n현재 ' + kind + '명: ' + current +
+          '\n\n삭제를 취소했습니다. 다시 시도하세요.');
+    return false;
+  }
+  form.querySelector('input[name=confirm_name]').value = typed.trim();
+  return true;
+}
+
+/* 인라인 명칭 편집: {키}Text(표시) ↔ {키}Form(입력) 토글 */
+function qdStartEdit(key){
+  var view = document.getElementById(key + 'Text') || document.getElementById(key + '_view');
+  var form = document.getElementById(key + 'Form');
+  if(!form) return;
+  if(view) view.classList.add('hidden');
+  form.classList.remove('hidden'); form.classList.add('flex');
+  var inp = form.querySelector('input[type=text]');
+  if(inp){ inp.focus(); inp.select(); }
+}
+function qdCancelEdit(key){
+  var view = document.getElementById(key + 'Text') || document.getElementById(key + '_view');
+  var form = document.getElementById(key + 'Form');
+  if(!form) return;
+  form.classList.add('hidden'); form.classList.remove('flex');
+  if(view) view.classList.remove('hidden');
+}
+</script>
 {% endblock %}

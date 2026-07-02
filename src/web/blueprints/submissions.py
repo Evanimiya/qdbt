@@ -22,6 +22,16 @@ from config import ALLOWED_EXTENSIONS
 bp = Blueprint("submissions", __name__)
 
 
+
+def _db_connect():
+    """직접 DB 연결 — busy_timeout 포함 (worker와의 쓰기 경합 시 5초 대기)."""
+    import sqlite3 as _sq
+    from db.queries import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
 @bp.route("/upload/<bid_id>", methods=["GET", "POST"])
 @require_role("manager")
 def upload(bid_id):
@@ -243,6 +253,96 @@ def grouped_json(submission_id):
     return jsonify(out)
 
 
+@bp.route("/<submission_id>/reupload", methods=["POST"])
+@require_role("manager")
+def reupload(submission_id):
+    """첨부 파일 다시 올리기 — 재추출용.
+
+    데이터 정합성 원칙: 재업로드는 '추출 초기화 상태'에서만 안전하다.
+    이미 추출된(done) 제출서는 compare_units·is_nego·클러스터 소속이
+    옛 item_id를 참조하므로, 파일만 교체하면 참조가 새 파일 항목과
+    어긋난다. 따라서 항목이 남아 있으면 사용자가 명시적으로 초기화에
+    동의(confirm_reset=1)한 경우에만 reset_submission()으로 초기화한 뒤
+    파일을 교체한다.
+
+    이전 물리 파일은 감사·재현 근거일 수 있어 삭제하지 않고 보존한다
+    (새 파일은 타임스탬프명으로 별도 저장되어 공존, 고아 참조 없음).
+    """
+    from flask import current_app
+
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    subd = dict(sub)
+    tok = getattr(g, "auth_token", "") or ""
+
+    def _back():
+        return redirect(url_for("submissions.detail",
+                                submission_id=submission_id, _t=tok))
+
+    # ── 파일 검증 ──
+    file = request.files.get("file")
+    if not file or file.filename == "":
+        flash("파일을 선택하세요.", "error")
+        return _back()
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        flash(f"지원하지 않는 형식: {suffix}", "error")
+        return _back()
+
+    # ── 초기화 필요 여부 판정 (항목 존재 = done 이거나 추출물 있음) ──
+    existing_items = get_items(submission_id)  # nego 포함 전체 라인
+    needs_reset = bool(existing_items) or subd.get("extraction_status") == "done"
+    confirmed = request.form.get("confirm_reset") == "1"
+    if needs_reset and not confirmed:
+        # 프런트에서 confirm을 거치지 않은 요청은 안전하게 차단
+        flash("기존 추출 데이터가 있어 재업로드하려면 초기화 동의가 필요합니다.",
+              "warning")
+        return _back()
+
+    # ── 새 파일 저장 (이전 파일은 유지) ──
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+    try:
+        from extractors.pipeline import save_upload
+        saved = save_upload(tmp_path, file.filename)
+    except Exception as e:
+        flash(f"❌ 파일 저장 실패: {e}", "error")
+        return _back()
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    # ── 추출 데이터 초기화 (동의된 경우) ──
+    if needs_reset:
+        reset_submission(submission_id)
+
+    # ── 제출서 레코드 갱신: 새 파일로 교체 + 이전 파일 기준 매핑 폐기 ──
+    # extracted_sheets·map_config는 이전 파일 구조 기준이므로 새 파일과
+    # 어긋날 수 있어 초기화한다(재추출 시 새로 지정).
+    update_submission(
+        submission_id,
+        file_name=saved.name,
+        file_path=str(saved),
+        file_format=suffix.lstrip("."),
+        extracted_sheets=None,
+        map_config=None,
+        extraction_status="pending",
+    )
+
+    # ── 형식에 맞는 후속 추출 경로로 유도 ──
+    if suffix == ".xlsx":
+        flash("✅ 파일을 다시 올렸습니다. '🧩 열 매핑 추출'로 재추출하세요.",
+              "success")
+        return redirect(url_for("submissions.column_map",
+                                submission_id=submission_id, _t=tok))
+    flash("✅ 파일을 다시 올렸습니다. 제출서 상세에서 재추출하세요.", "success")
+    return _back()
+
+
 @bp.route("/<submission_id>/file")
 @login_required
 def download_file(submission_id):
@@ -430,7 +530,7 @@ def match(submission_id):
                 model=llm["model"],
             )
 
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_connect()
             conn.row_factory = sqlite3.Row
             save_match_suggestions(conn, matches)
             conn.close()
@@ -468,7 +568,7 @@ def confirm_match(submission_id):
     from config import DB_PATH
     import sqlite3
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
 
     # 폼 데이터: item_id별 catalog_item_id
@@ -541,7 +641,7 @@ def delete(submission_id):
 
     import sqlite3
     from config import DB_PATH
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.execute("PRAGMA foreign_keys = ON")
     # FK 자식 레코드 먼저 삭제 (price_history, catalog_suggestions → submission_items 참조)
     conn.execute("DELETE FROM price_history WHERE submission_id=?", (submission_id,))
@@ -613,11 +713,76 @@ def column_map(submission_id):
         except Exception:
             pass
 
+    # 합계·소계 의심 행 감지 (자동 삭제 아님 — UI에서 기본 제외 선택으로 제안)
+    from extractors.extract_by_mapping import detect_total_rows
+    total_suggestion = []
+    try:
+        _map_for_detect = (saved_config.get("mapping") if saved_config else None) \
+                          or suggestion.get("mapping") or {}
+        _hr_for_detect = (saved_config.get("header_row") if saved_config else None) \
+                         or suggestion.get("header_row") or 1
+        # 키가 문자열로 직렬화됐을 수 있으니 int 변환
+        _map_for_detect = {int(k): v for k, v in _map_for_detect.items()}
+        if _map_for_detect:
+            total_suggestion = detect_total_rows(fpath, sheet, _map_for_detect, _hr_for_detect)
+    except Exception:
+        total_suggestion = []
+
+    # 도메인 분류 바인딩: 대분류(cat1)를 도메인 표준 분류에 정합시키기 위한 참조.
+    # 매핑 화면에서 대분류가 표준을 벗어나면 시각 경고(층위 1: 사전 바인딩).
+    from db.queries import get_domain_category_binding
+    _domain = subd.get("bid_domain") or "IT"
+    _binding = get_domain_category_binding(_domain)
+    domain_binding = {
+        "domain": _domain,
+        "standard": _binding["standard"],           # 표준 분류명 목록
+        "lookup": _binding["lookup"],                # 정규화키→표준명 (별칭 포함)
+        "alias_map": _binding["alias_map"],
+    }
+
     return render_template("submissions/column_map.html",
                            sub=subd, sheets=sheets, current_sheet=sheet,
                            grid_json=_json.dumps(grid_data, ensure_ascii=False),
                            suggest_json=_json.dumps(suggestion, ensure_ascii=False),
-                           saved_config_json=_json.dumps(saved_config, ensure_ascii=False))
+                           saved_config_json=_json.dumps(saved_config, ensure_ascii=False),
+                           total_suggestion_json=_json.dumps(total_suggestion, ensure_ascii=False),
+                           domain_binding_json=_json.dumps(domain_binding, ensure_ascii=False))
+
+
+@bp.route("/<submission_id>/category-binding", methods=["GET"])
+@require_role("manager")
+def category_binding_check(submission_id):
+    """제출서 대분류의 도메인 표준 정합 검증 결과 반환 (층위 2)."""
+    from db.queries import (validate_submission_categories,
+                            get_domain_category_binding, get_submission)
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    try:
+        result = validate_submission_categories(submission_id)
+        binding = get_domain_category_binding(result["domain"])
+        result["standard"] = binding["standard"]
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+
+
+@bp.route("/<submission_id>/category-binding/apply", methods=["POST"])
+@require_role("manager")
+def category_binding_apply(submission_id):
+    """미매칭·편차 대분류를 표준 분류로 일괄 재지정 (+ 선택적 별칭 학습)."""
+    from db.queries import apply_category_binding, get_submission
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    payload = request.get_json(silent=True) or {}
+    mapping = payload.get("mapping") or {}      # {원본대분류: 표준분류}
+    add_as_alias = bool(payload.get("add_as_alias"))
+    try:
+        r = apply_category_binding(submission_id, mapping, add_as_alias=add_as_alias)
+        return jsonify({"ok": True, **r})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
 
 
 @bp.route("/<submission_id>/map/extract", methods=["POST"])
@@ -676,7 +841,20 @@ def column_map_extract(submission_id):
                       extracted_sheets=_json.dumps([sheet], ensure_ascii=False),
                       map_config=_json.dumps(map_config, ensure_ascii=False))
 
+    # 추출 직후 도메인 분류 정합 검증 (층위 2: 검증 게이트).
+    # 표준을 벗어난 대분류가 있으면 상세 화면에서 재지정하도록 신호.
+    from db.queries import validate_submission_categories
+    try:
+        cat_check = validate_submission_categories(submission_id)
+        binding_warn = {
+            "unmatched": cat_check["unmatched"],
+            "n_unmatched_items": cat_check["n_unmatched_items"],
+        }
+    except Exception:
+        binding_warn = {"unmatched": [], "n_unmatched_items": 0}
+
     return jsonify({"ok": True, "n_items": len(items),
+                    "binding_warn": binding_warn,
                     "redirect": url_for("submissions.detail", submission_id=submission_id)})
 
 

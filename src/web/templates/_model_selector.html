@@ -1,5 +1,6 @@
 {% macro model_selector(id_prefix='ms') %}
 {%- set _llm = current_llm or {} -%}
+{%- set _cur_models = (providers | selectattr('id','eq',_llm.provider) | map(attribute='models') | first | default([])) | map(attribute=0) | list -%}
 <div class="flex items-center gap-1.5 flex-wrap">
   <span class="text-xs text-gray-400 whitespace-nowrap">모델:</span>
   <select name="provider_id" id="{{ id_prefix }}_prov"
@@ -22,13 +23,40 @@
       <option value="{{ mid }}" {% if _llm.model == mid %}selected{% endif %}>{{ mname }}</option>
       {% endfor %}
     {% endif %}{% endfor %}
+    {# 저장된 모델이 목록에 없는 커스텀 모델명이면 자동 포함 #}
+    {% if _llm.model and _llm.model not in _cur_models %}
+    <option value="{{ _llm.model }}" selected>{{ _llm.model }} (커스텀)</option>
+    {% endif %}
+    <option value="__custom__">✏️ 직접 입력…</option>
   </select>
+  {# 목록 밖 모델명(게이트웨이 전용 모델 등) 직접 입력 #}
+  <input type="text" id="{{ id_prefix }}_model_custom"
+         placeholder="모델명 직접 입력"
+         class="text-xs px-2 py-1.5 border border-blue-300 rounded-lg bg-white
+                focus:ring-2 focus:ring-blue-400 min-w-[150px] hidden">
 </div>
 <script>
 (function(){
   var pSel = document.getElementById('{{ id_prefix }}_prov');
   var mSel = document.getElementById('{{ id_prefix }}_model');
+  var cInp = document.getElementById('{{ id_prefix }}_model_custom');
   if (!pSel || !mSel) return;
+
+  function syncCustom(){
+    var isCustom = (mSel.value === '__custom__');
+    if (isCustom) {
+      cInp.classList.remove('hidden');
+      cInp.name = 'model';
+      mSel.removeAttribute('name');
+      cInp.focus();
+    } else {
+      cInp.classList.add('hidden');
+      cInp.removeAttribute('name');
+      mSel.setAttribute('name', 'model');
+    }
+  }
+  mSel.addEventListener('change', syncCustom);
+
   pSel.addEventListener('change', function() {
     var opt = pSel.options[pSel.selectedIndex];
     var models = JSON.parse(opt.getAttribute('data-models') || '[]');
@@ -38,6 +66,11 @@
       o.value = m[0]; o.textContent = m[1];
       mSel.appendChild(o);
     });
+    var custom = document.createElement('option');
+    custom.value = '__custom__'; custom.textContent = '✏️ 직접 입력…';
+    mSel.appendChild(custom);
+    mSel.setAttribute('name', 'model');
+    cInp.classList.add('hidden'); cInp.removeAttribute('name'); cInp.value = '';
   });
 })();
 </script>

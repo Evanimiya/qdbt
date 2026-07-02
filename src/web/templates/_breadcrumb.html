@@ -1,0 +1,31 @@
+{#
+  공통 브레드크럼 매크로.
+  전체 계층 경로(프로젝트 목록 › 프로젝트 › 입찰 › 현재)를 화면마다
+  일관되게 렌더한다. 각 화면은 자기 위치까지의 전체 체인을 items로 넘긴다.
+
+  사용:
+    {% from '_breadcrumb.html' import breadcrumb %}
+    {{ breadcrumb([
+        ('프로젝트', url_for('projects.index')),
+        (project_name, url_for('projects.detail', project_id=pid)),
+        (bid_name, url_for('bids.detail', bid_id=bid_id)),
+        ('업체별 비교', none),
+    ]) }}
+
+  각 항목은 (label, url) 튜플. url이 none이면 현재 위치(링크 없음, 강조).
+#}
+{% macro breadcrumb(items) %}
+<nav class="text-sm mb-4 text-gray-500 flex flex-wrap items-center break-ko"
+     aria-label="breadcrumb">
+  {%- for label, href in items -%}
+    {%- if not loop.first -%}
+      <span class="mx-2 text-gray-300" aria-hidden="true">›</span>
+    {%- endif -%}
+    {%- if href and not loop.last -%}
+      <a href="{{ href }}" class="hover:text-blue-700 break-ko">{{ label }}</a>
+    {%- else -%}
+      <span class="text-gray-900 font-medium break-ko" aria-current="page">{{ label }}</span>
+    {%- endif -%}
+  {%- endfor -%}
+</nav>
+{% endmacro %}

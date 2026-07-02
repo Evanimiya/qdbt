@@ -64,6 +64,48 @@ def create_app():
     def enumerate_filter(iterable, start=0):
         return list(enumerate(iterable, start=start))
 
+    @app.template_filter("from_json_array")
+    def from_json_array_filter(value):
+        """JSON 배열 문자열 → 파이썬 리스트 (별칭 목록 등)."""
+        try:
+            v = _json.loads(value or "[]")
+            return v if isinstance(v, list) else []
+        except Exception:
+            return []
+
+    @app.template_filter("from_json_list")
+    def from_json_list_filter(value):
+        """JSON 배열 문자열 → 쉼표 구분 문자열 (편집 입력값·존재확인용)."""
+        try:
+            v = _json.loads(value or "[]")
+            if isinstance(v, list):
+                return ", ".join(str(x) for x in v)
+            return ""
+        except Exception:
+            return ""
+
+    @app.template_filter("leaf")
+    def leaf_filter(value):
+        """경로 문자열에서 잎(마지막 세그먼트)만. '재료비 > 전장/제어부 > 전장/제어부' → '전장/제어부'."""
+        if not value:
+            return value
+        s = str(value)
+        if ">" in s:
+            seg = s.replace(" > ", ">").split(">")[-1].strip()
+            return seg or s
+        return s.strip()
+
+    @app.template_filter("treepath")
+    def treepath_filter(value):
+        """경로를 트리 표시용으로 정규화(구분자 ' › ' 통일). 경로가 아니면 빈 문자열."""
+        if not value:
+            return ""
+        s = str(value)
+        if ">" not in s:
+            return ""
+        parts = [p.strip() for p in s.replace(" > ", ">").split(">") if p.strip()]
+        return " › ".join(parts)
+
     # ── Blueprint 등록 ──────────────────────────
     from web.blueprints.auth      import bp as auth_bp
     from web.blueprints.projects   import bp as proj_bp

@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS catalog_categories (
     parent_id       TEXT REFERENCES catalog_categories(category_id),
     sort_order      INTEGER DEFAULT 0,
     is_active       INTEGER NOT NULL DEFAULT 1,  -- 0이면 비활성화 (숨김)
+    aliases         TEXT,                  -- 별칭(표기 편차) JSON 배열. 예: ["자재비","材料費"]
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -466,10 +467,62 @@ def migrate_db(db_path=None):
         """)
         migrations.append("-- domains 테이블 생성 완료")
 
+    # ── 프로젝트 기준정보 (속성 사전 + 프로젝트별 값) ──
+    # 정의 테이블 = 기준정보 원장(governed registry). 새 속성 추가는 행 1개로,
+    # 스키마 변경 없이 도메인 확장(IT/설비/용역)에 대응한다.
+    if "project_attr_defs" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_attr_defs (
+                attr_key    TEXT PRIMARY KEY,
+                label       TEXT NOT NULL,
+                value_type  TEXT NOT NULL DEFAULT 'text',   -- text | number
+                unit        TEXT,
+                domain      TEXT NOT NULL DEFAULT '공통',
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                is_active   INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO project_attr_defs
+                (attr_key, label, value_type, unit, domain, sort_order)
+            VALUES
+                ('corp_name',    '법인명',    'text',   NULL, '공통', 1),
+                ('factory',      '공장명',    'text',   NULL, '공통', 2),
+                ('line_count',   '라인 수',   'number', '개', '공통', 3),
+                ('product_size', '제품 크기', 'text',   NULL, '공통', 4),
+                ('speed',        '속도',      'text',   NULL, '공통', 5),
+                ('spec_etc',     '기타 규격', 'text',   NULL, '공통', 6)
+        """)
+        migrations.append("-- project_attr_defs 테이블 생성 완료")
+    if "project_attrs" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS project_attrs (
+                project_id  TEXT NOT NULL REFERENCES projects(project_id),
+                attr_key    TEXT NOT NULL REFERENCES project_attr_defs(attr_key),
+                value_text  TEXT,
+                value_num   REAL,
+                updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (project_id, attr_key)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pattr_key_val "
+                     "ON project_attrs(attr_key, value_text)")
+        migrations.append("-- project_attrs 테이블 생성 완료")
+
     # bids.domain 컬럼 추가 (도메인별 카테고리 분리)
     bid_cols = [c[1] for c in conn.execute("PRAGMA table_info(bids)").fetchall()]
     if "domain" not in bid_cols:
         migrations.append("ALTER TABLE bids ADD COLUMN domain TEXT NOT NULL DEFAULT 'IT'")
+
+    # projects.domain 컬럼 추가 (프로젝트 기본 도메인 → 입찰이 승계)
+    proj_cols = [c[1] for c in conn.execute("PRAGMA table_info(projects)").fetchall()]
+    if "domain" not in proj_cols:
+        migrations.append("ALTER TABLE projects ADD COLUMN domain TEXT NOT NULL DEFAULT 'IT'")
+
+    # catalog_clusters.display_order (사용자 지정 정렬 순서, 항목 6)
+    clu_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_clusters)").fetchall()]
+    if "display_order" not in clu_cols:
+        migrations.append("ALTER TABLE catalog_clusters ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
 
     # catalog_categories 컬럼 추가
     cat_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_categories)").fetchall()]
@@ -481,6 +534,10 @@ def migrate_db(db_path=None):
         migrations.append("ALTER TABLE catalog_categories ADD COLUMN description TEXT")
     if "updated_at" not in cat_cols:
         migrations.append("ALTER TABLE catalog_categories ADD COLUMN updated_at TIMESTAMP")
+    if "aliases" not in cat_cols:
+        # 별칭(표기 편차) 목록. JSON 배열 문자열로 저장. 예: ["자재비","材料費"]
+        # 추출된 대분류가 name과 다르더라도 이 목록에 있으면 표준 name으로 자동 귀속.
+        migrations.append("ALTER TABLE catalog_categories ADD COLUMN aliases TEXT")
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]
     if "deleted_at" not in sub_cols:
         migrations.append("ALTER TABLE submissions ADD COLUMN deleted_at TIMESTAMP")

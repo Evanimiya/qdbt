@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}기준정보 관리 · QDBT{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-xl font-bold text-gray-900 break-ko">📋 기준정보 관리</h1>
+  <p class="text-sm text-gray-500 mt-1 break-ko">
+    프로젝트에서 입력하는 기준정보 항목(법인명·공장명·라인 수 등)을 관리합니다.
+    여기서 정의한 항목이 프로젝트 기준정보 입력폼과 검색 조건에 반영됩니다.
+  </p>
+</div>
+
+<!-- 신규 기준정보 항목 추가 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+  <h2 class="text-sm font-bold text-gray-900 mb-3 break-ko">＋ 기준정보 항목 추가</h2>
+  <form method="POST" action="{{ url_for('admin.attr_def_new') }}"
+        class="flex items-end gap-2 flex-wrap">
+    <div>
+      <label class="block text-xs text-gray-500 mb-1 break-ko">항목명 *</label>
+      <input type="text" name="label" required placeholder="예: 공정 유형, 발주처"
+             class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 break-ko w-48">
+    </div>
+    <div>
+      <label class="block text-xs text-gray-500 mb-1 break-ko">키(선택, 미입력 시 자동)</label>
+      <input type="text" name="attr_key" placeholder="예: process_type"
+             class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 w-40">
+    </div>
+    <button type="submit"
+            class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-3 py-1.5 rounded-lg break-ko">
+      ＋ 추가</button>
+  </form>
+</div>
+
+<!-- 기준정보 항목 목록 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-500 text-xs">
+      <tr>
+        <th class="px-4 py-2 text-left font-medium">순서</th>
+        <th class="px-4 py-2 text-left font-medium">항목명</th>
+        <th class="px-4 py-2 text-left font-medium">키</th>
+        <th class="px-4 py-2 text-left font-medium">유형</th>
+        <th class="px-4 py-2 text-center font-medium">상태</th>
+        <th class="px-4 py-2 text-right font-medium">관리</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for d in defs %}
+      <tr class="{% if not d.is_active %}opacity-50{% endif %}">
+        <td class="px-4 py-2 text-gray-500">{{ d.sort_order }}</td>
+        <td class="px-4 py-2 font-semibold break-ko">
+          <span id="ad_{{ d.attr_key }}_view" class="inline-flex items-center gap-1.5">
+            {{ d.label }}
+            <button type="button" onclick="qdAdEdit('{{ d.attr_key }}')" title="수정"
+                    class="text-gray-400 hover:text-blue-700 text-sm leading-none">✏️</button>
+          </span>
+          <form method="POST" action="{{ url_for('admin.attr_def_update', attr_key=d.attr_key) }}"
+                id="ad_{{ d.attr_key }}Form" class="hidden items-center gap-1.5">
+            <input type="text" name="label" value="{{ d.label }}" required
+                   class="text-sm border border-blue-300 rounded px-2 py-0.5 break-ko w-40">
+            <input type="number" name="sort_order" value="{{ d.sort_order }}" title="순서"
+                   class="text-sm border border-gray-300 rounded px-2 py-0.5 w-16">
+            <button type="submit"
+                    class="text-xs bg-blue-700 hover:bg-blue-800 text-white font-semibold px-2 py-0.5 rounded">저장</button>
+            <button type="button" onclick="qdAdCancel('{{ d.attr_key }}')"
+                    class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-0.5 rounded">취소</button>
+          </form>
+        </td>
+        <td class="px-4 py-2 text-gray-400 text-xs font-mono">{{ d.attr_key }}</td>
+        <td class="px-4 py-2 text-gray-500">{{ d.value_type }}{% if d.unit %} ({{ d.unit }}){% endif %}</td>
+        <td class="px-4 py-2 text-center">
+          {% if d.is_active %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">활성</span>
+          {% else %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">비활성</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-2 text-right">
+          <form method="POST" action="{{ url_for('admin.attr_def_toggle', attr_key=d.attr_key) }}" class="inline">
+            <button type="submit"
+                    class="text-xs border rounded px-2 py-0.5 {{ 'text-gray-600 border-gray-300 hover:bg-gray-50' if d.is_active else 'text-green-700 border-green-300 hover:bg-green-50' }}">
+              {{ '비활성화' if d.is_active else '활성화' }}
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400 break-ko">
+        등록된 기준정보 항목이 없습니다. 위에서 추가하세요.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function qdAdEdit(k){
+  document.getElementById('ad_'+k+'_view').classList.add('hidden');
+  var f=document.getElementById('ad_'+k+'Form');
+  f.classList.remove('hidden'); f.classList.add('flex');
+}
+function qdAdCancel(k){
+  var f=document.getElementById('ad_'+k+'Form');
+  f.classList.add('hidden'); f.classList.remove('flex');
+  document.getElementById('ad_'+k+'_view').classList.remove('hidden');
+}
+</script>
+{% endblock %}

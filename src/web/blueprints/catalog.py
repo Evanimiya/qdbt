@@ -361,6 +361,18 @@ _active_cluster_bids = set()   # 현재 클러스터링 진행 중인 bid_id (�
 _active_cluster_lock = threading.Lock()
 
 
+def _db_connect():
+    """이 모듈(worker/라우트)의 직접 DB 연결 — busy_timeout 포함.
+
+    요청 스레드(get_conn)와 백그라운드 worker의 동시 쓰기 경합 시
+    즉시 'database is locked'로 실패하지 않고 최대 5초 대기한다."""
+    import sqlite3 as _sq
+    from db.queries import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
 def _cluster_worker(app, job_id, bid_id, items_raw, llm):
     """백그라운드에서 LLM 3단계 클러스터링 실행"""
     from extractors.catalog_clusterer import (
@@ -391,7 +403,7 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
         with app.app_context():
             # 이미 확정(accepted)된 클러스터에 속한 항목은 재클러스터링 대상에서 제외
             # → 확정 작업 보존 + 확정/미확정 간 중복 방지
-            _pre = sqlite3.connect(DB_PATH)
+            _pre = _db_connect()
             _pre.row_factory = sqlite3.Row
             accepted_ids = {
                 r["catalog_item_id"]
@@ -408,7 +420,7 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
 
             # ── Phase 1: 초기 클러스터링 ──────────────────────────
             # 기존 카탈로그 품목 조회 (name_canonical + aliases → LLM 이름 우선 참조)
-            _cat_conn = sqlite3.connect(DB_PATH)
+            _cat_conn = _db_connect()
             _cat_conn.row_factory = sqlite3.Row
             catalog_items_for_llm = [
                 dict(r) for r in _cat_conn.execute("""
@@ -428,7 +440,7 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
                 verify_ssl=llm.get("verify_ssl", True),
                 catalog_items=catalog_items_for_llm or None,
             )
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_connect()
             conn.row_factory = sqlite3.Row
 
             # 재실행 시 이전 미확정(pending/held) 클러스터를 먼저 제거 → 중복 누적 방지
@@ -537,7 +549,7 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
             val = apply_validation_results(conn, validation_results)
             conn.close()
 
-            n_final = sqlite3.connect(DB_PATH).execute(
+            n_final = _db_connect().execute(
                 "SELECT COUNT(*) FROM catalog_clusters WHERE bid_id = ?", (bid_id,)
             ).fetchone()[0]
 
@@ -579,7 +591,7 @@ def _unmatched_worker(app, job_id, bid_id, items_raw, llm):
                 "status": "running", "phase": 1,
                 "message": "미분류 항목 검토 중...", "n": 0}
 
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_connect()
             conn.row_factory = sqlite3.Row
 
             # 이미 어느 클러스터에든 든 item_id (확정 포함 전체)
@@ -758,7 +770,7 @@ def cluster_detail(cluster_id):
         abort(404)
 
     # 90% 이상 확정 버튼 활성화 여부 판단
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     high_conf = is_high_confidence(conn, cluster_id, threshold=0.9)
 
@@ -772,9 +784,23 @@ def cluster_detail(cluster_id):
     conn.close()
 
     tok = getattr(g, "auth_token", "") or ""
+
+    # 분류 변경 드롭다운용: 입찰 도메인의 사전 카테고리 + 현재 분류(멤버 다수결)
+    from db.queries import category_order_for_bid
+    from collections import Counter
+    cd = dict(cluster)
+    _bid_id = cd.get("bid_id")
+    cur_cat = None
+    if members:
+        cc = Counter(dict(m).get("category") for m in members if dict(m).get("category"))
+        cur_cat = cc.most_common(1)[0][0] if cc else None
+    dict_categories = category_order_for_bid(_bid_id, present_cats={cur_cat} if cur_cat else None) if _bid_id else []
+
     return render_template("catalog/cluster_detail.html",
                            cluster=cluster, members=members,
-                           high_conf=high_conf, avail_items=avail_items)
+                           high_conf=high_conf, avail_items=avail_items,
+                           dict_categories=dict_categories, cur_cat=cur_cat,
+                           return_bid_id=request.args.get("return_bid_id", ""))
 
 
 @bp.route("/clusters/<cluster_id>/accept", methods=["POST"])
@@ -789,7 +815,7 @@ def accept_cluster(cluster_id):
     rep_name = request.form.get("representative_name", "").strip() or None
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         result = do_accept(conn, cluster_id, uid, rep_name)
         conn.close()
@@ -800,6 +826,9 @@ def accept_cluster(cluster_id):
     except Exception as e:
         flash(f"❌ 확정 실패: {e}", "error")
 
+    _rb = request.form.get("return_bid_id", "").strip()
+    if _rb:
+        return redirect(url_for("compare.bid_compare", bid_id=_rb, _t=tok))
     return redirect(url_for("catalog.clusters", _t=tok))
 
 
@@ -814,11 +843,14 @@ def hold_cluster(cluster_id):
     tok = getattr(g, "auth_token", "") or ""
     uid = session.get("user_id", "")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     do_hold(conn, cluster_id, uid)
     conn.close()
     flash("클러스터가 보류 처리되었습니다.", "info")
+    _rb = request.form.get("return_bid_id", "").strip()
+    if _rb:
+        return redirect(url_for("compare.bid_compare", bid_id=_rb, _t=tok))
     return redirect(url_for("catalog.clusters", _t=tok))
 
 
@@ -832,11 +864,14 @@ def reject_cluster(cluster_id):
     tok = getattr(g, "auth_token", "") or ""
     uid = session.get("user_id", "")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     do_reject(conn, cluster_id, uid)
     conn.close()
     flash("제안이 거부되었습니다.", "info")
+    _rb = request.form.get("return_bid_id", "").strip()
+    if _rb:
+        return redirect(url_for("compare.bid_compare", bid_id=_rb, _t=tok))
     return redirect(url_for("catalog.clusters", _t=tok))
 
 
@@ -852,7 +887,7 @@ def remove_cluster_member(cluster_id):
     item_id = request.form.get("item_id", "").strip()
 
     if item_id:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         remove_member(conn, cluster_id, item_id)
         conn.close()
@@ -874,7 +909,7 @@ def add_cluster_member(cluster_id):
     item_id = request.form.get("item_id", "").strip()
 
     if item_id:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         add_member(conn, cluster_id, item_id)
         conn.close()
@@ -897,7 +932,7 @@ def rename_cluster_route(cluster_id):
     new_name = request.form.get("new_name", "").strip()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         rename_cluster(conn, cluster_id, new_name, uid)
         conn.close()
@@ -923,7 +958,7 @@ def reopen_cluster_route(cluster_id):
     uid = session.get("user_id", "")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         reopen_cluster(conn, cluster_id, uid)
         conn.close()
@@ -948,7 +983,7 @@ def delete_cluster_route(cluster_id):
     tok = getattr(g, "auth_token", "") or ""
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         delete_cluster(conn, cluster_id)
         conn.close()
@@ -978,7 +1013,7 @@ def reset_clusters():
         return redirect(url_for("catalog.clusters", _t=tok))
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         n = reset_bid_clusters(conn, bid_id)
         conn.close()
@@ -1024,7 +1059,7 @@ def clusters_bulk_action():
             flash("병합할 클러스터(대상 외)를 선택하세요.", "error")
             return redirect(url_for("catalog.clusters", bid_id=bid_id, _t=tok))
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_connect()
             conn.row_factory = sqlite3.Row
             result = merge_clusters(conn, target_id, src_ids, uid)
             conn.close()
@@ -1035,7 +1070,7 @@ def clusters_bulk_action():
     elif action == "delete":
         from extractors.catalog_clusterer import delete_cluster
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _db_connect()
             conn.row_factory = sqlite3.Row
             for cid in cluster_ids:
                 delete_cluster(conn, cid)
@@ -1074,7 +1109,7 @@ def merge_clusters_route(cluster_id):
         return redirect(url_for("catalog.cluster_detail", cluster_id=cluster_id))
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         result = merge_clusters(conn, cluster_id, src_ids, uid)
         conn.close()

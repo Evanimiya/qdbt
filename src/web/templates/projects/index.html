@@ -13,9 +13,12 @@
   {% endif %}
 </div>
 
-{% if projects %}
+{% set active_projects = projects | rejectattr('status', 'eq', 'archived') | list %}
+{% set archived_projects = projects | selectattr('status', 'eq', 'archived') | list %}
+
+{% if active_projects %}
 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-  {% for p in projects %}
+  {% for p in active_projects %}
   <a href="{{ url_for('projects.detail', project_id=p.project_id) }}"
      class="hover-lift bg-white rounded-xl shadow-sm border border-gray-200 p-5 block">
     <div class="flex items-start justify-between mb-3">
@@ -45,7 +48,7 @@
 {% else %}
 <div class="bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
   <div class="text-5xl mb-3">📂</div>
-  <p class="text-gray-500 break-ko mb-4">아직 프로젝트가 없습니다.</p>
+  <p class="text-gray-500 break-ko mb-4">진행 중인 프로젝트가 없습니다.</p>
   {% if has_role('manager') %}
   <a href="{{ url_for('projects.new_project') }}"
      class="inline-block bg-blue-700 hover:bg-blue-800 text-white font-semibold
@@ -54,5 +57,33 @@
   </a>
   {% endif %}
 </div>
+{% endif %}
+
+{# ── 보관(철회)된 프로젝트 — 기본 접힘, 복원 가능 ── #}
+{% if archived_projects %}
+<details class="mt-6">
+  <summary class="text-sm text-gray-500 cursor-pointer hover:text-gray-700 break-ko">
+    📦 보관된 프로젝트 {{ archived_projects|length }}건 (통계 제외 · 복원 가능)
+  </summary>
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-3 opacity-70">
+    {% for p in archived_projects %}
+    <a href="{{ url_for('projects.detail', project_id=p.project_id) }}"
+       class="bg-white rounded-xl shadow-sm border border-red-100 p-5 block">
+      <div class="flex items-start justify-between mb-3">
+        <h2 class="font-bold text-gray-700 break-ko text-base leading-snug flex-1 pr-2">
+          {{ p.name }}
+        </h2>
+        <span class="text-xs px-2 py-0.5 rounded-full whitespace-nowrap bg-red-100 text-red-700">
+          archived
+        </span>
+      </div>
+      <div class="flex gap-4 text-sm text-gray-500 pt-3 border-t border-gray-100">
+        <span>입찰 <strong>{{ p.n_bids }}</strong></span>
+        <span>제출서 <strong>{{ p.n_submissions }}</strong></span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</details>
 {% endif %}
 {% endblock %}

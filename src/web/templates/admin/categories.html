@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}분류 관리 · QDBT{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <h1 class="text-xl font-bold text-gray-900 break-ko">🗂 분류(카테고리) 관리</h1>
+  <p class="text-sm text-gray-500 mt-1 break-ko">
+    도메인(IT·설비·용역)별로 견적 분류를 관리합니다. 여기서 정의한 분류가
+    업체별 비교·클러스터링 화면의 카테고리 순서와 목록에 반영됩니다.
+  </p>
+</div>
+
+<!-- 도메인 관리 (항목 10) -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-bold text-gray-900 break-ko">🌐 도메인 관리</h2>
+    <span class="text-xs text-gray-400 break-ko">분류 체계의 최상위 구분. 프로젝트·입찰에서 선택합니다.</span>
+  </div>
+  <div class="flex flex-wrap gap-2 mb-3">
+    {% for dr in (domain_rows or []) %}
+    {% set d = dr if dr is mapping else dr %}
+    <div class="inline-flex items-center gap-1.5 border rounded-lg px-2.5 py-1
+                {{ 'border-gray-200 bg-gray-50' if d.is_active else 'border-gray-200 bg-gray-100 opacity-60' }}">
+      <span class="text-sm font-semibold break-ko">{{ d.name }}</span>
+      {% if not d.is_active %}<span class="text-[10px] text-gray-400">비활성</span>{% endif %}
+      <form method="POST" action="{{ url_for('admin.domain_toggle', domain_id=d.domain_id) }}" class="inline">
+        <button type="submit" class="text-[11px] text-gray-400 hover:text-blue-700" title="활성/비활성">
+          {{ '⏸' if d.is_active else '▶' }}</button>
+      </form>
+      {% if has_role('admin') %}
+      <form method="POST" action="{{ url_for('admin.domain_delete', domain_id=d.domain_id) }}" class="inline"
+            onsubmit="return confirm('도메인 \'{{ d.name }}\' 삭제? (사용 중이면 삭제 불가)');">
+        <button type="submit" class="text-[11px] text-red-400 hover:text-red-600" title="삭제">✕</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <form method="POST" action="{{ url_for('admin.domain_new') }}" class="flex items-center gap-2 flex-wrap">
+    <input type="text" name="name" required placeholder="새 도메인명 (예: 건설, 조경)"
+           class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 break-ko w-48">
+    <input type="text" name="description" placeholder="설명 (선택)"
+           class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 break-ko flex-1 min-w-[160px]">
+    <button type="submit"
+            class="text-sm bg-gray-700 hover:bg-gray-800 text-white font-semibold px-3 py-1.5 rounded-lg break-ko">
+      ＋ 도메인 추가</button>
+  </form>
+</div>
+
+<!-- 도메인 필터 -->
+<div class="flex items-center gap-2 mb-5 flex-wrap">
+  <a href="{{ url_for('admin.categories') }}"
+     class="text-sm px-3 py-1.5 rounded-lg border {{ 'bg-blue-700 text-white border-blue-700' if not selected_domain else 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50' }}">
+    전체
+  </a>
+  {% for d in domains %}
+  <a href="{{ url_for('admin.categories', domain=d) }}"
+     class="text-sm px-3 py-1.5 rounded-lg border {{ 'bg-blue-700 text-white border-blue-700' if selected_domain == d else 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50' }}">
+    {{ d }}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- 신규 분류 추가 -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+  <h2 class="text-sm font-bold text-gray-900 mb-3 break-ko">＋ 분류 추가</h2>
+  <form method="POST" action="{{ url_for('admin.category_new') }}"
+        class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+    <div class="sm:col-span-3">
+      <label class="block text-xs text-gray-500 mb-1">도메인</label>
+      <select name="domain"
+              class="w-full text-sm border border-gray-300 rounded-lg px-2.5 py-2 focus:ring-2 focus:ring-blue-500">
+        {% for d in domains %}
+        <option value="{{ d }}" {% if selected_domain == d %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="sm:col-span-4">
+      <label class="block text-xs text-gray-500 mb-1">분류명</label>
+      <input type="text" name="name" required placeholder="예: 자재, 설치비, 감리비"
+             class="w-full text-sm border border-gray-300 rounded-lg px-2.5 py-2 focus:ring-2 focus:ring-blue-500 break-ko">
+    </div>
+    <div class="sm:col-span-2">
+      <label class="block text-xs text-gray-500 mb-1">순서</label>
+      <input type="number" name="sort_order" value="0"
+             class="w-full text-sm border border-gray-300 rounded-lg px-2.5 py-2 focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div class="sm:col-span-2">
+      <label class="block text-xs text-gray-500 mb-1">설명(선택)</label>
+      <input type="text" name="description" placeholder=""
+             class="w-full text-sm border border-gray-300 rounded-lg px-2.5 py-2 focus:ring-2 focus:ring-blue-500 break-ko">
+    </div>
+    <div class="sm:col-span-1">
+      <button type="submit"
+              class="w-full text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-3 py-2 rounded-lg">추가</button>
+    </div>
+  </form>
+</div>
+
+<!-- 도메인별 분류 목록 -->
+{% if grouped %}
+{% for domain, cats in grouped.items() %}
+<div class="mb-6">
+  <h2 class="text-base font-bold text-gray-900 mb-2 break-ko">{{ domain }}</h2>
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs text-gray-600 uppercase">
+        <tr>
+          <th class="text-left px-4 py-3">순서</th>
+          <th class="text-left px-4 py-3">분류명</th>
+          <th class="text-left px-4 py-3">설명</th>
+          <th class="text-center px-4 py-3">품목수</th>
+          <th class="text-center px-4 py-3">상태</th>
+          <th class="text-right px-4 py-3">관리</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for c in cats %}
+        <tr class="{% if not c.is_active %}opacity-50{% endif %}">
+          <td class="px-4 py-2 text-gray-500">{{ c.sort_order }}</td>
+          <td class="px-4 py-2 font-semibold break-ko">
+            <span id="cn_{{ c.category_id }}_view" class="inline-flex items-center gap-1.5">
+              {{ c.name }}
+              <button type="button" onclick="qdCatEdit('{{ c.category_id }}')" title="수정"
+                      class="text-gray-400 hover:text-blue-700 text-sm leading-none">✏️</button>
+            </span>
+            <form method="POST" action="{{ url_for('admin.category_update', category_id=c.category_id) }}"
+                  id="cn_{{ c.category_id }}Form" class="hidden items-center gap-1.5 flex-wrap">
+              <input type="text" name="name" value="{{ c.name }}" required
+                     class="text-sm border border-blue-300 rounded px-2 py-0.5 break-ko w-32">
+              <input type="number" name="sort_order" value="{{ c.sort_order }}" title="순서"
+                     class="text-sm border border-gray-300 rounded px-2 py-0.5 w-16">
+              <input type="text" name="aliases"
+                     value="{% if c.aliases %}{{ c.aliases|from_json_list }}{% endif %}"
+                     placeholder="별칭 (쉼표 구분: 자재비, 材料費)" title="표기 편차 별칭"
+                     class="text-sm border border-amber-300 rounded px-2 py-0.5 break-ko w-56">
+              <button type="submit"
+                      class="text-xs bg-blue-700 hover:bg-blue-800 text-white font-semibold px-2 py-0.5 rounded">저장</button>
+              <button type="button" onclick="qdCatCancel('{{ c.category_id }}')"
+                      class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-0.5 rounded">취소</button>
+            </form>
+          </td>
+          <td class="px-4 py-2 text-gray-500 break-ko">
+            {{ c.description or '—' }}
+            {% if c.aliases and c.aliases|from_json_list %}
+            <div class="mt-1 flex flex-wrap gap-1">
+              {% for a in c.aliases|from_json_array %}
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                {{ a }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="px-4 py-2 text-center text-gray-600">{{ c.n_items }}</td>
+          <td class="px-4 py-2 text-center">
+            {% if c.is_active %}
+            <span class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">활성</span>
+            {% else %}
+            <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">비활성</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-2 text-right">
+            <div class="flex gap-1.5 justify-end">
+              <form method="POST" action="{{ url_for('admin.category_toggle', category_id=c.category_id) }}">
+                <button type="submit"
+                        class="text-xs border rounded px-2 py-0.5 {{ 'text-gray-600 border-gray-300 hover:bg-gray-50' if c.is_active else 'text-green-700 border-green-300 hover:bg-green-50' }}">
+                  {{ '비활성화' if c.is_active else '활성화' }}
+                </button>
+              </form>
+              {% if has_role('admin') %}
+              <form method="POST" action="{{ url_for('admin.category_delete', category_id=c.category_id) }}"
+                    onsubmit="return confirm('분류 \'{{ c.name }}\'을(를) 삭제하시겠습니까?\n소속 활성 품목이 있으면 삭제되지 않습니다(비활성화 권장).');">
+                <button type="submit"
+                        class="text-xs text-red-500 hover:text-red-700 border border-red-200 rounded px-2 py-0.5 hover:bg-red-50">삭제</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="bg-white rounded-xl border border-dashed border-gray-300 p-10 text-center">
+  <p class="text-gray-500 break-ko">등록된 분류가 없습니다. 위에서 추가하세요.</p>
+</div>
+{% endif %}
+
+<script>
+function qdCatEdit(id){
+  var v=document.getElementById('cn_'+id+'_view');
+  var f=document.getElementById('cn_'+id+'Form');
+  if(v) v.classList.add('hidden');
+  if(f){ f.classList.remove('hidden'); f.classList.add('flex');
+         var i=f.querySelector('input[type=text]'); if(i){i.focus();i.select();} }
+}
+function qdCatCancel(id){
+  var v=document.getElementById('cn_'+id+'_view');
+  var f=document.getElementById('cn_'+id+'Form');
+  if(f){ f.classList.add('hidden'); f.classList.remove('flex'); }
+  if(v) v.classList.remove('hidden');
+}
+</script>
+{% endblock %}

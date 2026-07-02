@@ -56,13 +56,46 @@ CLUSTER_PROMPT = """당신은 입찰 견적서에서 비교 가능한 품목 그
 - 카탈로그에 없는 새 품목만 새 이름(가장 표준적인 한국어 품목명)을 제안합니다.
 - 대표명은 가능하면 한국어로 (영문/한글이 섞이면 한글을 대표명으로).
 
-## 비교 단위(묶음)가 있는 경우에만 적용 (해당 시)
-입력에 "비교단위(묶음)=..."로 표시된 항목이 있을 때만 아래를 적용하세요.
-없으면 무시하고 위의 핵심 임무(품목명 매칭)에 집중하세요.
-- 묶음명이 비교 기준. A의 "기구부"와 B의 "기구부"를 묶음명으로 매칭.
-- "[참조] 하위 N개"는 보조 정보. 묶음명이 애매할 때 참조.
-- 업체마다 구성이 다를 수 있음(A는 "차폐", B는 "기구부"). 의미가 같으면 묶기.
-- 묶음과 단일 항목이 명백히 같으면 묶을 수 있음.
+## 비교 단위 항목 처리 (입력에 "비교단위=..."이 있을 때) — 균형 모드
+입력 항목의 "비교단위=..."는 사용자가 지정한 비교 기준입니다.
+함께 표시되는 "사양", "하위·사양"은 그 단위의 하부 구성이고,
+"(맥락)상위경로", "(맥락)상위"는 그 단위가 놓인 상위 트리입니다.
+
+1. **주(主) 판단기준 = 비교단위 그 자체 (이름 + 자기 사양).**
+   - 비교단위 이름이 같거나 의미가 같으면(영↔한 번역 포함) 묶습니다.
+   - 예: A "디스플레이" ↔ B "Display" → 비교단위 이름으로 매칭.
+
+2. **상위경로와 하위구성은 "둘 다 대등한 보조 참조"입니다 — 이름이 애매할 때만 씁니다.**
+   - 비교단위 이름이 명확히 같으면, 상위 트리가 다르거나 하위 구성이 달라도 같은 것으로 봅니다.
+   - 예: A "핸드폰 > 디스플레이", B "핸드폰 > 아이폰17 > 디스플레이" — 상위 깊이·중간
+     노드가 달라도 비교단위가 둘 다 "디스플레이"이니 **묶습니다.**
+   - 업체마다 트리의 깊이와 묶음 기준이 다릅니다. **상위경로의 길이·중간 이름
+     차이만으로는 절대 가르지 마세요.**
+
+3. **어떤 보조지표(상위·하위)도 단독으로는 명확한 이름 매칭을 뒤집지 못합니다.**
+   - 비교단위 이름이 애매할 때만(같은 이름이 서로 다른 물건일 수 있을 때) 상위경로와
+     하위구성을 **함께** 보고 구분하세요.
+   - 예: 둘 다 "스위치"인데 A는 상위가 "네트워크", B는 "스토리지"이고 하위 사양도
+     다르면 → 다른 물건일 수 있으니 신중히 구분.
+
+4. **기본은 적극 병합.** 비교단위 이름이 같은데 하위·사양 정보가 빈약하면
+   놓치지 말고 병합하세요(누락이 가장 큰 실수).
+
+5. **비교단위는 사용자가 "이 레벨로 비교하겠다"고 지정한 기준입니다 — 레벨의
+   넓고 좁음은 배제 사유가 아닙니다.**
+   - 비교단위 이름이 양쪽에서 같으면(대분류든 세부 품목이든) **반드시 묶습니다.**
+     예: 두 업체 모두 비교단위가 "인건비" → 같은 대분류이므로 **묶습니다.**
+     예: 두 업체 모두 "경비" / 두 업체 모두 "재료비" → 각각 **묶습니다.**
+     "인건비"·"경비"·"재료비"·"영업이익" 같은 대분류(집계) 이름도, 사용자가
+     비교단위로 지정했고 양쪽 이름이 같다면 정상적인 클러스터 대상입니다.
+   - "넓은 분류라서" 또는 "구체 품목이 아니라서"라는 이유로 병합을 보류하지 마세요.
+     사용자가 그 레벨을 비교단위로 골랐다는 사실이 병합의 근거입니다.
+   - **묶지 않는 경우는 오직 하나: 양쪽의 비교단위 이름이 서로 다른 레벨일 때**
+     (A 비교단위="엔지니어링"[넓은 분류] vs B 비교단위="네트워크 엔지니어"[구체 역할]처럼
+     이름 자체가 다를 때). 이때만 사용자가 서로 다른 단위로 지정한 것이므로 억지로
+     묶지 않습니다.
+   - 한쪽이 잎·다른 쪽이 묶음이라는 **구조 차이만으로는 절대 가르지 마세요** — 이름이
+     같으면 같은 레벨입니다.
 
 
 1. **완전히 동일한 품목명** — 두 업체 모두 "Daily Allowance"처럼 같은 이름
@@ -83,13 +116,16 @@ CLUSTER_PROMPT = """당신은 입찰 견적서에서 비교 가능한 품목 그
 - "방화벽" + "방화벽 (NGFW)" + "방화벽 장비" = 같은 그룹 ✅
 - "방화벽 본체" + "방화벽 라이선스/구독" = 다른 그룹 ❌
 - "Operating Margin" + "영업이익" = 같은 그룹 ✅
+- "인건비"(A) + "인건비"(B) = 같은 그룹 ✅ (대분류라도 비교단위가 같은 이름 → 반드시 묶음)
+- "경비"(A) + "경비"(B) = 같은 그룹 ✅ / "재료비"(A) + "재료비"(B) = 같은 그룹 ✅
+- "엔지니어링"(A, 넓은 분류) + "네트워크 엔지니어"(B, 구체 역할) = 다른 그룹 ❌ (이름·레벨이 서로 다름)
 - "서버 HW 보증연장" + "서버 유지보수" = 다를 수 있음, 맥락 판단
 
 ## 출력 형식 (순수 JSON만, 설명 텍스트 없음)
 {
   "clusters": [
     {
-      "representative_name": "카탈로그에 있으면 카탈로그 이름, 없으면 가장 표준적인 한국어 품목명",
+      "representative_name": "카탈로그에 있으면 카탈로그 이름, 없으면 가장 표준적인 한국어 품목명. 반드시 짧은 품목명(비교단위명)만 — 경로 구분자 '>'나 '(맥락)상위경로' 내용을 절대 포함하지 마세요",
       "all_item_ids": ["모든 item_id — 대표 포함, 2개 이상"],
       "similarity_score": 0.0~1.0,
       "similarity_summary": "유사 근거 한 줄"
@@ -99,18 +135,80 @@ CLUSTER_PROMPT = """당신은 입찰 견적서에서 비교 가능한 품목 그
 """
 
 
+def _leaf_name(name: str) -> str:
+    """경로 문자열에서 잎(마지막 세그먼트)만 추출.
+
+    추출 단계에서 name_normalized에 전체 경로('재료비 > 전장/제어부 > 전장/제어부')가
+    저장된 오염 데이터를 표시·매칭 시점에 잎('전장/제어부')으로 정규화한다.
+    원본(path/full_label)은 보존하고, 이 함수는 '이름' 용도에만 적용한다.
+    구분자는 ' > ' 우선, 없으면 '>'."""
+    if not name:
+        return name
+    s = str(name)
+    if ">" in s:
+        # ' > '/'>' 모두 처리: 마지막 세그먼트
+        seg = s.replace(" > ", ">").split(">")[-1].strip()
+        return seg or s
+    return s.strip()
+
+
 def _pick_rep_name(names: list) -> str:
-    """클러스터 대표명 선택 — 한글 이름 우선, 없으면 첫 번째.
+    """클러스터 대표명 선택 — 경로 정규화 후 한글 우선, 없으면 첫 번째.
 
     한/영이 섞인 경우 한글이 더 표준적이므로 한글명을 대표로.
+    이름에 경로(' > ')가 섞여 있으면 잎만 취해 대표명 오염을 원천 차단.
     """
     import re as _re
-    # 한글이 포함된 이름 우선
-    korean = [n for n in names if _re.search(r"[가-힣]", n or "")]
+    # 1) 모든 후보를 잎명으로 정규화 + 빈 값/중복 제거
+    leaves = []
+    for n in names:
+        leaf = _leaf_name(n)
+        if leaf and leaf not in leaves:
+            leaves.append(leaf)
+    if not leaves:
+        return "미명명"
+    # 2) 한글 포함 이름 우선, 그 중 최단(간결)
+    korean = [n for n in leaves if _re.search(r"[가-힣]", n)]
     if korean:
-        # 한글 이름 중 가장 짧은 것 (간결)
         return min(korean, key=len)
-    return names[0] if names else "미명명"
+    return leaves[0]
+
+
+def _format_item_line(si: dict) -> str:
+    """클러스터링 LLM 입력의 항목 1줄 포맷 — Phase 1(1차)과 Phase 2(미분류
+    재검토)가 동일 포맷을 쓰도록 단일 원천으로 유지한다 (균형 모드).
+
+    비교단위(이름)=주 기준 → 하위·사양=대등 보조(앞쪽) → 금액/단가
+    → (맥락)상위=꼬리(매칭 근거 아님)."""
+    name = si.get("name_normalized") or si.get("name_raw") or ""
+    # 이름이 경로로 오염된 경우 잎만 비교단위로 사용(매칭 안정화).
+    # 전체 경로는 아래 (맥락)상위/full_label로 보존해 상위 구분에 활용.
+    name = _leaf_name(name)
+    if si.get("is_group"):
+        ref = si.get("ref_members") or []
+        ref_str = ", ".join(ref[:16])
+        full = si.get("full_label") or name
+        line = (
+            f"  - id={si['item_id']}"
+            f" | 비교단위={name}"
+            f" | 하위·사양({si.get('n_items','')}개): {ref_str[:300]}"
+            f" | 금액={si.get('amount', '')}"
+        )
+        if full and full != name:
+            line += f" | (맥락)상위경로={full}"
+        return line
+    spec = str(si.get("spec", "") or "")
+    ctx = si.get("full_label") or si.get("category") or ""
+    line = f"  - id={si['item_id']} | 비교단위={name}"
+    if spec:
+        line += f" | 사양={spec[:120]}"
+    line += (
+        f" | 단위={si.get('unit', '')}"
+        f" | 단가={si.get('unit_price', '')}"
+    )
+    if ctx and ctx != name:
+        line += f" | (맥락)상위={ctx}"
+    return line
 
 
 def _build_cluster_input(submission_items: list, catalog_items: list = None) -> str:
@@ -146,28 +244,7 @@ def _build_cluster_input(submission_items: list, catalog_items: list = None) -> 
     for vendor, items in by_vendor.items():
         lines.append(f"### {vendor}")
         for si in items:
-            name = si.get("name_normalized") or si.get("name_raw") or ""
-            if si.get("is_group"):
-                # 비교 단위가 분류 묶음 → 묶음명이 비교 기준(주),
-                # 하위 세부는 참조(보조)임을 LLM에 명시
-                ref = si.get("ref_members") or []
-                ref_str = ", ".join(ref[:12])
-                lines.append(
-                    f"  - id={si['item_id']}"
-                    f" | 비교단위(묶음)={name}"
-                    f" | 카테고리={si.get('category', '')}"
-                    f" | 묶음합계금액={si.get('amount', '')}"
-                    f" | [참조] 하위 {si.get('n_items','')}개: {ref_str[:200]}"
-                )
-            else:
-                lines.append(
-                    f"  - id={si['item_id']}"
-                    f" | 품목명={name}"
-                    f" | 카테고리={si.get('category', '')}"
-                    f" | 단위={si.get('unit', '')}"
-                    f" | 단가={si.get('unit_price', '')}"
-                    f" | 규격={str(si.get('spec', '') or '')[:60]}"
-                )
+            lines.append(_format_item_line(si))
         lines.append("")
 
     # ── 전체 품목 통합 목록 (영한 짝을 한눈에 — 누락 방지) ──
@@ -311,6 +388,11 @@ def _cluster_single(
                     si = existing_ids[rep_id]
                     rep_name = (si.get("name_normalized") or si.get("name_raw") or "미명명")
 
+                # 대표명 가드: LLM이 "(맥락)상위경로"를 복사해 경로 전체를
+                # 대표명으로 내거나, name_normalized 자체가 경로인 오염 데이터를
+                # 잎(마지막 세그먼트)으로 정규화 — 클러스터명 오염 원천 차단
+                rep_name = _leaf_name(rep_name)
+
                 # 대표명이 영문뿐이면, 멤버 중 한글 이름을 우선 (한글이 더 표준)
                 import re as _re_k
                 if not _re_k.search(r"[가-힣]", rep_name):
@@ -330,7 +412,8 @@ def _cluster_single(
                 })
 
             return clusters
-            return clusters
+        except json.JSONDecodeError as e:
+            # 응답이 JSON이 아니면 재시도 (최대 3회)
             last_error = f"JSON 파싱 실패: {e}"
             continue
         except Exception as e:
@@ -461,9 +544,16 @@ UNMATCHED_PROMPT = """당신은 입찰 견적서 품목 분류 전문 시스템�
 - 미분류 "GPU Server" → 클러스터 "GPU 서버"에 편입
 - 미분류 "Firewall Appliance" → 클러스터 "방화벽 장비"에 편입
 
-## 판단 기준 (적극 편입)
+## 판단 기준 (적극 편입 — 균형 모드)
 - 영문↔한글 번역으로 같은 의미 → 편입 (확신을 가지세요, 당신은 번역을 압니다)
 - 띄어쓰기/대소문자/괄호 수식어/접미사 차이 → 편입
+- **주(主) 기준은 비교단위 이름 자체입니다.** 이름이 클러스터 대표명·멤버와
+  같거나 같은 의미면, "(맥락)상위경로/상위"가 달라도 편입하세요.
+  업체마다 트리 깊이·묶음 기준이 다르므로 **상위경로 차이만으로 편입을
+  거부하지 마세요.**
+- "하위·사양"과 "(맥락)상위"는 대등한 보조 참조 — 이름이 애매할 때만
+  함께 보고 판단하세요. 어느 쪽도 단독으로 명확한 이름 일치를 뒤집지 못합니다.
+- 이름이 같은데 하위·사양 정보가 빈약하면 놓치지 말고 편입하세요(누락이 가장 큰 실수).
 - 명백히 다른 품목만 제외 (예: "방화벽 본체" vs "방화벽 라이선스")
 
 ## 제약
@@ -507,12 +597,8 @@ def _build_unmatched_input(unmatched_items: list, existing_clusters: list) -> st
     for vendor, items in by_vendor.items():
         lines.append(f"### {vendor}")
         for si in items:
-            name = si.get("name_normalized") or si.get("name_raw") or ""
-            lines.append(
-                f"  - id={si['item_id']}"
-                f" | 품목명={name}"
-                f" | 카테고리={si.get('category', '')}"
-            )
+            # Phase 1과 동일한 균형 모드 포맷 (단일 원천: _format_item_line)
+            lines.append(_format_item_line(si))
         lines.append("")
 
     return "\n".join(lines)
@@ -803,6 +889,102 @@ def save_clusters(conn, clusters: list, bid_id: str = None) -> int:
 
     conn.commit()
     return len(clusters)
+
+
+def change_cluster_category(cluster_id: str, new_category: str,
+                            create_if_missing: bool = True,
+                            domain: str = None) -> dict:
+    """클러스터의 분류(카테고리)를 변경.
+
+    설계: 클러스터의 cat은 저장값이 아니라 멤버 category 다수결의 파생값이므로,
+    '분류 변경'은 소속 멤버 전원의 submission_items.category를 목표 분류로
+    일괄 변경하는 것으로 구현한다. 확정(accepted) 클러스터라면 연결된
+    catalog_items.category_id까지 동기화해 카탈로그와 어긋나지 않게 한다.
+
+    - new_category: 목표 분류명
+    - create_if_missing: 사전(catalog_categories)에 없으면 자동 생성(직접입력 대응)
+    - domain: 신규 생성 시 사용할 도메인(미지정 시 입찰 도메인)
+
+    반환: {members_updated, catalog_synced, category_created}
+    """
+    new_category = (new_category or "").strip()
+    if not new_category:
+        raise ValueError("목표 분류명이 비어 있습니다.")
+
+    from db.queries import get_conn, new_id
+
+    with get_conn() as c:
+        cl = c.execute(
+            "SELECT cluster_id, bid_id, status FROM catalog_clusters WHERE cluster_id = ?",
+            (cluster_id,)
+        ).fetchone()
+        if not cl:
+            raise ValueError(f"클러스터를 찾을 수 없습니다: {cluster_id}")
+        cl = dict(cl)
+        bid_id = cl["bid_id"]
+
+        # 도메인 결정 (신규 분류 생성용)
+        if not domain:
+            brow = c.execute("SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)).fetchone()
+            domain = (dict(brow).get("domain") if brow else None) or "IT"
+
+        # 사전에 목표 분류가 있는지 확인 → 없으면 생성(선택)
+        category_created = False
+        cat_row = c.execute(
+            "SELECT category_id FROM catalog_categories "
+            "WHERE name = ? AND (domain = ? OR domain = 'ALL') AND is_active = 1 LIMIT 1",
+            (new_category, domain)
+        ).fetchone()
+        target_category_id = cat_row["category_id"] if cat_row else None
+        if not target_category_id and create_if_missing:
+            target_category_id = new_id()
+            # 정렬 순서: 도메인 내 최대+1
+            mx = c.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) FROM catalog_categories WHERE domain = ?",
+                (domain,)
+            ).fetchone()[0]
+            c.execute("""
+                INSERT INTO catalog_categories
+                    (category_id, name, domain, sort_order, is_active, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?)
+            """, (target_category_id, new_category, domain, (mx or 0) + 1,
+                  datetime.now().isoformat()))
+            category_created = True
+
+        # 멤버(= submission_items) 조회
+        member_ids = [r["catalog_item_id"] for r in c.execute(
+            "SELECT catalog_item_id FROM catalog_cluster_members WHERE cluster_id = ?",
+            (cluster_id,)
+        ).fetchall()]
+        if not member_ids:
+            return {"members_updated": 0, "catalog_synced": 0,
+                    "category_created": category_created}
+
+        ph = ",".join("?" * len(member_ids))
+        # ① 멤버 category 일괄 변경
+        n_members = c.execute(
+            f"UPDATE submission_items SET category = ? WHERE item_id IN ({ph})",
+            [new_category] + member_ids
+        ).rowcount
+
+        # ② 확정 클러스터면 연결된 catalog_items.category_id 동기화
+        catalog_synced = 0
+        if cl["status"] == "accepted" and target_category_id:
+            ci_ids = [r["catalog_item_id"] for r in c.execute(
+                f"SELECT DISTINCT catalog_item_id FROM submission_items "
+                f"WHERE item_id IN ({ph}) AND catalog_item_id IS NOT NULL",
+                member_ids
+            ).fetchall()]
+            for ci in ci_ids:
+                c.execute(
+                    "UPDATE catalog_items SET category_id = ?, updated_at = ? "
+                    "WHERE catalog_item_id = ?",
+                    (target_category_id, datetime.now().isoformat(), ci)
+                )
+                catalog_synced += 1
+
+        return {"members_updated": n_members, "catalog_synced": catalog_synced,
+                "category_created": category_created}
 
 
 def accept_cluster(conn, cluster_id: str, user_id: str,

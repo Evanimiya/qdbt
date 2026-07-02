@@ -11,8 +11,17 @@ from flask import (Blueprint, render_template, request, redirect,
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from auth.auth import login_required
+from auth.auth import login_required, require_role
 from db.queries import get_bid, compare_bid_submissions, cross_project_price, cross_bid_price
+
+
+def _db_connect():
+    """직접 DB 연결 — busy_timeout 포함 (worker와의 쓰기 경합 시 5초 대기)."""
+    import sqlite3 as _sq
+    from db.queries import DB_PATH as _DBP
+    conn = _sq.connect(_DBP)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
 
 bp = Blueprint("compare", __name__)
 
@@ -149,7 +158,7 @@ def clusters_json(bid_id):
     clusters = list_clusters(bid_id=bid_id)
 
     # 클러스터별 멤버 품명/스펙 수집 (유사도 텍스트 구성용)
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute("""
         SELECT cm.cluster_id,
@@ -232,7 +241,16 @@ def bid_compare(bid_id):
         flash("추출 완료된 제출서가 없습니다. 먼저 파일을 업로드하세요.", "warning")
         return redirect(url_for("bids.detail", bid_id=bid_id))
 
-    return render_template("compare/bid.html", bid=bid, data=data)
+    # 분류 변경 드롭다운용: 입찰 도메인의 사전 카테고리 목록
+    from db.queries import category_order_for_bid
+    present = set(data.get("categories", {}).keys())
+    for cl in data.get("clusters", []):
+        if cl.get("cat"):
+            present.add(cl["cat"])
+    dict_categories = category_order_for_bid(bid_id, present_cats=present)
+
+    return render_template("compare/bid.html", bid=bid, data=data,
+                           dict_categories=dict_categories)
 
 
 @bp.route("/bid/<bid_id>/excel")
@@ -265,24 +283,47 @@ def bid_excel(bid_id):
 @bp.route("/search")
 @login_required
 def search():
-    """품목명으로 전체 가격 이력 검색 (입찰 간 비교)"""
+    """품목명으로 전체 가격 이력 검색 (입찰 간 비교) + 기준정보 필터"""
+    from db.queries import (list_projects, list_attr_defs,
+                            attr_value_options, search_projects_by_attrs)
     q          = request.args.get("q", "").strip()
     project_id = request.args.get("project_id", "").strip()
     results    = []
 
+    # ── 기준정보 필터 (attr_<key> 파라미터) ──
+    attr_defs = [dict(d) for d in list_attr_defs()]
+    attr_filters = {d["attr_key"]: request.args.get(f"attr_{d['attr_key']}", "").strip()
+                    for d in attr_defs}
+    active_filters = [(k, v) for k, v in attr_filters.items() if v]
+    # None = 기준정보 조건 없음(전체), 리스트 = 조건에 맞는 프로젝트 집합
+    attr_project_ids = search_projects_by_attrs(active_filters) if active_filters else None
+
     if q:
         if project_id:
             results = cross_bid_price(project_id, q)
+            # 기준정보 조건이 특정 프로젝트와 모순이면 빈 결과
+            if attr_project_ids is not None and project_id not in attr_project_ids:
+                results = []
         else:
-            results = cross_project_price(q)
+            results = cross_project_price(q, project_ids=attr_project_ids)
 
-    # 프로젝트 목록 (필터용)
-    from db.queries import list_projects
+    # 기준정보 조건만으로(품목명 없이) 검색 시: 해당 프로젝트 목록 표시
+    matched_projects = []
+    if active_filters and attr_project_ids is not None:
+        all_p = {p["project_id"]: p for p in list_projects()}
+        matched_projects = [all_p[pid] for pid in attr_project_ids if pid in all_p]
+
     projects = list_projects()
+    attr_options = {d["attr_key"]: attr_value_options(d["attr_key"])
+                    for d in attr_defs}
 
     return render_template("compare/search.html",
                            q=q, project_id=project_id,
-                           results=results, projects=projects)
+                           results=results, projects=projects,
+                           attr_defs=attr_defs, attr_filters=attr_filters,
+                           attr_options=attr_options,
+                           active_attr_filters=active_filters,
+                           matched_projects=matched_projects)
 
 
 # ─── 비교 페이지 클러스터 액션 ───────────────────
@@ -347,6 +388,13 @@ def refine_unmatched_from_compare(bid_id):
         flash("API 키가 설정되지 않았습니다. ⚙ 내 프로필에서 설정하세요.", "error")
         return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
+    # 폼에서 provider/model 오버라이드 (없으면 프로필 기본값 사용)
+    override_provider = request.form.get("provider_id", "").strip()
+    override_model    = request.form.get("model", "").strip()
+    if override_provider:
+        llm = {**llm, "provider": override_provider,
+               "model": override_model or None}
+
     items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
     if len(items_raw) < 2:
         flash("추출 완료 견적서가 2개 이상 필요합니다.", "warning")
@@ -377,7 +425,7 @@ def accept_cluster_from_compare(bid_id, cluster_id):
     rep_name = request.form.get("representative_name", "").strip() or None
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         result = do_accept(conn, cluster_id, uid, rep_name)
         conn.close()
@@ -391,6 +439,187 @@ def accept_cluster_from_compare(bid_id, cluster_id):
     return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
 
+@bp.route("/bid/<bid_id>/cluster/<cluster_id>/category", methods=["POST"])
+def change_cluster_category_from_compare(bid_id, cluster_id):
+    """클러스터의 분류(카테고리)를 변경.
+
+    멤버 전원의 submission_items.category를 목표 분류로 일괄 변경하고,
+    확정 클러스터면 연결된 catalog_items.category_id까지 동기화한다.
+    사전에 없는 분류명은 자동 생성(직접입력 대응). return=detail이면
+    클러스터 상세로, 아니면 비교 화면으로 리다이렉트한다.
+    """
+    from flask import g
+    from extractors.catalog_clusterer import change_cluster_category
+    tok = getattr(g, "auth_token", "") or ""
+    new_cat = request.form.get("category", "").strip()
+    return_to = request.form.get("return", "").strip()
+
+    def _redirect():
+        if return_to == "detail":
+            return redirect(url_for("catalog.cluster_detail",
+                                    cluster_id=cluster_id,
+                                    return_bid_id=bid_id, _t=tok))
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    if not new_cat:
+        flash("변경할 분류를 선택하거나 입력하세요.", "error")
+        return _redirect()
+    try:
+        r = change_cluster_category(cluster_id, new_cat)
+        msg = f"✅ 클러스터 분류를 '{new_cat}'(으)로 변경 ({r['members_updated']}개 항목)"
+        if r.get("category_created"):
+            msg += " · 신규 분류 생성됨"
+        if r.get("catalog_synced"):
+            msg += f" · 카탈로그 {r['catalog_synced']}건 동기화"
+        flash(msg, "success")
+    except Exception as e:
+        flash(f"❌ 분류 변경 실패: {e}", "error")
+    return _redirect()
+
+
+@bp.route("/bid/<bid_id>/clusters/reorder", methods=["POST"])
+@require_role("manager")
+def reorder_clusters_route(bid_id):
+    """클러스터 표시 순서 저장 (항목 6). JSON: {order: [cluster_id, ...]}"""
+    from db.queries import reorder_clusters
+    payload = request.get_json(silent=True) or {}
+    order = payload.get("order") or []
+    try:
+        n = reorder_clusters(bid_id, order)
+        return jsonify({"ok": True, "updated": n})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+
+
+@bp.route("/bid/<bid_id>/clusters/move-category", methods=["POST"])
+@require_role("manager")
+def move_clusters_to_category(bid_id):
+    """선택된 여러 클러스터를 다른 분류로 일괄 이동 (항목 2).
+
+    item_ids_json에 클러스터 ID 목록, category에 대상 분류명.
+    각 클러스터의 멤버 category를 목표 분류로 일괄 변경한다.
+    """
+    import json as _json
+    from flask import g
+    from extractors.catalog_clusterer import change_cluster_category
+    tok = getattr(g, "auth_token", "") or ""
+    new_cat = request.form.get("category", "").strip()
+    try:
+        cluster_ids = _json.loads(request.form.get("item_ids_json", "[]"))
+    except Exception:
+        cluster_ids = []
+
+    def _redirect():
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    if not new_cat:
+        flash("이동할 분류를 선택하세요.", "error")
+        return _redirect()
+    if not cluster_ids:
+        flash("이동할 클러스터를 선택하세요.", "error")
+        return _redirect()
+
+    n_ok, n_items, n_created = 0, 0, 0
+    errors = []
+    for cid in cluster_ids:
+        try:
+            r = change_cluster_category(cid, new_cat)
+            n_ok += 1
+            n_items += r.get("members_updated", 0)
+            if r.get("category_created"):
+                n_created += 1
+        except Exception as e:
+            errors.append(str(e))
+    if n_ok:
+        msg = f"✅ {n_ok}개 클러스터를 '{new_cat}' 분류로 이동 ({n_items}개 항목)"
+        if n_created:
+            msg += " · 신규 분류 생성됨"
+        flash(msg, "success")
+    if errors:
+        flash(f"⚠️ {len(errors)}건 실패: {errors[0]}", "error")
+    return _redirect()
+
+
+@bp.route("/bid/<bid_id>/category/rename", methods=["POST"])
+def rename_category_from_compare(bid_id):
+    """분류명(카테고리) 일괄 수정. 해당 입찰에서 old_cat 항목 전체를 new_cat으로.
+
+    중분류 이하로 클러스터링할 때 분류명을 바로잡기 위한 기능.
+    submission_items.category를 바꾸면 비교표·클러스터 카테고리 표시에 반영된다.
+    """
+    from flask import g
+    import sqlite3
+    tok = getattr(g, "auth_token", "") or ""
+    old_cat = request.form.get("old_category", "").strip()
+    new_cat = request.form.get("new_category", "").strip()
+    if not old_cat or not new_cat:
+        flash("분류명을 입력하세요.", "error")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+    if old_cat == new_cat:
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+    conn = _db_connect()
+    conn.row_factory = sqlite3.Row
+    try:
+        n = conn.execute("""
+            UPDATE submission_items SET category = ?
+            WHERE category = ? AND submission_id IN (
+                SELECT submission_id FROM submissions WHERE bid_id = ?
+            )
+        """, (new_cat, old_cat, bid_id)).rowcount
+        conn.commit()
+        flash(f"✅ 분류명 '{old_cat}' → '{new_cat}' ({n}개 항목)", "success")
+    except Exception as e:
+        flash(f"❌ 분류명 수정 실패: {e}", "error")
+    finally:
+        conn.close()
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+
+@bp.route("/bid/<bid_id>/cluster/accept-batch", methods=["POST"])
+def accept_batch_from_compare(bid_id):
+    """여러 클러스터를 일괄 확정. 개별 accept를 순차 적용하되,
+    일부 실패해도 나머지는 진행하고 결과를 요약 flash한다."""
+    from flask import g
+    import json as _json
+    import sqlite3
+    from extractors.catalog_clusterer import accept_cluster as do_accept
+
+    tok = getattr(g, "auth_token", "") or ""
+    uid = session.get("user_id", "")
+    try:
+        ids = _json.loads(request.form.get("cluster_ids_json", "[]"))
+    except Exception:
+        ids = []
+    ids = [i for i in ids if i]
+    if not ids:
+        flash("확정할 클러스터를 선택하세요.", "warning")
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    ok, fail = 0, 0
+    errors = []
+    conn = _db_connect()
+    conn.row_factory = sqlite3.Row
+    try:
+        for cid in ids:
+            try:
+                do_accept(conn, cid, uid, None)
+                ok += 1
+            except Exception as e:
+                fail += 1
+                errors.append(str(e))
+    finally:
+        conn.close()
+
+    if ok:
+        msg = f"✅ {ok}개 클러스터를 일괄 확정했습니다."
+        if fail:
+            msg += f" ({fail}개 실패)"
+        flash(msg, "success" if not fail else "warning")
+    else:
+        flash(f"❌ 일괄 확정 실패: {errors[0] if errors else '알 수 없는 오류'}", "error")
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+
 @bp.route("/bid/<bid_id>/cluster/<cluster_id>/hold", methods=["POST"])
 def hold_cluster_from_compare(bid_id, cluster_id):
     from flask import g
@@ -401,7 +630,7 @@ def hold_cluster_from_compare(bid_id, cluster_id):
     tok = getattr(g, "auth_token", "") or ""
     uid = session.get("user_id", "")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     do_hold(conn, cluster_id, uid)
     conn.close()
@@ -419,7 +648,7 @@ def reject_cluster_from_compare(bid_id, cluster_id):
     tok = getattr(g, "auth_token", "") or ""
     uid = session.get("user_id", "")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _db_connect()
     conn.row_factory = sqlite3.Row
     do_reject(conn, cluster_id, uid)
     conn.close()
@@ -459,7 +688,7 @@ def move_items_to_cluster(bid_id):
         return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         placeholders = ",".join("?" * len(item_ids))
 
@@ -559,7 +788,7 @@ def merge_clusters_from_compare(bid_id):
         return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
 
         # 보안: target + 모든 src 클러스터가 이 입찰(bid_id)에 속하는지 검증.
@@ -601,7 +830,7 @@ def reset_clusters_from_compare(bid_id):
     tok = getattr(g, "auth_token", "") or ""
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         n = reset_bid_clusters(conn, bid_id)
         conn.close()
@@ -624,7 +853,7 @@ def reopen_cluster_from_compare(bid_id, cluster_id):
     uid = session.get("user_id", "")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         do_reopen(conn, cluster_id, uid)
         conn.close()
@@ -646,7 +875,7 @@ def delete_cluster_from_compare(bid_id, cluster_id):
     tok = getattr(g, "auth_token", "") or ""
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         do_delete(conn, cluster_id)
         conn.close()
@@ -679,7 +908,7 @@ def exclude_items_from_cluster(bid_id):
         return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _db_connect()
         conn.row_factory = sqlite3.Row
         placeholders = ",".join("?" * len(item_ids))
         conn.execute(f"""

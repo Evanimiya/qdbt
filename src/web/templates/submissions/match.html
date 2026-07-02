@@ -25,7 +25,7 @@
     </p>
   </div>
   <!-- LLM 매칭 실행 버튼 -->
-  {% from '_model_selector.html' import model_selector %}
+  {% from '_model_selector.html' import model_selector with context %}
   <form method="POST" class="flex items-center gap-2 flex-wrap">
     <input type="hidden" name="action" value="run_match">
     {{ model_selector('match') }}

@@ -53,6 +53,21 @@
       이 매핑으로 추출 →
     </button>
   </div>
+  <!-- 합계·소계 자동 감지 안내 (동적) -->
+  <div id="totalBanner" class="mx-4 mb-2 text-xs rounded-lg px-3 py-2 break-ko"
+       style="display:none;background:#fffbeb;border:1px solid #fde68a;color:#92400e">
+    <span id="totalBannerText"></span>
+    <button onclick="restoreAllTotals()"
+            class="ml-2 underline text-amber-800 hover:text-amber-900">모두 해제(살리기)</button>
+    <button onclick="reselectAllTotals()"
+            class="ml-1 underline text-amber-800 hover:text-amber-900">모두 다시 제외</button>
+  </div>
+  <!-- 대분류 도메인 정합 안내 (동적) -->
+  <div id="catBindBanner" class="mx-4 mb-2 text-xs rounded-lg px-3 py-2 break-ko"
+       style="display:none;background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af">
+    <span id="catBindText"></span>
+    <span id="catBindDetail" class="block mt-1 text-blue-700"></span>
+  </div>
 
   <!-- 엑셀 격자 -->
   <div class="bg-white rounded-xl border border-gray-200 overflow-auto" style="max-height:60vh">
@@ -72,6 +87,9 @@
 const GRID = {{ grid_json|safe }};
 const SUGGEST = {{ suggest_json|safe }};
 const SAVED = {{ saved_config_json|safe }};
+const TOTAL_SUGGEST = {{ total_suggestion_json|safe }};  // 합계·소계 의심 행 제안
+const TOTAL_ROWS = new Set((TOTAL_SUGGEST || []).map(t => t.row));  // 감지 행 집합
+const DOMAIN_BINDING = {{ domain_binding_json|safe }};  // 도메인 표준 분류 바인딩
 const SUB_ID = "{{ sub.submission_id }}";
 const SHEET = {{ current_sheet|tojson }};
 
@@ -112,6 +130,8 @@ if (SAVED && SAVED.mapping) {
 } else {
   // 제안 매핑 (SUGGEST.mapping은 {col(1-based): role})
   Object.entries(SUGGEST.mapping || {}).forEach(([c,r]) => { mapping[parseInt(c)-1] = r; });
+  // 최초 진입: 합계·소계 의심 행을 기본 '제외 예정'으로 선택(자동 삭제 아님 — 해제 가능)
+  (TOTAL_SUGGEST || []).forEach(t => { if (t && t.row) excluded[t.row] = true; });
 }
 
 function catCols() {
@@ -170,6 +190,77 @@ function bulkSelect(catIdx){
   units = u; render();
 }
 function clearUnits(){ units = {}; render(); }
+
+// ── 합계·소계 감지 배너 ──
+function updateTotalBanner(){
+  var banner = document.getElementById('totalBanner');
+  var txt = document.getElementById('totalBannerText');
+  if(!banner || !txt) return;
+  var list = TOTAL_SUGGEST || [];
+  if(!list.length){ banner.style.display = 'none'; return; }
+  var n = list.length;
+  var stillExcluded = list.filter(function(t){ return excluded[t.row]; }).length;
+  banner.style.display = '';
+  txt.innerHTML = '🧮 합계·소계로 의심되는 <b>' + n + '개</b> 행을 자동 감지했습니다. '
+    + '현재 <b>' + stillExcluded + '개</b>가 제외 예정입니다. '
+    + '표에서 회색으로 흐려진 행을 확인하고, 실제 항목이면 <b>행번호(R)를 클릭</b>해 살리세요.';
+}
+function restoreAllTotals(){
+  (TOTAL_SUGGEST || []).forEach(function(t){ if(t && t.row) delete excluded[t.row]; });
+  render();
+}
+function reselectAllTotals(){
+  (TOTAL_SUGGEST || []).forEach(function(t){ if(t && t.row) excluded[t.row] = true; });
+  render();
+}
+
+// ── 대분류 도메인 정합 검사 (층위 1: 사전 바인딩) ──
+function _normCatKey(s){
+  if(s==null) return '';
+  return String(s).replace(/[\s\-_/()·.]/g,'').trim().toLowerCase();
+}
+function updateCatBindBanner(){
+  var banner=document.getElementById('catBindBanner');
+  var txt=document.getElementById('catBindText');
+  var detail=document.getElementById('catBindDetail');
+  if(!banner||!txt||!DOMAIN_BINDING||!DOMAIN_BINDING.standard) { if(banner) banner.style.display='none'; return; }
+  // cat1(대분류)로 지정된 열 찾기
+  var cat1Col=null;
+  Object.keys(mapping).forEach(function(c){ if(mapping[c]==='cat1') cat1Col=parseInt(c); });
+  // seq(번호계층) 모드면 대분류가 번호에서 파생되므로 이 검사는 생략
+  var hasSeq=Object.values(mapping).indexOf('seq')>=0;
+  if(cat1Col==null || hasSeq){ banner.style.display='none'; return; }
+  var lookup=DOMAIN_BINDING.lookup||{};
+  var rows=GRID.grid||[];
+  var seen={}, unmatched={};
+  for(var i=0;i<rows.length;i++){
+    var rowNum=i+1;
+    if(rowNum<=headerRow) continue;
+    if(excluded[rowNum]) continue;
+    var v=(rows[i]||[])[cat1Col];
+    if(v==null||String(v).trim()==='') continue;
+    var raw=String(v).trim();
+    if(seen[raw]) continue; seen[raw]=true;
+    var key=_normCatKey(raw);
+    if(!(key in lookup)) unmatched[raw]=true;
+  }
+  var unmatchedList=Object.keys(unmatched);
+  var totalCats=Object.keys(seen).length;
+  banner.style.display='';
+  if(unmatchedList.length===0){
+    banner.style.background='#f0fdf4'; banner.style.borderColor='#bbf7d0'; banner.style.color='#166534';
+    txt.innerHTML='✅ 대분류 <b>'+totalCats+'종</b>이 모두 <b>'+DOMAIN_BINDING.domain
+      +'</b> 도메인 표준 분류에 부합합니다.';
+    detail.textContent='';
+  } else {
+    banner.style.background='#eff6ff'; banner.style.borderColor='#bfdbfe'; banner.style.color='#1e40af';
+    txt.innerHTML='📋 <b>'+DOMAIN_BINDING.domain+'</b> 도메인 표준 분류를 벗어난 대분류 <b>'
+      +unmatchedList.length+'종</b>이 있습니다. 추출 후 검증 화면에서 표준 분류로 재지정할 수 있습니다.';
+    detail.innerHTML='표준 밖: '+unmatchedList.map(function(u){return '<b>'+u+'</b>';}).join(', ')
+      +' &nbsp;/&nbsp; 표준: '+DOMAIN_BINDING.standard.slice(0,8).join(', ')
+      +(DOMAIN_BINDING.standard.length>8?' …':'');
+  }
+}
 function toggleUnit(path){ if(units[path]) delete units[path]; else units[path]=true; render(); }
 
 function unitForRow(rowArr){
@@ -182,6 +273,8 @@ function setColRole(col, role){ mapping[col]=role; if(mode==='select') buildBulk
 
 function render(){
   headerRow = parseInt(document.getElementById('headerRow').value || headerRow);
+  updateTotalBanner();
+  updateCatBindBanner();
   const tbl = document.getElementById('gridTable');
   tbl.innerHTML = '';
   const nCols = GRID.n_cols;
@@ -279,11 +372,14 @@ function render(){
     const rn = document.createElement('td');
     const isExcluded = !!excluded[rowNum];
     if(mode==='select' && isData){
-      rn.textContent = isExcluded ? '✕' : 'R'+rowNum;
-      rn.title = isExcluded ? '제외됨 — 클릭하면 복원' : '클릭하면 추출에서 제외 (subtotal 등)';
-      rn.style.cssText='border:1px solid #f3f4f6;padding:2px 6px;background:'+(isExcluded?'#fee2e2':'#fefce8')+';color:'+(isExcluded?'#dc2626':'#a16207')+';font-weight:600;text-align:center;position:sticky;left:0;cursor:pointer;';
+      var isTotalSuspect = TOTAL_ROWS.has(rowNum);
+      rn.textContent = isExcluded ? '✕' : (isTotalSuspect ? '🧮' : 'R'+rowNum);
+      rn.title = isExcluded
+        ? '제외됨 — 클릭하면 복원(살리기)'
+        : (isTotalSuspect ? '합계·소계 의심 행 — 클릭하면 제외' : '클릭하면 추출에서 제외 (subtotal 등)');
+      rn.style.cssText='border:1px solid #f3f4f6;padding:2px 6px;background:'+(isExcluded?'#fee2e2':(isTotalSuspect?'#fef3c7':'#fefce8'))+';color:'+(isExcluded?'#dc2626':'#a16207')+';font-weight:600;text-align:center;position:sticky;left:0;cursor:pointer;';
       rn.onmouseenter = () => { if(!excluded[rowNum]){ rn.textContent='✕'; rn.style.background='#fee2e2'; rn.style.color='#dc2626'; } };
-      rn.onmouseleave = () => { if(!excluded[rowNum]){ rn.textContent='R'+rowNum; rn.style.background='#fefce8'; rn.style.color='#a16207'; } };
+      rn.onmouseleave = () => { if(!excluded[rowNum]){ rn.textContent=(TOTAL_ROWS.has(rowNum)?'🧮':'R'+rowNum); rn.style.background=(TOTAL_ROWS.has(rowNum)?'#fef3c7':'#fefce8'); rn.style.color='#a16207'; } };
       rn.onclick = () => { if(excluded[rowNum]) delete excluded[rowNum]; else excluded[rowNum]=true; render(); };
     } else {
       rn.textContent = 'R'+rowNum;
