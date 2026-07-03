@@ -111,6 +111,14 @@ def create_app():
         import re as _re
         return _re.sub(r"\s+", "", str(x or "")).lower()
 
+    _CUR_SYMBOL = {"KRW": "₩", "USD": "$", "CNY": "¥", "JPY": "¥", "EUR": "€"}
+
+    @app.template_filter("cursym")
+    def cursym_filter(currency):
+        """통화 코드 → 기호. 미등록 통화는 코드 그대로 + 공백."""
+        c = str(currency or "KRW").upper()
+        return _CUR_SYMBOL.get(c, c + " ")
+
     @app.template_filter("treepath_above")
     def treepath_above_filter(path, name=""):
         """품명 '바로 위 단계'까지로 통일된 트리 경로.

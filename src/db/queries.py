@@ -538,10 +538,30 @@ def recompute_subtotal(submission_id: str):
     트리/라인 합계와 동일하게 헤더(소계) 제외한 잎의 amount 합.
     special nego는 음수로 저장돼 있어 자동 차감됨.
     아이템 삭제·추출 후 호출해 합계 일치를 유지한다.
+    또한 항목별 통화·환율에서 제출서 대표 환율(fx_rate_used)과
+    외화 포함 여부(has_usd_items)를 집계해 비교 화면 표시에 사용한다.
     """
     leaf_items = get_items(submission_id, headers=False)
     subtotal = sum((dict(it).get("amount") or 0) for it in leaf_items)
-    update_submission(submission_id, subtotal_excl_vat=subtotal)
+
+    # 제출서 대표 환율·외화 플래그 집계
+    fx_vals, has_fx = [], 0
+    for it in leaf_items:
+        d = dict(it)
+        cur = (d.get("unit_price_currency") or "KRW").upper()
+        fx = d.get("fx_rate_used")
+        if cur and cur != "KRW":
+            has_fx = 1
+        if fx:
+            fx_vals.append(fx)
+    # 대표 환율: 최빈값(같은 견적서는 보통 단일 환율), 없으면 None
+    rep_fx = None
+    if fx_vals:
+        from collections import Counter
+        rep_fx = Counter(round(f, 4) for f in fx_vals).most_common(1)[0][0]
+
+    update_submission(submission_id, subtotal_excl_vat=subtotal,
+                      has_usd_items=has_fx, fx_rate_used=rep_fx)
     return subtotal
 
 
@@ -695,8 +715,8 @@ def insert_items_bulk(submission_id, items: list[dict]):
                         (item_id, submission_id, line_no, sort_order, depth, is_header,
                          category, path, name_raw, name_normalized, spec,
                          quantity, unit, unit_price, unit_price_orig,
-                         unit_price_currency, amount, is_nego)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         unit_price_currency, fx_rate_used, amount, is_nego)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     iid, submission_id,
                     it.get("line_no"), i, it.get("depth", 0),
@@ -711,6 +731,7 @@ def insert_items_bulk(submission_id, items: list[dict]):
                     _to_number(it.get("unit_price")),
                     _to_number(it.get("unit_price_orig")),
                     it.get("unit_price_currency_in_source", "KRW"),
+                    _to_number(it.get("fx_rate_used")),
                     _to_number(it.get("amount")),
                     1 if it.get("is_nego") else 0,
                 ))

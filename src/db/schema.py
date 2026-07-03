@@ -557,6 +557,9 @@ def migrate_db(db_path=None):
     si_cols = [c[1] for c in conn.execute("PRAGMA table_info(submission_items)").fetchall()]
     if "is_nego" not in si_cols:
         migrations.append("ALTER TABLE submission_items ADD COLUMN is_nego INTEGER NOT NULL DEFAULT 0")
+    if "fx_rate_used" not in si_cols:
+        # 항목별 적용 환율(원화÷통화). 통화 비교·표시용.
+        migrations.append("ALTER TABLE submission_items ADD COLUMN fx_rate_used REAL")
 
     # 계층 전파: catalog_items, catalog_clusters, price_history
     ci_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_items)").fetchall()]

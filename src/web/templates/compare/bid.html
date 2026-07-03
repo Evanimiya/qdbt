@@ -671,26 +671,32 @@ function qdSyncModel(form){
         <div class="qd-treepath" style="font-size:8px;color:#B0BAC9;font-weight:400;line-height:1.15;margin-top:1px;word-break:break-all"
              title="{{ _cell_path }}">{{ _cell_path }}</div>
         {% endif %}
-        {# 총액 표시 (기준) #}
+        {# 금액 표시 — 원화기준(₩) 디폴트 #}
+        {% set _c_cur = found.cell.unit_price_currency or 'KRW' %}
+        {% set _is_fx = (_c_cur != 'KRW') and found.cell.unit_price_orig %}
+        {# amount의 통화: 환율이 있으면 원화 확정, 없는 외화면 통화 그대로 #}
+        {% set _amt_krw = found.cell.fx_rate_used or _c_cur == 'KRW' %}
         {% if found.cell.amount %}
         <div class="pr" style="font-weight:700">
-          {{ '{:,}'.format(found.cell.amount|int) }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}
+          {{ '₩' if _amt_krw else (_c_cur|cursym) }}{{ '{:,}'.format(found.cell.amount|int) }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}
         </div>
-        {# 단가 + 수량 (보조) #}
+        {# 단가 (보조) — 원화 기준 #}
         {% if found.cell.unit_price %}
         <div style="font-size:8px;color:#64748B;margin-top:1px">
-          단가 {{ '{:,}'.format(found.cell.unit_price|int) }}
+          단가 {{ '₩' if _amt_krw else (_c_cur|cursym) }}{{ '{:,}'.format(found.cell.unit_price|int) }}
           {% if found.cell.quantity and found.cell.quantity != 1 %}
           <span style="color:#94A3B8">(× {{ found.cell.quantity|int }})</span>
           {% endif %}
         </div>
         {% endif %}
         {% else %}
-        {# amount 없는 경우 unit_price만 표시 #}
-        <div class="pr">{{ '{:,}'.format(found.cell.unit_price|int) if found.cell.unit_price else '—' }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}</div>
+        <div class="pr">{{ ('₩' if _amt_krw else (_c_cur|cursym)) ~ '{:,}'.format(found.cell.unit_price|int) if found.cell.unit_price else '—' }}{% if is_min %} 🥇{% elif is_max %} ↑{% endif %}</div>
         {% endif %}
-        {% if found.cell.unit_price_currency == 'USD' and found.cell.unit_price_orig and vfx %}
-        <div style="font-size:7px;color:#2563EB">💱 ${{ '{:,}'.format(found.cell.unit_price_orig|int) }} × {{ '{:,}'.format(vfx|int) }}</div>
+        {# 외화 항목: 2단째 — 환율 · 통화단가 (각 통화 기호) #}
+        {% if _is_fx %}
+        <div style="font-size:7px;color:#2563EB;margin-top:1px">
+          {% if vfx %}₩{{ '{:,.0f}'.format(vfx) }}/{{ _c_cur|cursym }} · {% endif %}{{ _c_cur|cursym }}{{ '{:,}'.format(found.cell.unit_price_orig|int) }}/{{ found.cell.unit or '개' }}
+        </div>
         {% endif %}
       </td>
     {% else %}
