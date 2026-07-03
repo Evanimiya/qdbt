@@ -20,8 +20,11 @@ INFO_ROLES = {
     "spec": "spec",
     "qty": "quantity",
     "unit": "unit",
-    "price": "unit_price",
-    "amount": "amount",
+    "price": "unit_price",       # 단가(통화 기준일 수 있음)
+    "amount": "amount",          # 금액(통화 기준일 수 있음)
+    "currency": "currency_raw",  # 통화 열 (USD/CNY/KRW 등)
+    "price_krw": "unit_price_krw",  # 원화 단가 (있으면 확정 원화)
+    "amount_krw": "amount_krw",     # 원화 금액 (있으면 확정 원화)
     "remark": "remark",
 }
 
@@ -252,10 +255,65 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         }
         for field, col in info_cols.items():
             v = cell_val(r, col)
-            if field in ("quantity", "unit_price", "amount"):
+            if field in ("quantity", "unit_price", "amount",
+                         "unit_price_krw", "amount_krw"):
                 item[field] = _to_number(v)
             else:
                 item[field] = str(v).strip() if v is not None else None
+
+        # ── 통화 처리 ─────────────────────────────
+        # 규칙:
+        #  1) 원화 열(amount_krw/price_krw)이 지정돼 있으면 그 값을 '원화 확정'으로 사용
+        #  2) 통화 열(currency)에서 통화 코드(USD/CNY/KRW 등)를 읽음
+        #  3) 통화·원화가 모두 있으면 환율 역산: fx = 원화 ÷ 통화
+        #  4) 결과를 표준 필드로 정규화:
+        #       unit_price(원화 단가), amount(원화 금액),
+        #       unit_price_orig(원본 통화 단가), unit_price_currency_in_source(통화),
+        #       fx_rate_used(역산 환율)
+        cur_raw = (item.pop("currency_raw", None) or "").strip().upper()
+        # 통화 코드 정규화 (기호·명칭 → ISO)
+        _CUR_MAP = {
+            "$": "USD", "US$": "USD", "USD": "USD", "달러": "USD",
+            "¥": "CNY", "RMB": "CNY", "CNY": "CNY", "위안": "CNY", "元": "CNY",
+            "€": "EUR", "EUR": "EUR", "유로": "EUR",
+            "￦": "KRW", "₩": "KRW", "KRW": "KRW", "원": "KRW", "WON": "KRW",
+            "JPY": "JPY", "엔": "JPY",
+        }
+        currency = _CUR_MAP.get(cur_raw, cur_raw if cur_raw else "KRW")
+
+        amt_cur = item.get("amount")            # 통화 기준 금액(또는 원화)
+        amt_krw = item.pop("amount_krw", None)  # 원화 금액(있으면 확정)
+        price_cur = item.get("unit_price")
+        price_krw = item.pop("unit_price_krw", None)
+
+        fx = None
+        # 환율 역산: 원화 ÷ 통화 (금액 우선, 없으면 단가)
+        if amt_krw and amt_cur and amt_cur != 0 and currency != "KRW":
+            fx = round(abs(amt_krw) / abs(amt_cur), 4)
+        elif price_krw and price_cur and price_cur != 0 and currency != "KRW":
+            fx = round(abs(price_krw) / abs(price_cur), 4)
+
+        if currency != "KRW":
+            # 외화 항목: 원본 통화값 보존 + 원화 확정값 산출
+            item["unit_price_orig"] = price_cur          # 원본 통화 단가
+            item["unit_price_currency_in_source"] = currency
+            item["fx_rate_used"] = fx
+            # 원화 확정: 견적서 원화열 우선, 없으면 통화×환율
+            if amt_krw is not None:
+                item["amount"] = amt_krw
+            elif fx and amt_cur is not None:
+                item["amount"] = round(amt_cur * fx)
+            if price_krw is not None:
+                item["unit_price"] = price_krw
+            elif fx and price_cur is not None:
+                item["unit_price"] = round(price_cur * fx)
+        else:
+            # 원화 항목: 원화열이 별도로 있으면 그 값 우선
+            item["unit_price_currency_in_source"] = "KRW"
+            if amt_krw is not None:
+                item["amount"] = amt_krw
+            if price_krw is not None:
+                item["unit_price"] = price_krw
 
         # 차감(special nego) 행: 금액·단가를 음수로. 절댓값으로 들어와도 차감 반영.
         is_nego = (r in nego_rows)
@@ -316,10 +374,18 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
         "spec": ["규격", "사양", "spec", "remark주요"],
         "qty": ["수량", "q'ty", "qty", "수 량"],
         "unit": ["단위", "unit"],
+        "currency": ["ccy", "통화", "currency", "화폐"],
+        "price_krw": ["원화단가", "krw단가", "단가(krw)", "단가(원)"],
+        "amount_krw": ["원화금액", "krw금액", "amount(krw)", "amount (krw)",
+                       "금액(krw)", "금액(원)", "공급가액(원)"],
         "price": ["단가", "unit price", "unitprice"],
         "amount": ["금액", "amount", "total", "공급가", "합계금액"],
         "remark": ["비고", "remark", "remarks"],
     }
+
+    ROLE_PRIORITY = ["seq", "amount_krw", "price_krw", "currency",
+                     "cat1", "cat2", "cat3", "cat4", "name", "spec",
+                     "qty", "unit", "price", "amount", "remark"]
 
     best_row, best_map, best_hits = None, {}, 0
     for hr in range(1, min(sheet.max_row, max_scan_rows) + 1):
@@ -329,10 +395,18 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
             if not v:
                 continue
             vs = str(v).strip().lower()
-            for role, kws in KW.items():
+            for role in ROLE_PRIORITY:
+                kws = KW.get(role, [])
                 if any(kw.lower() in vs for kw in kws):
-                    # "unit price"는 unit이 아니라 price로 (price 우선)
                     if role == "unit" and "price" in vs:
+                        continue
+                    # currency는 순수 통화 열만. "amount(ccy)"·"금액"이 섞이면 금액으로.
+                    if role == "currency" and ("amount" in vs or "금액" in vs
+                                               or "price" in vs or "단가" in vs):
+                        continue
+                    if role == "amount" and ("krw" in vs or "원" in vs):
+                        continue
+                    if role == "price" and ("krw" in vs or "원화" in vs):
                         continue
                     mapping[c] = role
                     break
