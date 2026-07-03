@@ -53,6 +53,16 @@ td.qdnd-merge-over{outline:2px solid #047857!important;outline-offset:-3px;
 td[data-drop="unclustered"].qdnd-over{outline:2px solid #7C3AED!important;
                    background:#F5F3FF!important;color:#6D28D9!important}
 .qdnd-dragging{opacity:.4}
+/* 클러스터 순서 정렬 드래그 시각 피드백 (항목 4) */
+.qd-sort-handle{transition:color .15s}
+.qd-sort-handle:hover{color:#2563EB!important}
+body.qd-sorting{cursor:grabbing!important}
+body.qd-sorting *{user-select:none!important;-webkit-user-select:none!important}
+tr.qd-sort-src{opacity:.45;background:#EFF6FF!important}
+tr.qd-sort-src td{background:#EFF6FF!important}
+/* 드롭 위치 표시선: 대상 행 위/아래 굵은 파란 경계 */
+tr.qd-sort-over-top>td{box-shadow:inset 0 3px 0 #2563EB}
+tr.qd-sort-over-bot>td{box-shadow:inset 0 -3px 0 #2563EB}
 /* 드래그 중에는 전체 텍스트 선택 차단 — 지나간 셀이 '선택된 듯' 보이는 문제 방지 (②) */
 body.qdnd-drag, body.qdnd-drag * { user-select:none !important; -webkit-user-select:none !important; }
 body.qdnd-drag .vendor-cell::selection { background:transparent; }#qdndGhost{position:fixed;pointer-events:none;z-index:99;background:#1D4ED8;color:#fff;
@@ -355,17 +365,34 @@ function qdSyncModel(form){
   <input type="range" id="qdColWRange" min="70" max="240" value="120" step="10"
          oninput="qdSetColW(this.value)" style="width:120px;accent-color:#2563EB">
   <span class="text-gray-400">클러스터 열 경계를 드래그해도 조절됩니다</span>
+  {% if has_role('manager') and data.clusters %}
+  <span class="text-gray-300">|</span>
+  <span class="text-gray-500">분류 순서: <span class="text-gray-400">헤더 ⋮⋮ 드래그</span></span>
+  <form method="POST" action="{{ url_for('compare.reset_categories_order_route', bid_id=bid.bid_id) }}"
+        style="display:inline"
+        onsubmit="return confirm('분류 순서를 분류관리 기본순서로 되돌립니다. 계속할까요?')">
+    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded"
+            title="분류관리에 지정된 기본 순서로 되돌립니다">↺ 기본순서로</button>
+  </form>
+  {% endif %}
 </div>
 {% endif %}
 
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto" id="compareScroll">
 <table class="border-collapse text-xs" id="compareTable"
-       style="--qd-clw:170px;--qd-vw:120px;table-layout:auto;min-width:100%">
+       style="--qd-clw:170px;--qd-vw:120px;table-layout:fixed;width:max-content;min-width:100%">
+  <colgroup>
+    <col id="qdColCluster" style="width:var(--qd-clw)">
+    {% for v in vendors %}
+    <col class="qd-col-vendor" style="width:var(--qd-vw)">
+    {% endfor %}
+    <col id="qdColBench" style="width:110px">
+  </colgroup>
   <thead>
     <tr id="colHeader" style="background:#F8FAFC">
       <th id="qdClusterColHead" style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:left;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
-                 width:var(--qd-clw);min-width:var(--qd-clw);max-width:var(--qd-clw);position:relative">
+                 position:relative">
         클러스터
         <span id="qdClusterResize" title="드래그하여 클러스터 열 너비 조절"
               style="position:absolute;top:0;right:-3px;width:6px;height:100%;cursor:col-resize;z-index:5"></span>
@@ -373,11 +400,11 @@ function qdSyncModel(form){
       {% for v in vendors %}
       <th style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:center;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
-                 width:var(--qd-vw);min-width:var(--qd-vw);white-space:nowrap">{{ v }}</th>
+                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v }}</th>
       {% endfor %}
       <th style="background:#F8FAFC;color:#64748B;font-weight:500;padding:6px 8px;
                  text-align:right;border-bottom:1px solid #E2E8F0;box-shadow:0 1px 0 #E2E8F0;
-                 min-width:95px;white-space:nowrap;border-left:1px solid #E2E8F0"
+                 white-space:nowrap;border-left:1px solid #E2E8F0"
           title="최저가 · 과거 입찰 평균 대비 편차율">최저 / 과거대비</th>
     </tr>
   </thead>
@@ -413,6 +440,12 @@ function qdSyncModel(form){
       onclick="qdToggleCat('{{ cl.cat|e }}')">
     <td colspan="{{ vendors|length + 2 }}"
         style="padding:4px 10px;color:{{ c_info[2] }};font-size:9px;font-weight:700;letter-spacing:.05em">
+      {% if has_role('manager') %}
+      <span class="qd-cat-drag" draggable="true" data-cat="{{ cl.cat }}"
+            onclick="event.stopPropagation()"
+            title="드래그하여 분류 순서 변경"
+            style="display:inline-block;cursor:grab;opacity:.45;margin-right:3px;user-select:none">⋮⋮</span>
+      {% endif %}
       <span class="qd-cat-caret" data-cat="{{ cl.cat }}"
             style="display:inline-block;width:12px;transition:transform .12s">▾</span>
       {{ cl.cat }}
@@ -424,6 +457,15 @@ function qdSyncModel(form){
               style="margin-left:6px;font-size:9px;color:{{ c_info[2] }};opacity:.7;
                      background:none;border:none;cursor:pointer">✏️</button>
       {% endif %}
+      {# 금액 정렬 (해당 분류 내부에서만) #}
+      <span style="margin-left:8px;font-weight:400;opacity:.75">
+        <button type="button" title="이 분류 내에서 금액 오름차순"
+                onclick="event.stopPropagation();qdSortCatByAmount('{{ cl.cat|e }}','asc')"
+                style="font-size:9px;color:{{ c_info[2] }};background:none;border:none;cursor:pointer;padding:0 2px">금액↑</button>
+        <button type="button" title="이 분류 내에서 금액 내림차순"
+                onclick="event.stopPropagation();qdSortCatByAmount('{{ cl.cat|e }}','desc')"
+                style="font-size:9px;color:{{ c_info[2] }};background:none;border:none;cursor:pointer;padding:0 2px">금액↓</button>
+      </span>
     </td>
   </tr>
   {% endif %}
@@ -459,6 +501,7 @@ function qdSyncModel(form){
 
   {% for ri in range(max_rows.v) %}
   <tr class="qd-cat-row" data-cat="{{ cl.cat }}"
+      {% if ri == 0 %}data-cl-amount="{{ cl.min_price or 0 }}"{% endif %}
       style="{{ bg_style }};
              {% if ri == 0 %}border-top:2px solid {{ border_color }};{% else %}border-top:0.5px dashed {{ inner_border }};{% endif %}
              {% if ri == max_rows.v - 1 %}border-bottom:2px solid {{ border_color }};{% endif %}">
@@ -469,8 +512,7 @@ function qdSyncModel(form){
         data-drop="cluster" data-cl-head="1" data-cluster-id="{{ cl.cluster_id }}" data-cl-status="{{ cl.status }}"
         style="{{ bg_style }};border-left:3px solid {{ border_color }};
                border-right:1.5px solid {{ border_color }};
-               vertical-align:middle;padding:7px 8px;
-               width:var(--qd-clw);min-width:var(--qd-clw);max-width:var(--qd-clw)">
+               vertical-align:middle;padding:7px 8px;overflow:hidden">
 
       {# ◉ 클러스터 전체 선택 핸들 #}
       <div style="display:flex;align-items:flex-start;gap:2px">
@@ -623,10 +665,12 @@ function qdSyncModel(form){
                     border-radius:3px;display:inline-block;margin-bottom:2px;white-space:nowrap">추가 품목</div>
         {% endif %}
         {% set _cell_name = found.cell.name_normalized or found.cell.name_raw or '' %}
-        {% set _cell_path = (found.cell.path|treepath) or (_cell_name|treepath) %}
-        <div class="nm">
-          {{ _cell_name|leaf }}{% if _cell_path %}<span class="qd-treepath" style="color:#B0BAC9;font-weight:400" title="{{ _cell_path }}"> · {{ _cell_path }}</span>{% endif %}
-        </div>
+        {% set _cell_path = found.cell.path|treepath_above(_cell_name) %}
+        <div class="nm">{{ _cell_name|leaf }}</div>
+        {% if _cell_path %}
+        <div class="qd-treepath" style="font-size:8px;color:#B0BAC9;font-weight:400;line-height:1.15;margin-top:1px;word-break:break-all"
+             title="{{ _cell_path }}">{{ _cell_path }}</div>
+        {% endif %}
         {# 총액 표시 (기준) #}
         {% if found.cell.amount %}
         <div class="pr" style="font-weight:700">
@@ -741,11 +785,15 @@ function qdSyncModel(form){
            id="rpick_{{ row_key }}">
         <span style="font-size:11px;flex-shrink:0">◫</span>
         <div style="min-width:0">
-          {% set _row_path = (row.path|treepath) or (row.name|treepath) %}
+          {% set _row_path = row.path|treepath_above(row.name) %}
           <div style="font-size:10px;color:#475569;word-break:break-all;line-height:1.3">
             {{ row.name|leaf }}
-            <span style="color:#94A3B8;font-size:9px"> · {{ row_item_ids|length }}개</span>{% if _row_path %}<span class="qd-treepath" style="color:#B0BAC9;font-size:8px;font-weight:400" title="{{ _row_path }}"> · {{ _row_path }}</span>{% endif %}
+            <span style="color:#94A3B8;font-size:9px"> · {{ row_item_ids|length }}개</span>
           </div>
+          {% if _row_path %}
+          <div class="qd-treepath" style="font-size:8px;color:#B0BAC9;font-weight:400;line-height:1.15;margin-top:1px;word-break:break-all"
+               title="{{ _row_path }}">{{ _row_path }}</div>
+          {% endif %}
         </div>
       </div>
     </td>
@@ -762,7 +810,7 @@ function qdSyncModel(form){
         onclick="{% if iid %}toggleCell(this){% endif %}"
         style="{% if not iid %}cursor:default{% endif %}">
       <div class="nm">{{ row.name|leaf }}</div>
-      {% set _uc_path = (row.path|treepath) or (row.name|treepath) %}
+      {% set _uc_path = row.path|treepath_above(row.name) %}
       {% if _uc_path %}
       <div class="tp qd-treepath" style="font-size:8px;color:#94A3B8;line-height:1.15;word-break:break-all"
            title="{{ _uc_path }}">{{ _uc_path }}</div>
@@ -1117,11 +1165,9 @@ function qdSetColW(px){
   qdSyncMinWidth();
 }
 function qdSyncMinWidth(){
-  // 열 너비 합이 컨테이너보다 크면 자동으로 가로 스크롤 (overflow-x-auto가 처리)
-  var t=document.getElementById('compareTable');
-  if(!t) return;
-  // table-layout:auto + 셀 min-width로 자연히 확장되므로 별도 계산 불필요.
-  // 컨테이너보다 좁아지지 않게 최소폭만 보장.
+  // table-layout:fixed + colgroup(width:var(--qd-vw))이 열 너비를 관장.
+  // 테이블은 width:max-content라 내용 너비만큼만 → 최저열이 마지막 업체열에 붙음.
+  // 합이 컨테이너보다 크면 overflow-x-auto가 가로 스크롤 제공.
 }
 (function(){
   // 클러스터 열 리사이즈 핸들 드래그
@@ -1147,39 +1193,154 @@ function qdSyncMinWidth(){
   });
 })();
 
-/* ── 클러스터 순서 드래그&드롭 정렬 (항목 6) ── */
+/* ── 분류(카테고리) 순서 드래그 + 금액 정렬 (신규 3·4) ── */
 (function(){
-  var dragCid=null;
+  var dragCat=null;
+
+  // 특정 분류에 속한 모든 행(헤더 + 클러스터 행들) 수집
+  function rowsOfCat(cat){
+    return [...document.querySelectorAll('tr[data-cat="'+CSS.escape(cat)+'"]')];
+  }
+  // 현재 DOM의 분류 순서 수집 (헤더 등장 순)
+  function currentCatOrder(){
+    var seen=[], out=[];
+    document.querySelectorAll('tr.qd-cat-header[data-cat]').forEach(function(h){
+      var c=h.dataset.cat;
+      if(seen.indexOf(c)<0){ seen.push(c); out.push(c); }
+    });
+    return out;
+  }
+  function saveCatOrder(){
+    fetch("{{ url_for('compare.reorder_categories_route', bid_id=bid.bid_id) }}",{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({order:currentCatOrder()})
+    }).then(function(r){return r.json();}).then(function(d){
+      if(!d.ok) console.warn('분류 순서 저장 실패', d.error);
+    }).catch(function(e){ console.warn('분류 순서 저장 오류', e); });
+  }
+
+  document.addEventListener('dragstart', function(e){
+    var h=e.target.closest && e.target.closest('.qd-cat-drag');
+    if(!h) return;
+    dragCat=h.dataset.cat;
+    document.body.classList.add('qd-sorting');
+    e.dataTransfer.effectAllowed='move';
+    try{ e.dataTransfer.setData('text/plain', dragCat); }catch(_){}
+  });
+  document.addEventListener('dragover', function(e){
+    if(!dragCat) return;
+    var hdr=e.target.closest && e.target.closest('tr.qd-cat-header[data-cat]');
+    if(hdr){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }
+  });
+  document.addEventListener('drop', function(e){
+    if(!dragCat) return;
+    var hdr=e.target.closest && e.target.closest('tr.qd-cat-header[data-cat]');
+    if(!hdr){ dragCat=null; document.body.classList.remove('qd-sorting'); return; }
+    var targetCat=hdr.dataset.cat;
+    if(targetCat===dragCat){ dragCat=null; document.body.classList.remove('qd-sorting'); return; }
+    e.preventDefault();
+    // 드래그 분류 블록 전체를 대상 분류 앞으로 이동
+    var moving=rowsOfCat(dragCat);
+    var tbody=hdr.parentNode;
+    moving.forEach(function(r){ tbody.insertBefore(r, hdr); });
+    dragCat=null;
+    document.body.classList.remove('qd-sorting');
+    saveCatOrder();
+  });
+  document.addEventListener('dragend', function(){
+    dragCat=null; document.body.classList.remove('qd-sorting');
+  });
+
+  // 금액 정렬: 해당 분류 내부 클러스터 행만 재배치 (분류 경계 유지)
+  window.qdSortCatByAmount=function(cat, dir){
+    var esc=CSS.escape(cat);
+    var hdr=document.querySelector('tr.qd-cat-header[data-cat="'+esc+'"]');
+    if(!hdr) return;
+    // 이 분류의 클러스터 첫 행(data-cl-head 보유)들을 그룹 단위로 수집
+    var catRows=[...document.querySelectorAll('tr.qd-cat-row[data-cat="'+esc+'"]')];
+    // 클러스터별로 그룹핑: cl-head를 가진 행이 그룹 시작
+    var groups=[], cur=null;
+    catRows.forEach(function(r){
+      if(r.querySelector('td[data-cl-head]')){ cur={head:r, rows:[r], amt:qdRowAmount(r)}; groups.push(cur); }
+      else if(cur){ cur.rows.push(r); }
+    });
+    if(groups.length<2) return;
+    groups.sort(function(a,b){ return dir==='asc' ? a.amt-b.amt : b.amt-a.amt; });
+    // 헤더 바로 뒤부터 재배치
+    var tbody=hdr.parentNode;
+    var anchor=hdr.nextSibling;
+    groups.forEach(function(g){
+      g.rows.forEach(function(r){ tbody.insertBefore(r, anchor); });
+    });
+  };
+  // 클러스터 행의 대표 금액 추출 (최저열 총액)
+  function qdRowAmount(row){
+    if(row.dataset && row.dataset.clAmount!==undefined) return parseFloat(row.dataset.clAmount)||0;
+    var m=(row.textContent||'').match(/[\d,]{4,}/g);
+    if(!m) return 0;
+    return Math.max.apply(null, m.map(function(x){return parseFloat(x.replace(/,/g,''))||0;}));
+  }
+  window.qdRowAmount=qdRowAmount;
+})();
+(function(){
+  var dragCid=null, srcRow=null, lastOverRow=null;
+  function clearOver(){
+    if(lastOverRow){
+      lastOverRow.classList.remove('qd-sort-over-top','qd-sort-over-bot');
+      lastOverRow=null;
+    }
+  }
+  function endDrag(){
+    document.body.classList.remove('qd-sorting');
+    if(srcRow) srcRow.classList.remove('qd-sort-src');
+    clearOver();
+    dragCid=null; srcRow=null;
+  }
   document.addEventListener('dragstart', function(e){
     var h=e.target.closest && e.target.closest('.qd-sort-handle');
     if(!h) return;
     dragCid=h.dataset.clusterId;
+    var srcTd=document.querySelector('td[data-cl-head][data-cluster-id="'+dragCid+'"]');
+    srcRow=srcTd?srcTd.closest('tr'):null;
+    if(srcRow) srcRow.classList.add('qd-sort-src');   // 원본 행 반투명 강조
+    document.body.classList.add('qd-sorting');
     e.dataTransfer.effectAllowed='move';
     try{ e.dataTransfer.setData('text/plain', dragCid); }catch(_){}
   });
   document.addEventListener('dragover', function(e){
     if(!dragCid) return;
     var td=e.target.closest && e.target.closest('td[data-cl-head][data-cluster-id]');
-    if(td){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }
+    if(!td){ return; }
+    e.preventDefault(); e.dataTransfer.dropEffect='move';
+    var row=td.closest('tr');
+    if(!row || row===srcRow){ clearOver(); return; }
+    // 대상 행의 상/하 절반 판정 → 위/아래 표시선
+    var r=row.getBoundingClientRect();
+    var above=(e.clientY - r.top) < r.height/2;
+    if(row!==lastOverRow) clearOver();
+    lastOverRow=row;
+    row.classList.toggle('qd-sort-over-top', above);
+    row.classList.toggle('qd-sort-over-bot', !above);
   });
   document.addEventListener('drop', function(e){
-    if(!dragCid) return;
+    if(!dragCid){ endDrag(); return; }
     var td=e.target.closest && e.target.closest('td[data-cl-head][data-cluster-id]');
-    if(!td){ dragCid=null; return; }
+    if(!td){ endDrag(); return; }
     e.preventDefault();
     var targetCid=td.dataset.clusterId;
-    if(targetCid===dragCid){ dragCid=null; return; }
+    if(targetCid===dragCid){ endDrag(); return; }
     var srcTd=document.querySelector('td[data-cl-head][data-cluster-id="'+dragCid+'"]');
-    var srcRow=srcTd?srcTd.closest('tr'):null;
+    var _srcRow=srcTd?srcTd.closest('tr'):null;
     var tgtRow=td.closest('tr');
-    if(!srcRow||!tgtRow){ dragCid=null; return; }
+    if(!_srcRow||!tgtRow){ endDrag(); return; }
     var rows=[...document.querySelectorAll('tr')];
-    var si=rows.indexOf(srcRow), ti=rows.indexOf(tgtRow);
-    if(si<ti) tgtRow.parentNode.insertBefore(srcRow, tgtRow.nextSibling);
-    else tgtRow.parentNode.insertBefore(srcRow, tgtRow);
-    dragCid=null;
+    var si=rows.indexOf(_srcRow), ti=rows.indexOf(tgtRow);
+    if(si<ti) tgtRow.parentNode.insertBefore(_srcRow, tgtRow.nextSibling);
+    else tgtRow.parentNode.insertBefore(_srcRow, tgtRow);
+    endDrag();
     saveClusterOrder();
   });
+  document.addEventListener('dragend', function(){ endDrag(); });
   window.saveClusterOrder=function(){
     var ids=[...document.querySelectorAll('td[data-cl-head][data-cluster-id]')]
       .map(function(td){ return td.dataset.clusterId; });

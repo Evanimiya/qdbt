@@ -106,6 +106,32 @@ def create_app():
         parts = [p.strip() for p in s.replace(" > ", ">").split(">") if p.strip()]
         return " › ".join(parts)
 
+    def _norm_seg(x):
+        """트리 세그먼트 비교용 정규화(공백 제거·소문자)."""
+        import re as _re
+        return _re.sub(r"\s+", "", str(x or "")).lower()
+
+    @app.template_filter("treepath_above")
+    def treepath_above_filter(path, name=""):
+        """품명 '바로 위 단계'까지로 통일된 트리 경로.
+
+        업체마다 path의 잎이 품명과 같기도(자재>서버>GPU서버) 다르기도(자재>서버) 하다.
+        품명과 (정규화 후) 같은 잎을 제거하여, 모든 업체가 '품명 위 단계'까지만
+        일관되게 보이도록 한다. 잎이 품명과 다르면 이미 품명 위이므로 그대로 둔다.
+        """
+        if not path:
+            return ""
+        s = str(path)
+        if ">" not in s:
+            return ""
+        parts = [p.strip() for p in s.replace(" > ", ">").split(">") if p.strip()]
+        if not parts:
+            return ""
+        # 품명과 같은 잎(마지막) 제거 → 품명 바로 위까지
+        if name and _norm_seg(parts[-1]) == _norm_seg(name):
+            parts = parts[:-1]
+        return " › ".join(parts)
+
     # ── Blueprint 등록 ──────────────────────────
     from web.blueprints.auth      import bp as auth_bp
     from web.blueprints.projects   import bp as proj_bp
