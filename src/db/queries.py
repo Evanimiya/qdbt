@@ -2779,17 +2779,30 @@ def list_submission_items_for_clustering(bid_id: str) -> list:
             continue
 
         # 비교 단위로 묶기 (긴 경로 우선 매칭)
+        # 잎의 저장 path는 상위까지만 담고 잎 이름은 name에 별도로 있으므로,
+        # 매칭은 반드시 '잎의 완전 경로(상위 + 잎 이름)'로 해야 사용자가 지정한
+        # compare_units(잎까지 완전 경로)와 정합한다. path만으로 매칭하면 트리가
+        # 깊은 업체(예: 자재>서버 장비>GPU 가속 서버)에서 잎 unit과 어긋나
+        # 공통 상위(서버 장비)로 뭉쳐, 얕은 업체의 잎과 레벨이 맞지 않는다.
         sorted_units = sorted(units, key=lambda p: -len(p))
         groups = {}  # unit_path -> 묶음 정보
         for it in items:
-            path = it.get("path") or ""
+            _p = it.get("path") or ""
+            _nm = it.get("name_normalized") or it.get("name_raw") or ""
+            # 잎의 완전 경로: 상위 경로 + 잎 이름 (이미 잎이 포함돼 있으면 그대로)
+            if _p and _nm and not (_p == _nm or _p.endswith(" > " + _nm) or _p.endswith(">" + _nm)):
+                full_path = _p + " > " + _nm
+            else:
+                full_path = _p or _nm
             matched = None
             for unit in sorted_units:
-                if path == unit or path.startswith(unit + " > ") or path.startswith(unit + ">"):
+                if full_path == unit or full_path.startswith(unit + " > ") \
+                        or full_path.startswith(unit + ">"):
                     matched = unit
                     break
             if matched is None:
-                matched = path or (it.get("category") or "(미분류)")
+                # 지정 밖 잎은 상위로 뭉치지 않고 잎 완전 경로로 개별 유지
+                matched = full_path or (it.get("category") or "(미분류)")
             label = _split_path(matched)[-1] if _split_path(matched) else matched
             g = groups.setdefault(matched, {
                 "label": label, "path": matched, "amount": 0.0,
