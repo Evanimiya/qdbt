@@ -1,0 +1,32 @@
+flowchart LR
+    upload["1. 견적서 업로드<br/>(xlsx/pdf/docx)"]
+    --> route{"파일 형식"}
+
+    route -->|xlsx| colmap["2a. 열 매핑 화면<br/>suggest_column_mapping<br/>역할 지정 + 비교단위 선택"]
+    route -->|pdf/docx| llmx["2b. LLM 추출<br/>llm_extractor"]
+
+    colmap --> extract["3. 결정론적 추출<br/>extract_by_mapping<br/>· 통화 정규화<br/>· 환율 역산 (원화÷통화)<br/>· 원화 확정"]
+    llmx --> extract
+
+    extract --> items[("submission_items<br/>잎까지 저장<br/>path=상위, name=잎")]
+
+    items --> recompute["4. 소계 재계산<br/>recompute_subtotal<br/>원화 amount 합산<br/>대표 환율 집계"]
+
+    recompute --> unit["5. 비교단위 묶기<br/>list_submission_items_for_clustering<br/>잎 완전경로(path+name) ↔<br/>compare_units 매칭"]
+
+    unit --> clusterin["6. 클러스터링 입력 구성<br/>_build_cluster_input"]
+
+    clusterin --> llmcluster["7. LLM 클러스터링<br/>catalog_clusterer<br/>영↔한·별칭·수식어 매칭"]
+
+    llmcluster --> clusters[("catalog_clusters<br/>+ members")]
+
+    clusters --> review["8. 사용자 검토<br/>확정·보류·거부·병합<br/>배지 인라인 분류이동"]
+
+    review --> compare["9. 업체별 비교표<br/>compare_bid_submissions<br/>· 원화기준 통일 비교<br/>· 분류순서·금액정렬<br/>· 트리 품명위까지 통일"]
+
+    compare --> hist[("price_history<br/>확정 시 이력 적재")]
+
+    classDef store fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a
+    classDef proc fill:#f0fdf4,stroke:#16a34a,color:#14532d
+    class items,clusters,hist store
+    class extract,recompute,unit,clusterin,compare proc

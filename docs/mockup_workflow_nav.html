@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QDBT · 입찰 중심 워크플로우 네비게이션 (목업)</title>
+<style>
+  :root{
+    --navy:#0F2A43; --navy8:#0B2135; --navy7:#1B3A56; --deep:#0B3C5D;
+    --teal:#1C7293; --aqua:#21A0A0; --ice:#E8F1F5; --cloud:#F5F9FB;
+    --ink:#1E293B; --slate:#64748B; --line:#D8E3EA; --white:#fff;
+    --green:#3FA372; --amber:#E0A458; --coral:#D96C5F; --mute:#94A3B8;
+    --nav-bg:#0F2A43; --nav-hi:#1B3A56; --nav-line:#22405C; --nav-txt:#CBD9E6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Pretendard','Malgun Gothic',-apple-system,'Segoe UI',sans-serif;
+    background:var(--cloud);color:var(--ink);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:288px 1fr;min-height:100vh}
+
+  /* ── sidebar ── */
+  .side{background:var(--nav-bg);color:var(--nav-txt);display:flex;flex-direction:column;
+    border-right:1px solid var(--nav-line)}
+  .brand{display:flex;align-items:center;gap:9px;padding:16px 18px;border-bottom:1px solid var(--nav-line)}
+  .brand .logo{width:30px;height:30px;border-radius:8px;
+    background:linear-gradient(135deg,var(--teal),var(--aqua));display:flex;align-items:center;
+    justify-content:center;font-weight:800;color:#fff;font-size:15px}
+  .brand .nm{font-weight:800;color:#fff;font-size:15px;letter-spacing:-.01em}
+  .brand .ver{font-size:10px;color:var(--mute)}
+
+  /* global mini nav */
+  .gnav{display:flex;gap:2px;padding:10px 12px;border-bottom:1px solid var(--nav-line)}
+  .gnav a{flex:1;text-align:center;font-size:11px;color:var(--nav-txt);padding:7px 4px;
+    border-radius:7px;text-decoration:none;transition:.15s}
+  .gnav a:hover{background:var(--nav-hi)}
+  .gnav a.on{background:var(--nav-hi);color:#fff;font-weight:600}
+
+  /* bid context header */
+  .ctx{padding:14px 16px 10px;border-bottom:1px solid var(--nav-line)}
+  .ctx-lbl{font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--aqua);text-transform:uppercase}
+  .bidsel{margin-top:7px;width:100%;background:var(--nav-hi);border:1px solid var(--nav-line);
+    color:#fff;font-size:13px;font-weight:700;padding:9px 11px;border-radius:9px;cursor:pointer;
+    display:flex;align-items:center;justify-content:space-between}
+  .bidsel:hover{border-color:var(--teal)}
+  .bidsel .proj{font-size:10px;color:var(--mute);font-weight:500;margin-top:2px}
+  .bidlist{margin-top:6px;display:none;flex-direction:column;gap:2px}
+  .bidlist.open{display:flex}
+  .bidlist button{text-align:left;background:transparent;border:0;color:var(--nav-txt);
+    font-size:12px;padding:8px 11px;border-radius:7px;cursor:pointer;display:flex;
+    justify-content:space-between;align-items:center}
+  .bidlist button:hover{background:var(--nav-hi)}
+  .bidlist button.cur{background:var(--nav-hi);color:#fff}
+  .mini-prog{display:flex;gap:2px}
+  .mini-prog i{width:5px;height:5px;border-radius:50%;background:var(--nav-line)}
+  .mini-prog i.d{background:var(--green)}
+
+  /* workflow stepper */
+  .flow{flex:1;overflow-y:auto;padding:14px 12px}
+  .flow-h{font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--mute);
+    text-transform:uppercase;padding:0 6px 8px}
+  .step{position:relative;padding:2px 0}
+  .step-btn{width:100%;text-align:left;background:transparent;border:0;cursor:pointer;
+    display:flex;gap:12px;padding:11px 10px;border-radius:10px;transition:.15s;position:relative}
+  .step-btn:hover{background:var(--nav-hi)}
+  .step-btn.active{background:var(--nav-hi)}
+  .step-btn.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;
+    background:var(--aqua);border-radius:0 3px 3px 0}
+  /* connector line */
+  .step:not(:last-child) .dot::after{content:"";position:absolute;left:50%;top:24px;
+    transform:translateX(-50%);width:2px;height:calc(100% - 6px);background:var(--nav-line)}
+  .step.done:not(:last-child) .dot::after{background:var(--green)}
+  .dot{position:relative;width:24px;height:24px;flex-shrink:0;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;
+    border:2px solid var(--nav-line);color:var(--mute);background:var(--nav-bg)}
+  .step.done .dot{background:var(--green);border-color:var(--green);color:#fff}
+  .step.current .dot{border-color:var(--aqua);color:var(--aqua);
+    box-shadow:0 0 0 3px rgba(33,160,160,.2)}
+  .step.locked .dot{opacity:.5}
+  .st-body{flex:1;min-width:0}
+  .st-name{font-size:13px;font-weight:700;color:#fff}
+  .step.locked .st-name{color:var(--mute)}
+  .st-meta{font-size:10.5px;color:var(--nav-txt);margin-top:2px;display:flex;align-items:center;gap:5px}
+  .st-count{font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px}
+  .cnt-done{background:rgba(63,163,114,.2);color:#7ED4A6}
+  .cnt-prog{background:rgba(224,164,88,.2);color:#F0C088}
+  .cnt-wait{background:var(--nav-line);color:var(--mute)}
+  .st-back{font-size:9.5px;color:var(--aqua);margin-top:3px;opacity:0;transition:.15s}
+  .step.done .step-btn:hover .st-back{opacity:1}
+
+  /* per-vendor sub-progress (under a step) */
+  .vend{margin:2px 0 6px 46px;display:none;flex-direction:column;gap:3px}
+  .vend.show{display:flex}
+  .vend-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--nav-txt);
+    padding:4px 8px;border-radius:6px;cursor:pointer}
+  .vend-row:hover{background:var(--nav-hi)}
+  .vend-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .vd-done{background:var(--green)} .vd-prog{background:var(--amber)} .vd-wait{background:var(--mute)}
+  .vend-st{margin-left:auto;font-size:9px;color:var(--mute)}
+
+  /* ── content ── */
+  .main{padding:0;overflow-y:auto}
+  .top{background:#fff;border-bottom:1px solid var(--line);padding:16px 26px;
+    display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
+  .crumb{font-size:12px;color:var(--slate)}
+  .crumb b{color:var(--navy)}
+  .top h1{font-size:18px;font-weight:800;color:var(--navy);margin-left:auto;letter-spacing:-.01em}
+  .stage-badge{font-size:11px;font-weight:700;padding:4px 11px;border-radius:20px}
+  .sb-merge{background:#FBF3E6;color:#a9772f} .sb-confirm{background:#E9F3EF;color:#2f7d55}
+  .sb-compare{background:#E7F0F5;color:#1C6491}
+
+  .body{padding:24px 26px}
+  .panel-title{font-size:15px;font-weight:800;color:var(--navy);margin-bottom:4px}
+  .panel-sub{font-size:12.5px;color:var(--slate);margin-bottom:16px}
+
+  /* vendor cards on content */
+  .vgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+  .vc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
+    box-shadow:0 2px 8px rgba(15,42,67,.04)}
+  .vc-nm{font-size:13px;font-weight:800;color:var(--navy);display:flex;align-items:center;
+    justify-content:space-between}
+  .vc-st{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .vc-sub{font-size:11px;color:var(--slate);margin-top:6px}
+  .vc-bar{height:5px;background:var(--ice);border-radius:3px;margin-top:9px;overflow:hidden}
+  .vc-bar i{display:block;height:100%;border-radius:3px}
+  .vc-act{margin-top:11px;font-size:11px;font-weight:600;color:var(--teal);cursor:pointer}
+
+  .hint{background:#fff;border:1px dashed var(--line);border-radius:12px;padding:16px 18px;
+    font-size:12.5px;color:var(--slate);line-height:1.6}
+  .hint b{color:var(--navy)}
+  .demo{display:inline-block;margin:18px 26px 0;font-size:11px;font-weight:700;color:var(--aqua);
+    border:1px solid var(--aqua);border-radius:20px;padding:3px 11px}
+
+  @media(max-width:860px){ .app{grid-template-columns:1fr} .side{display:none} .vgrid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ══ SIDEBAR ══ -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">Q</div>
+      <div><div class="nm">QDBT</div><div class="ver">조달 견적 비교 도구</div></div>
+    </div>
+
+    <!-- 전역 진입점 (대상별) -->
+    <div class="gnav">
+      <a href="#" class="on">📁 프로젝트</a>
+      <a href="#">📚 카탈로그</a>
+      <a href="#">⚙ 관리</a>
+    </div>
+
+    <!-- 입찰 컨텍스트 (최상위 작업 단위) -->
+    <div class="ctx">
+      <div class="ctx-lbl">작업 중인 입찰</div>
+      <button class="bidsel" onclick="toggleBids()">
+        <div>
+          <div>2026 데이터센터 구축 · 1차</div>
+          <div class="proj">국가정보자원관리원</div>
+        </div>
+        <span style="font-size:11px">▾</span>
+      </button>
+      <div class="bidlist" id="bidlist">
+        <button class="cur">2026 데이터센터 구축 · 1차
+          <span class="mini-prog"><i class="d"></i><i class="d"></i><i class="d"></i><i></i></span></button>
+        <button>2026 네트워크 고도화 · 2차
+          <span class="mini-prog"><i class="d"></i><i class="d"></i><i></i><i></i></span></button>
+        <button>클라우드 전환 용역
+          <span class="mini-prog"><i class="d"></i><i></i><i></i><i></i></span></button>
+      </div>
+    </div>
+
+    <!-- 워크플로우 스텝퍼 -->
+    <div class="flow">
+      <div class="flow-h">진행 단계</div>
+
+      <!-- 1 수집 -->
+      <div class="step done" data-step="collect">
+        <button class="step-btn" onclick="go('collect')">
+          <span class="dot">✓</span>
+          <span class="st-body">
+            <span class="st-name">견적 수집</span>
+            <span class="st-meta"><span class="st-count cnt-done">3개사 업로드</span></span>
+            <span class="st-back">↩ 이 단계로 돌아가기</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- 2 병합 -->
+      <div class="step done" data-step="merge">
+        <button class="step-btn" onclick="go('merge')">
+          <span class="dot">✓</span>
+          <span class="st-body">
+            <span class="st-name">병합 · 추출</span>
+            <span class="st-meta"><span class="st-count cnt-done">3/3 조립</span></span>
+            <span class="st-back">↩ 이 단계로 돌아가기</span>
+          </span>
+        </button>
+      </div>
+
+      <!-- 3 확정 (현재) -->
+      <div class="step current" data-step="confirm">
+        <button class="step-btn active" onclick="go('confirm')">
+          <span class="dot">3</span>
+          <span class="st-body">
+            <span class="st-name">리뷰 · 확정</span>
+            <span class="st-meta"><span class="st-count cnt-prog">2/3 확정</span> · 진행 중</span>
+          </span>
+        </button>
+        <!-- 업체별 하위 진행 -->
+        <div class="vend show">
+          <div class="vend-row"><span class="vend-dot vd-done"></span> D엔지니어링 <span class="vend-st">확정 v1</span></div>
+          <div class="vend-row"><span class="vend-dot vd-done"></span> A상사 <span class="vend-st">확정 v1</span></div>
+          <div class="vend-row"><span class="vend-dot vd-prog"></span> E시스템즈 <span class="vend-st">검증 중</span></div>
+        </div>
+      </div>
+
+      <!-- 4 비교 (조건부 잠금) -->
+      <div class="step locked" data-step="compare">
+        <button class="step-btn" onclick="go('compare')">
+          <span class="dot">4</span>
+          <span class="st-body">
+            <span class="st-name">비교 · 분석</span>
+            <span class="st-meta"><span class="st-count cnt-wait">2개사 비교 가능</span></span>
+          </span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══ CONTENT ══ -->
+  <main class="main">
+    <div class="top">
+      <div class="crumb">국가정보자원관리원 › <b>2026 데이터센터 구축 · 1차</b></div>
+      <h1 id="stageTitle">리뷰 · 확정</h1>
+      <span class="stage-badge sb-confirm" id="stageBadge">3단계 · 진행 중</span>
+    </div>
+    <div class="body" id="content"><!-- JS 렌더 --></div>
+  </main>
+</div>
+
+<script>
+function toggleBids(){ document.getElementById('bidlist').classList.toggle('open'); }
+
+const STAGES = {
+  collect: { title:'견적 수집', badge:['3개사 업로드 완료','sb-merge'], html:`
+    <div class="panel-title">견적서 업로드</div>
+    <div class="panel-sub">한 입찰에 참여한 업체별 견적서를 올립니다. 업로드된 순서로 병합·확정이 진행됩니다.</div>
+    <div class="vgrid">
+      ${vcard('D엔지니어링','업로드됨','#E9F3EF','#2f7d55',100,'var(--green)','상세 보기')}
+      ${vcard('A상사','업로드됨','#E9F3EF','#2f7d55',100,'var(--green)','상세 보기')}
+      ${vcard('E시스템즈','업로드됨','#E9F3EF','#2f7d55',100,'var(--green)','상세 보기')}
+    </div>
+    <div class="hint">✓ 3개사 견적서가 수집됐습니다. <b>병합·추출</b> 단계로 진행하세요.</div>`},
+
+  merge: { title:'병합 · 추출', badge:['3/3 조립 완료','sb-merge'], html:`
+    <div class="panel-title">견적서 병합 · 추출</div>
+    <div class="panel-sub">각 업체 견적서를 트리로 조립합니다. 여러 탭·통화·환율을 정리해 하나의 정규화된 견적서를 만듭니다.</div>
+    <div class="vgrid">
+      ${vcard('D엔지니어링','조립 완료','#E9F3EF','#2f7d55',100,'var(--green)','트리 확인')}
+      ${vcard('A상사','조립 완료','#E9F3EF','#2f7d55',100,'var(--green)','트리 확인')}
+      ${vcard('E시스템즈','조립 완료','#E9F3EF','#2f7d55',100,'var(--green)','트리 확인')}
+    </div>
+    <div class="hint">각 견적서가 <b>작업본(draft)</b> 상태입니다. 수정은 자유롭게, 준비되면 <b>리뷰·확정</b>으로 넘어갑니다.</div>`},
+
+  confirm: { title:'리뷰 · 확정', badge:['3단계 · 진행 중','sb-confirm'], html:`
+    <div class="panel-title">리뷰 · 확정</div>
+    <div class="panel-sub">시스템이 통합 검증(합계·분류·통화)을 수행하고, 통과하면 확정합니다. 확정된 견적서만 비교로 넘어갑니다.</div>
+    <div class="vgrid">
+      ${vcard('D엔지니어링','확정 v1','#E9F3EF','#2f7d55',100,'var(--green)','스냅샷 보기')}
+      ${vcard('A상사','확정 v1','#E9F3EF','#2f7d55',100,'var(--green)','스냅샷 보기')}
+      ${vcard('E시스템즈','검증 중 · 2건 확인','#FBF3E6','#a9772f',66,'var(--amber)','검증 항목 보기')}
+    </div>
+    <div class="hint">E시스템즈에 검증 미통과 2건(분류 미지정·환율 미확인)이 있습니다. 교정 후 확정하면 <b>3개사 모두 비교 가능</b>해집니다.
+    확정된 견적서를 수정하려면 <b>확정 취소</b> 후 편집합니다(새 버전으로 재확정).</div>`},
+
+  compare: { title:'비교 · 분석', badge:['2개사 비교 가능','sb-compare'], html:`
+    <div class="panel-title">비교 · 분석</div>
+    <div class="panel-sub">확정된 견적서들을 클러스터링으로 묶어 업체별로 견줍니다. 지금은 2개사 확정 — 부분 비교가 가능합니다.</div>
+    <div class="hint">⚠ E시스템즈가 아직 미확정입니다. <b>2개사(D·A)만으로 비교</b>를 시작하거나, E 확정을 기다릴 수 있습니다.
+    이 단계는 확정본만 참조하므로, 확정 취소가 발생하면 해당 업체는 비교에서 자동 제외되고 재검토가 안내됩니다.</div>`}
+};
+
+function vcard(nm,st,bg,fg,pct,barc,act){
+  return `<div class="vc">
+    <div class="vc-nm">${nm} <span class="vc-st" style="background:${bg};color:${fg}">${st}</span></div>
+    <div class="vc-bar"><i style="width:${pct}%;background:${barc}"></i></div>
+    <div class="vc-act">${act} →</div>
+  </div>`;
+}
+
+function go(stage){
+  document.querySelectorAll('.step-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.step').forEach(s=>s.querySelector('.step-btn').classList.toggle(
+    'active', s.dataset.step===stage));
+  const S = STAGES[stage];
+  document.getElementById('stageTitle').textContent = S.title;
+  const badge = document.getElementById('stageBadge');
+  badge.textContent = S.badge[0];
+  badge.className = 'stage-badge ' + S.badge[1];
+  document.getElementById('content').innerHTML = S.html;
+}
+go('confirm');
+</script>
+</body>
+</html>

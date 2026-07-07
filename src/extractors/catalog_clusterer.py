@@ -926,7 +926,7 @@ def change_cluster_category(cluster_id: str, new_category: str,
         # 도메인 결정 (신규 분류 생성용)
         if not domain:
             brow = c.execute("SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)).fetchone()
-            domain = (dict(brow).get("domain") if brow else None) or "IT"
+            domain = (dict(brow).get("domain") if brow else None) or "공통"
 
         # 사전에 목표 분류가 있는지 확인 → 없으면 생성(선택)
         category_created = False
@@ -1110,15 +1110,10 @@ def accept_cluster(conn, cluster_id: str, user_id: str,
               json.dumps(aliases, ensure_ascii=False),
               user_id, now, now))
 
-    # ── ⑥ submission_items.catalog_item_id 연결 ──
+    # ── ⑥ 항목-카탈로그 매칭 (item_match, 원본 submission_items 불변) ──
+    from db.queries import _im_upsert
     for m in members:
-        conn.execute("""
-            UPDATE submission_items
-            SET catalog_item_id = ?,
-                match_status = 'confirmed',
-                match_confidence = 1.0
-            WHERE item_id = ?
-        """, (catalog_item_id, m["item_id"]))
+        _im_upsert(conn, m["item_id"], catalog_item_id, 'confirmed', confidence=1.0)
 
     # ── ⑦ price_history 자동 생성 ────────────────
     ph_count = 0
@@ -1362,23 +1357,26 @@ def _release_cluster_catalog(conn, cluster_id: str, cat_item_id: str):
                 f"DELETE FROM price_history WHERE catalog_item_id = ? AND item_id IN ({ph})",
                 [cat_item_id] + item_ids
             )
-            # 이 클러스터 멤버 품목의 연결만 해제
-            conn.execute(
-                f"""UPDATE submission_items
-                    SET catalog_item_id = NULL, match_status = 'pending',
-                        match_confidence = NULL
-                    WHERE item_id IN ({ph})""",
-                item_ids
-            )
+            # 이 클러스터 멤버 품목의 매칭만 해제 (item_match, 원본 불변)
+            for _iid in item_ids:
+                conn.execute("""
+                    INSERT INTO item_match (item_id, catalog_item_id, match_status, version, updated_at)
+                    VALUES (?, NULL, 'pending', 0, ?)
+                    ON CONFLICT(item_id, version) DO UPDATE SET
+                        catalog_item_id = NULL, match_status = 'pending',
+                        match_confidence = NULL, updated_at = excluded.updated_at
+                """, (_iid, datetime.now().isoformat()))
         # catalog_items 자체는 보존 (다른 확정 클러스터가 사용 중)
     else:
         # ── 아무도 안 쓰면 → 기존처럼 전체 삭제 ──
         conn.execute("DELETE FROM price_history WHERE catalog_item_id = ?", (cat_item_id,))
+        # 이 카탈로그에 매칭된 모든 항목 해제 (item_match, 원본 불변)
         conn.execute("""
-            UPDATE submission_items
-            SET catalog_item_id = NULL, match_status = 'pending', match_confidence = NULL
+            UPDATE item_match
+            SET catalog_item_id = NULL, match_status = 'pending', match_confidence = NULL,
+                updated_at = ?
             WHERE catalog_item_id = ?
-        """, (cat_item_id,))
+        """, (datetime.now().isoformat(), cat_item_id))
         conn.execute("DELETE FROM catalog_items WHERE catalog_item_id = ?", (cat_item_id,))
 
 

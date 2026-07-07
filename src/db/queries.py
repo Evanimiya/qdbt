@@ -41,21 +41,30 @@ def new_id():
 
 # ─── 프로젝트 ──────────────────────────────────
 
-def create_project(name, description="", owner_id=None, domain="IT"):
+def create_project(name, description="", owner_id=None, domain="공통"):
     pid = new_id()
     with get_conn() as c:
         c.execute("""
             INSERT INTO projects (project_id, name, description, owner_id, domain)
             VALUES (?, ?, ?, ?, ?)
-        """, (pid, name, description, owner_id, domain or "IT"))
+        """, (pid, name, description, owner_id, domain or "공통"))
     return pid
 
 
 def update_project_domain(project_id: str, domain: str):
-    """프로젝트 기본 도메인 변경."""
+    """프로젝트 기본 도메인 변경 + 소속 입찰 전면 전파.
+
+    프로젝트 도메인을 바꾸면 그 프로젝트의 모든 입찰 도메인도 함께 갱신한다.
+    입찰이 프로젝트 도메인을 상속·추종하도록 하여, 추출·클러스터링이 올바른
+    도메인 분류를 참조하게 한다. (도메인 불일치로 IT 분류를 잘못 참조하던 문제 해소)
+    """
+    dom = domain or "공통"
+    now = datetime.now().isoformat()
     with get_conn() as c:
         c.execute("UPDATE projects SET domain = ?, updated_at = ? WHERE project_id = ?",
-                  (domain or "IT", datetime.now().isoformat(), project_id))
+                  (dom, now, project_id))
+        # 소속 입찰 전면 전파
+        c.execute("UPDATE bids SET domain = ? WHERE project_id = ?", (dom, project_id))
 
 
 def reorder_clusters(bid_id: str, ordered_cluster_ids: list) -> int:
@@ -312,6 +321,8 @@ def _hard_delete_bid_in_conn(c, bid_id: str) -> dict:
         SELECT cluster_id FROM catalog_clusters WHERE bid_id = ?)""", (bid_id,))
     c.execute("DELETE FROM catalog_clusters WHERE bid_id = ?", (bid_id,))
     if sids:
+        c.execute(f"""DELETE FROM item_match WHERE item_id IN (
+            SELECT item_id FROM submission_items WHERE submission_id IN ({ph}))""", sids)
         c.execute(f"DELETE FROM submission_items WHERE submission_id IN ({ph})", sids)
     c.execute("DELETE FROM submissions WHERE bid_id = ?", (bid_id,))
     c.execute("DELETE FROM bid_watchlist WHERE bid_id = ?", (bid_id,))
@@ -359,7 +370,7 @@ def vendor_name_exists(bid_id, vendor_name, exclude_submission_id=None):
         return c.execute(q + " LIMIT 1", params).fetchone() is not None
 
 def create_bid(project_id, name, due_date=None, description="",
-               created_by=None, domain="IT"):
+               created_by=None, domain="공통"):
     bid_id = new_id()
     with get_conn() as c:
         c.execute("""
@@ -429,6 +440,8 @@ def reset_project_submissions(project_id: str) -> int:
         if not sub_ids:
             return 0
         placeholders = ",".join("?" * len(sub_ids))
+        c.execute(f"""DELETE FROM item_match WHERE item_id IN (
+            SELECT item_id FROM submission_items WHERE submission_id IN ({placeholders}))""", sub_ids)
         c.execute(f"DELETE FROM submission_items WHERE submission_id IN ({placeholders})", sub_ids)
         c.execute(f"""UPDATE submissions SET
             extraction_status='pending',
@@ -499,6 +512,8 @@ def reset_submission(submission_id: str):
                 SELECT item_id FROM submission_items WHERE submission_id = ?
             )
         """, (submission_id,))
+        c.execute("""DELETE FROM item_match WHERE item_id IN (
+            SELECT item_id FROM submission_items WHERE submission_id = ?)""", (submission_id,))
         c.execute("DELETE FROM submission_items WHERE submission_id = ?", (submission_id,))
         c.execute("""
             UPDATE submissions SET
@@ -530,7 +545,87 @@ def restore_submission(submission_id: str):
         """, (datetime.now().isoformat(), submission_id))
 
 
+# ─── 항목-카탈로그 매칭 (item_match, 비교 WS 소유) ──────────
+# 견적 원본(submission_items)과 분리된 비교 결과 접근 표준 창구.
+# 되먹임(클러스터 확정)·재매칭은 이 헬퍼를 통해 item_match만 갱신 → 원본 불변.
+
+def _im_upsert(conn, item_id, catalog_item_id, match_status,
+               confidence=None, note=None, version=0):
+    """item_match upsert (주어진 conn/트랜잭션 사용). 내부 공용."""
+    conn.execute("""
+        INSERT INTO item_match (item_id, catalog_item_id, match_status,
+                                match_confidence, match_note, version, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(item_id, version) DO UPDATE SET
+            catalog_item_id = excluded.catalog_item_id,
+            match_status    = excluded.match_status,
+            match_confidence= excluded.match_confidence,
+            match_note      = excluded.match_note,
+            updated_at      = excluded.updated_at
+    """, (item_id, catalog_item_id, match_status, confidence, note,
+          version, datetime.now().isoformat()))
+
+
+def set_item_match(item_id, catalog_item_id, match_status="confirmed",
+                   confidence=None, note=None, version=0, conn=None):
+    """항목의 매칭을 설정/갱신 (upsert). 원본 submission_items는 건드리지 않음.
+    conn 주어지면 그 트랜잭션 사용, 아니면 새 연결."""
+    if conn is not None:
+        _im_upsert(conn, item_id, catalog_item_id, match_status, confidence, note, version)
+    else:
+        with get_conn() as c:
+            _im_upsert(c, item_id, catalog_item_id, match_status, confidence, note, version)
+
+
+def clear_item_match(item_id, version=0, match_status="pending", conn=None):
+    """항목 매칭 해제 (미연결 상태로). 원본 불변."""
+    def _do(c):
+        c.execute("""
+            INSERT INTO item_match (item_id, catalog_item_id, match_status, version, updated_at)
+            VALUES (?, NULL, ?, ?, ?)
+            ON CONFLICT(item_id, version) DO UPDATE SET
+                catalog_item_id = NULL, match_status = excluded.match_status,
+                match_confidence = NULL, updated_at = excluded.updated_at
+        """, (item_id, match_status, version, datetime.now().isoformat()))
+    if conn is not None:
+        _do(conn)
+    else:
+        with get_conn() as c:
+            _do(c)
+
+
+def get_item_match(item_id, version=0):
+    """항목의 현재 매칭 조회 → dict | None."""
+    with get_conn() as c:
+        r = c.execute("""
+            SELECT catalog_item_id, match_status, match_confidence, match_note
+            FROM item_match WHERE item_id = ? AND version = ?
+        """, (item_id, version)).fetchone()
+        return dict(r) if r else None
+
+
 # ─── 라인 아이템 ────────────────────────────────
+
+def verify_submission_totals(submission_id: str, tol: float = 1.0) -> dict:
+    """저장된 제출서의 합계 불변식을 T5 공통 모듈로 검증.
+
+    ① 공급가액 = 잎 합, ④ amount = 단가 × 수량 을 확인한다.
+    반환: {'ok': bool, 'summary': str, 'diffs': [...]}.
+    추출·수정·환율 재계산 후 정합성을 확인하는 용도.
+    """
+    from core.totals import check_all
+    items = [dict(it) for it in get_items(submission_id, headers=True)]
+    sub = get_submission(submission_id)
+    declared = _to_number(dict(sub).get("subtotal_excl_vat")) if sub else None
+    res = check_all(items=items, declared_total=declared,
+                    modes=("line", "supply"), tol=tol)
+    return {
+        "ok": res.ok,
+        "summary": res.summary(),
+        "diffs": [{"kind": d.kind, "where": d.where, "expected": d.expected,
+                   "actual": d.actual, "delta": d.delta} for d in res.diffs],
+    }
+
 
 def recompute_subtotal(submission_id: str):
     """제출서의 공급가액(subtotal_excl_vat)을 잎 합계로 재계산·저장.
@@ -544,25 +639,180 @@ def recompute_subtotal(submission_id: str):
     leaf_items = get_items(submission_id, headers=False)
     subtotal = sum((dict(it).get("amount") or 0) for it in leaf_items)
 
-    # 제출서 대표 환율·외화 플래그 집계
+    # 제출서 대표 환율·외화 플래그 + 통화별 환율 맵(fx_rates) 집계
+    from collections import Counter
     fx_vals, has_fx = [], 0
+    per_cur = {}  # 통화 -> [환율들]
     for it in leaf_items:
         d = dict(it)
         cur = (d.get("unit_price_currency") or "KRW").upper()
         fx = d.get("fx_rate_used")
         if cur and cur != "KRW":
             has_fx = 1
+            per_cur.setdefault(cur, [])
+            if fx:
+                per_cur[cur].append(round(fx, 4))
         if fx:
             fx_vals.append(fx)
-    # 대표 환율: 최빈값(같은 견적서는 보통 단일 환율), 없으면 None
     rep_fx = None
     if fx_vals:
-        from collections import Counter
         rep_fx = Counter(round(f, 4) for f in fx_vals).most_common(1)[0][0]
 
+    # fx_rates JSON 구성: 항목에서 도출된 환율(extracted) + 기존 수동 입력 보존
+    import json as _json
+    sub_row = get_submission(submission_id)
+    try:
+        stored = _json.loads((dict(sub_row).get("fx_rates") if sub_row else None) or "{}")
+    except Exception:
+        stored = {}
+    fx_map = {}
+    for cur, rates in per_cur.items():
+        prev = stored.get(cur) or {}
+        if rates:
+            rate = Counter(rates).most_common(1)[0][0]
+            # 기존 수동값과 동일하면 manual 출처 유지, 다르면 extracted
+            src = "manual" if (prev.get("source") == "manual"
+                               and abs((prev.get("rate") or 0) - rate) < 1e-6) else "extracted"
+            fx_map[cur] = {"rate": rate, "base": "KRW", "source": src}
+        elif prev.get("rate"):
+            fx_map[cur] = prev            # 수동 입력만 있고 항목 미반영 상태 보존
+        else:
+            fx_map[cur] = {"rate": None, "base": "KRW", "source": "missing"}  # 환율 미확인
+    # 항목에 없는 통화의 기존 수동 입력도 보존
+    for cur, prev in stored.items():
+        if cur not in fx_map and prev.get("source") == "manual":
+            fx_map[cur] = prev
+
     update_submission(submission_id, subtotal_excl_vat=subtotal,
-                      has_usd_items=has_fx, fx_rate_used=rep_fx)
+                      has_usd_items=has_fx, fx_rate_used=rep_fx,
+                      fx_rates=_json.dumps(fx_map, ensure_ascii=False))
     return subtotal
+
+
+def set_submission_fx_rate(submission_id: str, currency: str, rate: float) -> dict:
+    """제출서의 특정 통화 환율을 수동 설정하고 해당 통화 항목의 원화를 재계산.
+
+    확정 정책: 수정 환율로 재계산(견적서 원화 덮어쓰기).
+    - 원본 통화값(unit_price_orig)이 보존되어 있으므로 원화 = 원통화 × 환율 로 재계산.
+    - 환율이 없던 항목(원화열 부재로 역산 불가)은 저장된 값이 원통화이므로,
+      unit_price_orig에 원통화를 보존한 뒤 원화로 확정한다.
+    - 환율 쌍은 항상 통화 → KRW (시작 → 기준) 로 명기·저장한다.
+    """
+    import json as _json
+    cur = (currency or "").upper().strip()
+    rate = float(rate)
+    if not cur or cur == "KRW" or rate <= 0:
+        raise ValueError("통화(비KRW)와 양수 환율이 필요합니다.")
+    updated = 0
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT item_id, unit_price, unit_price_orig, amount, amount_orig, fx_rate_used, quantity
+            FROM submission_items
+            WHERE submission_id = ? AND UPPER(COALESCE(unit_price_currency,'KRW')) = ?
+        """, (submission_id, cur)).fetchall()
+        for r in rows:
+            d = dict(r)
+            old_fx = d.get("fx_rate_used")
+            qty = d.get("quantity")
+            # 원통화 값 복원: 보존된 orig 우선(역산 회피), 없으면 KRW÷환율
+            if d.get("unit_price_orig") is not None:
+                orig_price = d["unit_price_orig"]
+            elif d.get("unit_price") is not None:
+                orig_price = (d["unit_price"] / old_fx) if old_fx else d["unit_price"]
+            else:
+                orig_price = None
+            # 금액 원통화: amount_orig 우선(단가 없는 행 대비), 없으면 역산
+            if d.get("amount_orig") is not None:
+                orig_amt = d["amount_orig"]
+            elif d.get("amount") is not None:
+                orig_amt = (d["amount"] / old_fx) if old_fx else d["amount"]
+            else:
+                orig_amt = None
+
+            new_price = round(orig_price * rate) if orig_price is not None else None
+            # 불변식 보존: amount = 단가 × 수량 (독립 환산 금지).
+            #   단가·수량이 있으면 단가에서 유도해 라인 정합을 지킨다.
+            #   수량이 없는 항목(묶음·소계 행)만 예외적으로 원금액에서 환산.
+            if new_price is not None and qty is not None:
+                new_amt = round(new_price * qty)
+            elif orig_amt is not None:
+                new_amt = round(orig_amt * rate)
+            else:
+                new_amt = None
+            c.execute("""
+                UPDATE submission_items
+                   SET unit_price = ?, amount = ?, fx_rate_used = ?,
+                       unit_price_orig = COALESCE(unit_price_orig, ?)
+                 WHERE item_id = ?
+            """, (new_price, new_amt, rate, orig_price, d["item_id"]))
+            updated += 1
+        # fx_rates 맵에 수동 출처로 기록
+        srow = c.execute("SELECT fx_rates FROM submissions WHERE submission_id = ?",
+                         (submission_id,)).fetchone()
+        try:
+            fx_map = _json.loads((dict(srow).get("fx_rates") if srow else None) or "{}")
+        except Exception:
+            fx_map = {}
+        fx_map[cur] = {"rate": rate, "base": "KRW", "source": "manual"}
+        c.execute("UPDATE submissions SET fx_rates = ? WHERE submission_id = ?",
+                  (_json.dumps(fx_map, ensure_ascii=False), submission_id))
+    recompute_subtotal(submission_id)  # 소계·대표환율·맵 정합
+    return {"currency": cur, "rate": rate, "items_updated": updated}
+
+
+def remove_submission_fx_rate(submission_id: str, currency: str) -> dict:
+    """제출서의 특정 통화 환율을 삭제(미확인 상태로 되돌림).
+
+    - fx_rates 맵에서 해당 통화를 source='missing'(rate=None)으로 전환.
+    - 해당 통화 항목의 원화 환산을 취소: unit_price_orig(원통화)를 다시 표면값으로,
+      fx_rate_used를 NULL로. (원통화 값은 보존되므로 나중에 다시 환율 입력 가능)
+    - 수동으로 잘못 입력한 환율을 되돌리는 용도.
+    """
+    import json as _json
+    cur = (currency or "").upper().strip()
+    if not cur or cur == "KRW":
+        raise ValueError("삭제할 통화(비KRW)를 지정하세요.")
+    reverted = 0
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT item_id, unit_price, unit_price_orig, amount, fx_rate_used, quantity
+            FROM submission_items
+            WHERE submission_id = ? AND UPPER(COALESCE(unit_price_currency,'KRW')) = ?
+        """, (submission_id, cur)).fetchall()
+        for r in rows:
+            d = dict(r)
+            # 원통화 값으로 되돌림 (환산 취소). unit_price_orig가 원통화 진실.
+            orig_price = d.get("unit_price_orig")
+            qty = d.get("quantity")
+            if orig_price is not None:
+                new_amt = round(orig_price * qty) if qty is not None else orig_price
+                c.execute("""
+                    UPDATE submission_items
+                       SET unit_price = ?, amount = ?, fx_rate_used = NULL
+                     WHERE item_id = ?
+                """, (orig_price, new_amt, d["item_id"]))
+                reverted += 1
+        # fx_rates 맵에서 미확인 처리
+        srow = c.execute("SELECT fx_rates FROM submissions WHERE submission_id = ?",
+                         (submission_id,)).fetchone()
+        try:
+            fx_map = _json.loads((dict(srow).get("fx_rates") if srow else None) or "{}")
+        except Exception:
+            fx_map = {}
+        if cur in fx_map:
+            fx_map[cur] = {"rate": None, "base": "KRW", "source": "missing"}
+        c.execute("UPDATE submissions SET fx_rates = ? WHERE submission_id = ?",
+                  (_json.dumps(fx_map, ensure_ascii=False), submission_id))
+    recompute_subtotal(submission_id)
+    return {"currency": cur, "items_reverted": reverted}
+
+
+def set_bid_base_currency(bid_id: str, currency: str):
+    """입찰의 최종 비교 기준통화 설정 (기본 KRW, USD 등 선택 가능)."""
+    cur = (currency or "KRW").upper().strip() or "KRW"
+    with get_conn() as c:
+        c.execute("UPDATE bids SET base_currency = ? WHERE bid_id = ?", (cur, bid_id))
+    return cur
 
 
 def add_nego_item(submission_id, label, amount, category="조정"):
@@ -629,6 +879,9 @@ def delete_single_item(item_id: str):
     with get_conn() as c:
         c.execute("DELETE FROM price_history WHERE item_id = ?", (item_id,))
         c.execute("DELETE FROM catalog_suggestions WHERE item_id = ?", (item_id,))
+        # item_match(비교 결과)도 먼저 정리 — submission_items를 FK 참조하므로
+        # 남아 있으면 원본 삭제가 FK 위반으로 실패한다.
+        c.execute("DELETE FROM item_match WHERE item_id = ?", (item_id,))
         try:
             c.execute("DELETE FROM catalog_cluster_members WHERE catalog_item_id = ?", (item_id,))
         except Exception:
@@ -655,6 +908,13 @@ def delete_submission_items(submission_id: str, keep_nego: bool = False):
         """, (submission_id,))
         c.execute(f"""
             DELETE FROM catalog_suggestions
+            WHERE item_id IN (
+                SELECT item_id FROM submission_items
+                WHERE submission_id = ?{nego_filter}
+            )
+        """, (submission_id,))
+        c.execute(f"""
+            DELETE FROM item_match
             WHERE item_id IN (
                 SELECT item_id FROM submission_items
                 WHERE submission_id = ?{nego_filter}
@@ -715,8 +975,8 @@ def insert_items_bulk(submission_id, items: list[dict]):
                         (item_id, submission_id, line_no, sort_order, depth, is_header,
                          category, path, name_raw, name_normalized, spec,
                          quantity, unit, unit_price, unit_price_orig,
-                         unit_price_currency, fx_rate_used, amount, is_nego)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         unit_price_currency, fx_rate_used, amount, amount_orig, is_nego)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     iid, submission_id,
                     it.get("line_no"), i, it.get("depth", 0),
@@ -733,6 +993,7 @@ def insert_items_bulk(submission_id, items: list[dict]):
                     it.get("unit_price_currency_in_source", "KRW"),
                     _to_number(it.get("fx_rate_used")),
                     _to_number(it.get("amount")),
+                    _to_number(it.get("amount_orig")),
                     1 if it.get("is_nego") else 0,
                 ))
             except Exception as e:
@@ -1122,7 +1383,7 @@ def category_order_for_bid(bid_id: str, present_cats=None) -> list:
         row = c.execute("SELECT domain, category_order FROM bids WHERE bid_id = ?",
                         (bid_id,)).fetchone()
         rd = dict(row) if row else {}
-        domain = rd.get("domain") or "IT"
+        domain = rd.get("domain") or "공통"
         cats = c.execute("""
             SELECT name FROM catalog_categories
             WHERE is_active = 1 AND (domain = ? OR domain = 'ALL')
@@ -1585,10 +1846,11 @@ def compare_bid_submissions(bid_id):
                     continue
                 placeholders = ','.join('?' * len(row_item_ids))
                 cat_links = c.execute(f"""
-                    SELECT DISTINCT catalog_item_id FROM submission_items
+                    SELECT DISTINCT catalog_item_id FROM item_match
                     WHERE item_id IN ({placeholders})
                       AND catalog_item_id IS NOT NULL
                       AND match_status = 'confirmed'
+                      AND version = 0
                 """, row_item_ids).fetchall()
                 for link in cat_links:
                     cid_key = link["catalog_item_id"]
@@ -1986,7 +2248,7 @@ def get_domain_category_binding(domain: str) -> dict:
     별칭(aliases)까지 lookup에 포함하여, 표기 편차를 표준명으로 자동 귀속할 수 있게 한다.
     """
     import json as _json
-    domain = domain or "IT"
+    domain = domain or "공통"
     standard, lookup, alias_map = [], {}, {}
     with get_conn() as c:
         rows = c.execute("""
@@ -2061,7 +2323,7 @@ def validate_submission_categories(submission_id: str) -> dict:
         """, (submission_id,)).fetchone()
         if not srow:
             raise ValueError(f"제출서를 찾을 수 없습니다: {submission_id}")
-        domain = (dict(srow).get("domain")) or "IT"
+        domain = (dict(srow).get("domain")) or "공통"
         items = c.execute("""
             SELECT category, COUNT(*) as cnt
             FROM submission_items
@@ -2119,7 +2381,7 @@ def apply_category_binding(submission_id: str, mapping: dict,
             SELECT b.domain FROM submissions s JOIN bids b USING (bid_id)
             WHERE s.submission_id = ?
         """, (submission_id,)).fetchone()
-        domain = (dict(brow).get("domain") if brow else None) or "IT"
+        domain = (dict(brow).get("domain") if brow else None) or "공통"
 
         items_updated = 0
         for raw_cat, std_cat in mapping.items():
@@ -2174,7 +2436,7 @@ def apply_category_binding(submission_id: str, mapping: dict,
     return {"items_updated": items_updated, "aliases_added": aliases_added}
 
 
-def create_catalog_category(name, domain='IT', parent_id=None,
+def create_catalog_category(name, domain='공통', parent_id=None,
                              sort_order=0, description=None):
     cid = new_id()
     with get_conn() as c:
@@ -2222,7 +2484,7 @@ def delete_catalog_category(category_id):
 # ─── 도메인 관련 ─────────────────────────────────
 
 # 폴백 기본 도메인 (domains 테이블이 비었을 때만 사용)
-DOMAIN_LIST = ['IT', '설비', '용역', '기타']
+DOMAIN_LIST = ['공통', 'IT', '설비', '용역', '기타']
 
 
 def list_domains(active_only: bool = True):
@@ -2543,8 +2805,8 @@ def catalog_stats():
             "SELECT COUNT(*) FROM catalog_categories"
         ).fetchone()[0]
         n_matched = c.execute(
-            "SELECT COUNT(DISTINCT catalog_item_id) FROM submission_items "
-            "WHERE catalog_item_id IS NOT NULL AND match_status = 'confirmed'"
+            "SELECT COUNT(DISTINCT catalog_item_id) FROM item_match "
+            "WHERE catalog_item_id IS NOT NULL AND match_status = 'confirmed' AND version = 0"
         ).fetchone()[0]
         return {"n_items": n_items, "n_categories": n_cats, "n_matched": n_matched}
 
@@ -2552,13 +2814,15 @@ def catalog_stats():
 # ─── 매칭 관련 ───────────────────────────────────
 
 def get_match_summary(submission_id: str) -> dict:
-    """제출서의 매칭 현황 요약"""
+    """제출서의 매칭 현황 요약 (item_match 기준, 원본 항목 수 대비)."""
     with get_conn() as c:
+        # 잎 항목별 매칭 상태: item_match에 있으면 그 상태, 없으면 pending
         rows = c.execute("""
-            SELECT match_status, COUNT(*) as cnt
-            FROM submission_items
-            WHERE submission_id = ? AND is_header = 0
-            GROUP BY match_status
+            SELECT COALESCE(im.match_status, 'pending') AS match_status, COUNT(*) as cnt
+            FROM submission_items si
+            LEFT JOIN item_match im ON im.item_id = si.item_id AND im.version = 0
+            WHERE si.submission_id = ? AND si.is_header = 0
+            GROUP BY COALESCE(im.match_status, 'pending')
         """, (submission_id,)).fetchall()
     total = sum(r["cnt"] for r in rows)
     status_map = {r["match_status"]: r["cnt"] for r in rows}
@@ -2572,15 +2836,23 @@ def get_match_summary(submission_id: str) -> dict:
 
 
 def get_items_with_match(submission_id: str) -> list:
-    """매칭 정보 포함된 라인 아이템 목록"""
+    """매칭 정보 포함된 라인 아이템 목록 (매칭은 item_match 기준).
+
+    si.* 앞에 item_match의 매칭 필드를 선언해 옛 컬럼을 가린다
+    (sqlite3.Row는 동명 컬럼 시 먼저 선언된 값을 반환)."""
     with get_conn() as c:
         return c.execute("""
-            SELECT si.*,
+            SELECT im.catalog_item_id AS catalog_item_id,
+                   COALESCE(im.match_status, 'pending') AS match_status,
+                   im.match_confidence AS match_confidence,
+                   im.match_note AS match_note,
+                   si.*,
                    ci.name_canonical as catalog_name,
                    ci.unit_std as catalog_unit,
                    cc.name as catalog_category
             FROM submission_items si
-            LEFT JOIN catalog_items ci ON si.catalog_item_id = ci.catalog_item_id
+            LEFT JOIN item_match im ON im.item_id = si.item_id AND im.version = 0
+            LEFT JOIN catalog_items ci ON im.catalog_item_id = ci.catalog_item_id
             LEFT JOIN catalog_categories cc ON ci.category_id = cc.category_id
             WHERE si.submission_id = ? AND si.is_header = 0
             ORDER BY si.sort_order

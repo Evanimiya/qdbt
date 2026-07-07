@@ -177,7 +177,7 @@ def categories():
 def new_category():
     from db.queries import DOMAIN_LIST
     name        = request.form.get("name", "").strip()
-    domain      = request.form.get("domain", "IT").strip()
+    domain      = request.form.get("domain", "공통").strip()
     description = request.form.get("description", "").strip() or None
     parent_id   = request.form.get("parent_id", "").strip() or None
     sort_order  = int(request.form.get("sort_order", 0) or 0)
@@ -186,7 +186,7 @@ def new_category():
         flash("카테고리명을 입력하세요.", "error")
         return redirect(url_for("catalog.categories"))
     if domain not in DOMAIN_LIST:
-        domain = "IT"
+        domain = "공통"
 
     create_catalog_category(name, domain=domain, parent_id=parent_id,
                              sort_order=sort_order, description=description)

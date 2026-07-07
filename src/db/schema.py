@@ -170,6 +170,7 @@ CREATE TABLE IF NOT EXISTS submission_items (
     unit            TEXT,
     unit_price      REAL,                  -- 반드시 원 단위
     unit_price_orig REAL,                  -- 원본 단가 (USD 등)
+    amount_orig     REAL,                   -- 원본 금액 (단가 없는 외화 행 대비, T2)
     unit_price_currency TEXT DEFAULT 'KRW',
     amount          REAL,                  -- 원 단위 금액
     -- Phase 2: 카탈로그 연결
@@ -183,8 +184,39 @@ CREATE TABLE IF NOT EXISTS submission_items (
 );
 
 -- ═══════════════════════════════════════════
--- 입찰별 비교 대상 자재 목록 (Phase 2 준비)
+-- 항목-카탈로그 매칭 (비교 WS 소유)
 -- ═══════════════════════════════════════════
+-- 견적 원본(submission_items)과 비교 결과(매칭)를 물리적으로 분리.
+--   · submission_items = 견적 원본(품명·단가·수량·금액). 병합 WS 소유, 확정 시 동결.
+--   · item_match       = 비교 결과(어느 카탈로그 품목에 연결·매칭 상태). 비교 WS 소유, 자유 갱신.
+-- 이 분리로: 확정 동결이 원본 테이블 통째로 단순하고, 되먹임(클러스터 확정)·잎 재매칭이
+-- 원본을 건드리지 않는다. version 차원은 버전 관리(D3) 대비 — 초기엔 NULL(현재 매칭만).
+CREATE TABLE IF NOT EXISTS item_match (
+    item_id          TEXT NOT NULL REFERENCES submission_items(item_id),
+    catalog_item_id  TEXT,                  -- 연결된 카탈로그 품목 (NULL = 미연결)
+    match_status     TEXT NOT NULL DEFAULT 'pending',
+                        -- pending | suggested | confirmed | unmatched
+    match_confidence REAL,                  -- 매칭 신뢰도 (0~1)
+    match_note       TEXT,                  -- 매칭 불일치 사유 등
+    version          INTEGER NOT NULL DEFAULT 0,
+                        -- 0 = 현재 매칭(기본). 버전 관리(D3) 도입 시 1,2,… 로 버전별 매칭.
+                        -- NOT NULL DEFAULT 0 으로 PK 무결성 보장(SQLite는 NULL PK 중복 허용하므로).
+    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (item_id, version)          -- 버전별 매칭 허용 (0=현재)
+);
+CREATE INDEX IF NOT EXISTS idx_item_match_catalog ON item_match(catalog_item_id);
+CREATE INDEX IF NOT EXISTS idx_item_match_status  ON item_match(match_status);
+
+-- ═══════════════════════════════════════════
+-- 스키마 메타 (1회성 보정·플래그 추적)
+-- ═══════════════════════════════════════════
+-- 매 기동 반복 실행되면 안 되는 1회성 데이터 보정의 적용 여부를 기록.
+-- key = 보정 식별자, applied_at = 적용 시각.
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 -- 이번 입찰에서 가격 이력을 비교할 품목을 명시적으로 지정.
 -- 전체 카탈로그를 검색하는 게 아니라 담당자가 "이 입찰에서
@@ -352,8 +384,10 @@ CREATE INDEX IF NOT EXISTS idx_cluster_members ON catalog_cluster_members(catalo
 -- ═══════════════════════════════════════════
 
 -- 기본 도메인 (INSERT OR IGNORE — 중복 무시)
+-- '공통'은 미분류/도메인 미상 표지이자 폴백 기준점 (sort_order 0 = 최상단)
 INSERT OR IGNORE INTO domains (domain_id, name, description, sort_order)
 VALUES
+    ('DOM-000', '공통', '도메인 미상·공통 (폴백 기준)',       0),
     ('DOM-001', 'IT',   'IT 시스템, 서버, 네트워크, SW 등',    1),
     ('DOM-002', '설비', '기계설비, 전기설비, 배관, 공조 등',  2),
     ('DOM-003', '용역', '컨설팅, 감리, 유지관리 서비스 등',  3),
@@ -460,6 +494,7 @@ def migrate_db(db_path=None):
         conn.execute("""
             INSERT OR IGNORE INTO domains (domain_id, name, description, sort_order)
             VALUES
+                ('DOM-000', '공통', '도메인 미상·공통 (폴백 기준)',      0),
                 ('DOM-001', 'IT',   'IT 시스템, 서버, 네트워크, SW 등',   1),
                 ('DOM-002', '설비', '기계설비, 전기설비, 배관, 공조 등', 2),
                 ('DOM-003', '용역', '컨설팅, 감리, 유지관리 서비스 등', 3),
@@ -560,6 +595,50 @@ def migrate_db(db_path=None):
     if "fx_rate_used" not in si_cols:
         # 항목별 적용 환율(원화÷통화). 통화 비교·표시용.
         migrations.append("ALTER TABLE submission_items ADD COLUMN fx_rate_used REAL")
+    if "amount_orig" not in si_cols:
+        # 원본 통화 금액 (단가 없는 외화 행의 원통화 보존, T2)
+        migrations.append("ALTER TABLE submission_items ADD COLUMN amount_orig REAL")
+
+    # submissions.fx_rates: 통화별 환율 맵 JSON — {"USD":{"rate":1380,"base":"KRW","source":"extracted|manual"}}
+    sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]
+    if "fx_rates" not in sub_cols:
+        migrations.append("ALTER TABLE submissions ADD COLUMN fx_rates TEXT")
+
+    # bids.base_currency: 최종 비교 기준통화 (기본 KRW, 입찰별 선택 가능)
+    bid_cols2 = [c[1] for c in conn.execute("PRAGMA table_info(bids)").fetchall()]
+    if "base_currency" not in bid_cols2:
+        migrations.append("ALTER TABLE bids ADD COLUMN base_currency TEXT NOT NULL DEFAULT 'KRW'")
+
+    # item_match: 견적 원본(submission_items)과 비교 결과(매칭) 물리적 분리 (비교 WS 소유)
+    if "item_match" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS item_match (
+                item_id          TEXT NOT NULL REFERENCES submission_items(item_id),
+                catalog_item_id  TEXT,
+                match_status     TEXT NOT NULL DEFAULT 'pending',
+                match_confidence REAL,
+                match_note       TEXT,
+                version          INTEGER NOT NULL DEFAULT 0,
+                updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (item_id, version)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_item_match_catalog ON item_match(catalog_item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_item_match_status  ON item_match(match_status)")
+        conn.commit()
+        migrations.append("-- item_match 테이블 생성 완료 (견적 원본/비교 결과 분리)")
+
+    # schema_meta: 1회성 보정 추적 (매 기동 반복 방지)
+    if "schema_meta" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key         TEXT PRIMARY KEY,
+                value       TEXT,
+                applied_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        migrations.append("-- schema_meta 테이블 생성 완료 (1회성 보정 추적)")
 
     # 계층 전파: catalog_items, catalog_clusters, price_history
     ci_cols = [c[1] for c in conn.execute("PRAGMA table_info(catalog_items)").fetchall()]
@@ -646,6 +725,38 @@ CREATE TABLE IF NOT EXISTS catalog_suggestions (
     for sql in migrations:
         conn.execute(sql)
         print(f"  [마이그레이션] {sql[:60]}...")
+
+    # ── 데이터 보정 (idempotent) ──
+    # 1) '공통' 도메인 보강: 기존 DB에 없으면 추가 (미분류·폴백 기준점)
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO domains (domain_id, name, description, sort_order)
+            VALUES ('DOM-000', '공통', '도메인 미상·공통 (폴백 기준)', 0)
+        """)
+        # 2) 입찰 도메인 전파 보정 (1회성): 과거 데이터의 도메인 불일치 교정.
+        #    schema_meta로 적용 여부를 추적해 매 기동 반복을 방지한다.
+        #    (이후 프로젝트 도메인 변경 전파는 update_project_domain이 담당)
+        already = conn.execute(
+            "SELECT 1 FROM schema_meta WHERE key = 'domain_propagation_fix_v1'"
+        ).fetchone()
+        if not already:
+            fixed = conn.execute("""
+                UPDATE bids
+                   SET domain = (SELECT p.domain FROM projects p WHERE p.project_id = bids.project_id)
+                 WHERE EXISTS (
+                         SELECT 1 FROM projects p
+                          WHERE p.project_id = bids.project_id
+                            AND p.domain IS NOT NULL AND p.domain <> ''
+                            AND p.domain <> bids.domain
+                       )
+            """).rowcount
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_meta (key, value) VALUES ('domain_propagation_fix_v1', ?)",
+                (str(fixed),))
+            if fixed:
+                print(f"  [보정·1회성] 입찰 도메인 전파: {fixed}건 (프로젝트 도메인으로 정정)")
+    except Exception as _e:
+        print(f"  [보정 경고] 도메인 보정 건너뜀: {_e}")
 
     conn.commit()
     conn.close()

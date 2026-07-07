@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QDBT · 다층 비교 (묶음 펼치기) 라이브 목업</title>
+<style>
+  :root{
+    --navy:#0F2A43; --deep:#0B3C5D; --teal:#1C7293; --aqua:#21A0A0;
+    --ice:#E8F1F5; --cloud:#F5F9FB; --ink:#1E293B; --slate:#64748B;
+    --line:#D8E3EA; --white:#fff; --green:#3FA372; --amber:#E0A458; --coral:#D96C5F;
+    --min-bg:#EAF6EF; --min-bd:#Bfe3cf; --warn-bg:#FBF3E6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Pretendard','Malgun Gothic',-apple-system,'Segoe UI',sans-serif;
+    background:var(--cloud);color:var(--ink);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 80px}
+
+  /* header */
+  .eyebrow{font-size:12px;font-weight:700;letter-spacing:.18em;color:var(--teal);text-transform:uppercase}
+  h1{font-size:26px;font-weight:800;color:var(--navy);margin:6px 0 4px;letter-spacing:-.01em}
+  .sub{font-size:14px;color:var(--slate);max-width:760px}
+  .demo-tag{display:inline-block;margin-top:10px;font-size:11px;font-weight:700;color:var(--aqua);
+    border:1px solid var(--aqua);border-radius:20px;padding:3px 11px;letter-spacing:.05em}
+
+  /* control bar */
+  .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:22px 0 14px;
+    padding:14px 16px;background:var(--white);border:1px solid var(--line);border-radius:12px;
+    box-shadow:0 2px 10px rgba(15,42,67,.05)}
+  .controls .lbl{font-size:12px;font-weight:700;color:var(--slate);letter-spacing:.03em}
+  .seg{display:inline-flex;background:var(--ice);border-radius:9px;padding:3px}
+  .seg button{border:0;background:transparent;font-size:12.5px;font-weight:600;color:var(--slate);
+    padding:6px 13px;border-radius:7px;cursor:pointer;transition:.15s}
+  .seg button.on{background:var(--navy);color:#fff;box-shadow:0 1px 4px rgba(15,42,67,.25)}
+  .spacer{flex:1}
+  .hint{font-size:11.5px;color:var(--slate)}
+  .hint b{color:var(--teal)}
+
+  /* summary strip */
+  .vendors{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+  .vcard{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+    box-shadow:0 2px 10px rgba(15,42,67,.05);position:relative}
+  .vcard.win{border-color:var(--green);background:linear-gradient(180deg,#F3FBF6,#fff)}
+  .vcard .vn{font-size:14px;font-weight:800;color:var(--navy)}
+  .vcard .vt{font-size:22px;font-weight:800;color:var(--navy);margin-top:2px;letter-spacing:-.01em}
+  .vcard .vsub{font-size:11px;color:var(--slate);margin-top:3px}
+  .badge-src{position:absolute;top:12px;right:12px;font-size:10px;font-weight:700;padding:2px 8px;
+    border-radius:20px;letter-spacing:.04em}
+  .src-xlsx{background:#E7F0EC;color:#2f7d55}
+  .src-pdf{background:#FBEAE7;color:#b9503f}
+  .medal{color:var(--amber)}
+
+  /* table */
+  .tbl{background:var(--white);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+    box-shadow:0 3px 14px rgba(15,42,67,.06)}
+  .thead{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr 1.2fr;
+    background:var(--navy);color:#fff;font-size:12px;font-weight:700;letter-spacing:.03em}
+  .thead>div{padding:12px 14px}
+  .thead .num{text-align:right}
+
+  .cat{font-size:12px;font-weight:800;color:var(--teal);letter-spacing:.05em;
+    padding:11px 14px;background:var(--ice);border-bottom:1px solid var(--line)}
+
+  .row{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr 1.2fr;
+    border-bottom:1px solid var(--line);transition:background .15s}
+  .row:hover{background:#FaFcFd}
+  .row>div{padding:11px 14px;font-size:13px;display:flex;flex-direction:column;justify-content:center}
+  .row .num{text-align:right;align-items:flex-end}
+  .cl-name{font-weight:700;color:var(--navy);display:flex;align-items:center;gap:8px}
+  .twist{width:18px;height:18px;border:0;background:var(--ice);border-radius:5px;cursor:pointer;
+    color:var(--teal);font-size:11px;display:inline-flex;align-items:center;justify-content:center;
+    transition:.18s;flex-shrink:0}
+  .twist:hover{background:var(--teal);color:#fff}
+  .twist.open{transform:rotate(90deg)}
+  .twist.leaf{visibility:hidden}
+  .cl-meta{font-size:10.5px;color:var(--slate);font-weight:500;margin-top:2px;padding-left:26px}
+  .amt{font-weight:700;color:var(--navy)}
+  .amt.min{color:var(--green)}
+  .amt .won{font-size:11px;color:var(--slate);font-weight:600}
+  .up{color:var(--coral);font-size:11px}
+  .cell-mut{color:#B7C2CE}
+  .best{font-size:11px;color:var(--slate);align-items:flex-end}
+  .best b{color:var(--navy);font-size:13px}
+
+  /* leaf rows */
+  .leaves{display:none;background:#FbFdFe}
+  .leaves.show{display:block}
+  .leaf-row{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr 1.2fr;
+    border-bottom:1px dashed var(--line);background:linear-gradient(90deg,#F4FAFB,#fff 60%)}
+  .leaf-row>div{padding:9px 14px;font-size:12.5px;display:flex;flex-direction:column;justify-content:center}
+  .leaf-row .num{text-align:right;align-items:flex-end}
+  .leaf-name{padding-left:34px !important;color:var(--ink);font-weight:600;position:relative}
+  .leaf-name::before{content:"";position:absolute;left:20px;top:0;bottom:50%;width:9px;
+    border-left:1.5px solid var(--line);border-bottom:1.5px solid var(--line);border-radius:0 0 0 3px}
+  .match-tag{display:inline-block;font-size:9.5px;font-weight:700;padding:1px 7px;border-radius:20px;
+    margin-left:7px;letter-spacing:.03em}
+  .m-auto{background:#E9F3EF;color:#2f7d55}
+  .m-manual{background:#FBF3E6;color:#a9772f}
+  .m-unmatched{background:#FBEAE7;color:#b9503f}
+  .leaf-row.dragging{opacity:.4}
+  .leaf-name[draggable]{cursor:grab}
+  .leaf-name[draggable]:active{cursor:grabbing}
+
+  /* sum check */
+  .sumrow{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr 1.2fr;background:#F0F6F9;
+    border-bottom:2px solid var(--line)}
+  .sumrow>div{padding:8px 14px;font-size:11.5px;display:flex;align-items:center}
+  .sumrow .num{text-align:right;justify-content:flex-end;font-weight:700}
+  .sum-lbl{color:var(--teal);font-weight:700;padding-left:34px !important;gap:7px}
+  .sum-ok{color:var(--green)} .sum-bad{color:var(--coral)}
+  .chk{width:15px;height:15px;border-radius:50%;display:inline-flex;align-items:center;
+    justify-content:center;font-size:9px;color:#fff}
+  .chk.ok{background:var(--green)} .chk.bad{background:var(--coral)}
+
+  /* legend / notes */
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;padding:14px 16px;
+    background:var(--white);border:1px solid var(--line);border-radius:10px;font-size:11.5px;color:var(--slate)}
+  .legend .li{display:flex;align-items:center;gap:6px}
+  .sw{width:22px;height:0;border-top:2px solid;border-radius:2px}
+  .callout{margin-top:18px;padding:16px 18px;background:var(--navy);border-radius:12px;color:#cfe0ec;
+    font-size:13px;line-height:1.65}
+  .callout b{color:#fff}
+  .callout .k{color:var(--aqua);font-weight:700}
+
+  .foot{margin-top:26px;font-size:11px;color:#9fb1bf;text-align:center}
+  @media(max-width:820px){
+    .vendors{grid-template-columns:1fr}
+    .thead,.row,.leaf-row,.sumrow{grid-template-columns:1.6fr 1fr 1fr}
+    .thead .h-a,.row .c-a,.leaf-row .c-a,.sumrow .c-a{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">QDBT · 라이브 목업</div>
+  <h1>다층 비교 — 묶음 펼치기</h1>
+  <p class="sub">업체마다 견적의 계층 깊이가 다릅니다. E시스템즈는 "서버 장비"라는 소분류로 묶어 제출했고, D·A는 개별 품목으로 제출했습니다. 분류 레벨로 비교하다가 <b>펼치면</b>, 묶음이 잎으로 풀리고 같은 물건끼리 다시 매칭됩니다. 잎의 합은 언제나 묶음 금액과 일치합니다.</p>
+  <span class="demo-tag">조작 가능한 목업 · 실제 계산 아님</span>
+
+  <div class="controls">
+    <span class="lbl">비교 레벨</span>
+    <div class="seg" id="lvlSeg">
+      <button data-lvl="group" class="on">분류 묶음</button>
+      <button data-lvl="leaf">잎까지 펼침</button>
+    </div>
+    <div class="spacer"></div>
+    <span class="hint">💡 행의 <b>▸</b>를 누르면 그 묶음만 펼쳐집니다 · 펼친 잎은 <b>드래그</b>로 다른 그룹에 재배치</span>
+  </div>
+
+  <div class="vendors" id="vendors"></div>
+
+  <div class="tbl">
+    <div class="thead">
+      <div>클러스터 / 품목</div>
+      <div class="num">D엔지니어링</div>
+      <div class="num h-a">A상사</div>
+      <div class="num">E시스템즈</div>
+      <div class="num">최저 / 비교</div>
+    </div>
+    <div class="cat">자재</div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="legend">
+    <div class="li"><span class="chk ok" style="font-size:9px">✓</span> 합계 검증 통과 (잎 합 = 묶음)</div>
+    <div class="li"><span class="match-tag m-auto">자동매칭</span> 잎 재매칭(자동)</div>
+    <div class="li"><span class="match-tag m-manual">수동</span> 사용자 재배치</div>
+    <div class="li"><span class="match-tag m-unmatched">미매칭</span> 대응 잎 없음</div>
+    <div class="li"><span class="badge-src src-pdf" style="position:static">PDF</span> LLM 추출</div>
+    <div class="li"><span class="badge-src src-xlsx" style="position:static">XLSX</span> 코드 추출</div>
+  </div>
+
+  <div class="callout">
+    <b>이 목업이 검증하는 것.</b> <span class="k">레벨 어긋남 흡수</span> — E의 "GPU 가속 서버"(소분류 아래 잎)가 D·A의 "GPU Server"(품목 레벨)와 같은 행에서 만납니다.
+    <span class="k">합계 보존</span> — 펼친 잎의 합이 "서버 장비" 묶음 금액과 일치함을 매 펼침마다 자동 검증합니다.
+    <span class="k">수동 보정</span> — 자동 재매칭이 틀리면 잎을 드래그해 옮길 수 있습니다.
+    실제 구현에서는 이 잎 매칭이 확정 시 클러스터에 보존되고, 가격 이력도 잎 단위로 적재됩니다.
+  </div>
+
+  <div class="foot">QDBT 다층 비교 설계 목업 · 데이터는 예시(E시스템즈 3단 트리 / D·A 2단 트리) · v0.9.8 설계 검토용</div>
+</div>
+
+<script>
+// ── 예시 데이터: 실제 구조 반영 (E=PDF 3단 묶음, D·A=XLSX 2단 개별) ──
+// 금액은 원화(₩), E는 소분류 "서버 장비/네트워크" 묶음 → 잎 3개
+const DATA = {
+  vendors: [
+    {id:'D', name:'D엔지니어링', src:'xlsx', total:2277532000, fx:'1,380원/USD'},
+    {id:'A', name:'A상사',      src:'xlsx', total:2289400000, fx:null},
+    {id:'E', name:'E시스템즈',   src:'pdf',  total:2398720000, fx:null},
+  ],
+  clusters: [
+    {
+      id:'srv', name:'GPU 서버', metaGroup:'E: 자재 › 서버 장비 (묶음 3)',
+      // 묶음 레벨 금액
+      group:{ D:190440000, A:190000000, E:604200000 },
+      // E만 묶음 → 펼치면 잎. D·A는 이미 잎(개별)
+      leaves:[
+        {name:'GPU 가속 서버', match:'auto',
+          cells:{D:190440000, A:190000000, E:376740000}},
+        {name:'랙형 서버', match:'auto',
+          cells:{D:null, A:null, E:190440000}},
+        {name:'관리 서버', match:'auto',
+          cells:{D:13662000, A:13600000, E:37020000}},
+      ]
+    },
+    {
+      id:'spine', name:'Spine 스위치', metaGroup:'E: 자재 › 네트워크 (묶음 2)',
+      group:{ D:84180000, A:84000000, E:88000000 },
+      leaves:[
+        {name:'Spine 스위치', match:'auto', cells:{D:84180000, A:84000000, E:44000000}},
+        {name:'ToR 스위치', match:'manual', cells:{D:null, A:null, E:44000000}},
+      ]
+    },
+  ]
+};
+
+const won = n => n==null ? '—' : '₩'+n.toLocaleString('ko-KR');
+let expanded = {}; // clusterId -> bool
+
+// 업체 요약 카드
+function renderVendors(){
+  const minTotal = Math.min(...DATA.vendors.map(v=>v.total));
+  document.getElementById('vendors').innerHTML = DATA.vendors.map(v=>`
+    <div class="vcard ${v.total===minTotal?'win':''}">
+      <span class="badge-src src-${v.src}">${v.src.toUpperCase()}</span>
+      <div class="vn">${v.name} ${v.total===minTotal?'<span class="medal">🥇</span>':''}</div>
+      <div class="vt">${won(v.total)}</div>
+      <div class="vsub">${v.fx?('💱 '+v.fx):'단일 통화 (KRW)'}</div>
+    </div>`).join('');
+}
+
+// 잎 합계 검증
+function sumLeaves(cl, vid){
+  return cl.leaves.reduce((s,lf)=> s + (lf.cells[vid]||0), 0);
+}
+
+function renderRows(){
+  const html = DATA.clusters.map(cl=>{
+    const g = cl.group;
+    const vals = [g.D,g.A,g.E].filter(x=>x!=null);
+    const min = Math.min(...vals);
+    const cell = (v)=> v==null ? '<span class="cell-mut">—</span>'
+      : `<span class="amt ${v===min?'min':''}">${won(v)}${v===min?' 🥇':(v>min?' <span class="up">↑</span>':'')}</span>`;
+    const isOpen = !!expanded[cl.id];
+
+    // 잎 행 + 합계검증
+    const leafHtml = cl.leaves.map((lf,i)=>{
+      const tag = lf.match==='auto'?'<span class="match-tag m-auto">자동매칭</span>'
+                : lf.match==='manual'?'<span class="match-tag m-manual">수동</span>'
+                : '<span class="match-tag m-unmatched">미매칭</span>';
+      const lvals=[lf.cells.D,lf.cells.A,lf.cells.E].filter(x=>x!=null);
+      const lmin=Math.min(...lvals);
+      const lc=(v)=> v==null?'<span class="cell-mut">—</span>'
+        :`<span class="amt ${v===lmin?'min':''}" style="font-size:12.5px">${won(v)}</span>`;
+      return `<div class="leaf-row" draggable="true" data-cl="${cl.id}" data-leaf="${i}">
+        <div class="leaf-name" draggable="true">${lf.name}${tag}</div>
+        <div class="num c-d">${lc(lf.cells.D)}</div>
+        <div class="num c-a">${lc(lf.cells.A)}</div>
+        <div class="num c-e">${lc(lf.cells.E)}</div>
+        <div class="num best"></div>
+      </div>`;
+    }).join('');
+
+    // 합계 검증 행 (E 기준: 잎 합 vs 묶음)
+    const sumE = sumLeaves(cl,'E');
+    const ok = sumE === g.E;
+    const sumRow = `<div class="sumrow">
+      <div class="sum-lbl"><span class="chk ${ok?'ok':'bad'}">${ok?'✓':'!'}</span>
+        잎 합계 검증 <span class="${ok?'sum-ok':'sum-bad'}">${ok?'일치':'불일치'}</span></div>
+      <div class="num cell-mut c-d"></div>
+      <div class="num cell-mut c-a"></div>
+      <div class="num ${ok?'sum-ok':'sum-bad'} c-e">${won(sumE)} ${ok?'=':'≠'} ${won(g.E)}</div>
+      <div class="num"></div>
+    </div>`;
+
+    return `<div class="row" data-cl="${cl.id}">
+        <div class="cl-name">
+          <button class="twist ${isOpen?'open':''}" data-toggle="${cl.id}">▸</button>
+          ${cl.name}
+          <div class="cl-meta">${cl.metaGroup}</div>
+        </div>
+        <div class="num">${cell(g.D)}</div>
+        <div class="num c-a">${cell(g.A)}</div>
+        <div class="num">${cell(g.E)}</div>
+        <div class="num best">최저 <b>${won(min)}</b></div>
+      </div>
+      <div class="leaves ${isOpen?'show':''}" data-leaves="${cl.id}">
+        ${leafHtml}${sumRow}
+      </div>`;
+  }).join('');
+  document.getElementById('rows').innerHTML = html;
+  bindRowEvents();
+}
+
+function bindRowEvents(){
+  // 개별 펼침 토글
+  document.querySelectorAll('[data-toggle]').forEach(b=>{
+    b.onclick = ()=>{ const id=b.dataset.toggle; expanded[id]=!expanded[id]; renderRows(); };
+  });
+  // 드래그 재배치 (목업: 잎을 다른 클러스터로 옮기면 수동 태그로)
+  let dragEl=null;
+  document.querySelectorAll('.leaf-row').forEach(r=>{
+    r.addEventListener('dragstart',e=>{dragEl=r;r.classList.add('dragging');});
+    r.addEventListener('dragend',e=>{r.classList.remove('dragging');dragEl=null;});
+    r.addEventListener('dragover',e=>e.preventDefault());
+    r.addEventListener('drop',e=>{
+      e.preventDefault();
+      if(!dragEl||dragEl===r) return;
+      const sCl=dragEl.dataset.cl, sLf=+dragEl.dataset.leaf;
+      const tCl=r.dataset.cl;
+      // 목업: 다른 클러스터로 이동 시 수동 매칭 표시 + 데이터 이동
+      const src=DATA.clusters.find(c=>c.id===sCl);
+      const tgt=DATA.clusters.find(c=>c.id===tCl);
+      const [moved]=src.leaves.splice(sLf,1);
+      moved.match='manual';
+      tgt.leaves.push(moved);
+      expanded[sCl]=true; expanded[tCl]=true;
+      renderRows();
+    });
+  });
+}
+
+// 레벨 세그먼트: 전체 펼침/접힘
+document.querySelectorAll('#lvlSeg button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('#lvlSeg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    const all = b.dataset.lvl==='leaf';
+    DATA.clusters.forEach(c=> expanded[c.id]=all);
+    renderRows();
+  };
+});
+
+renderVendors();
+renderRows();
+</script>
+</body>
+</html>

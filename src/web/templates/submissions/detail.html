@@ -78,6 +78,61 @@
       </span>
       {% endif %}
       {% if has_role('manager') and sub.extraction_status == 'done' %}
+      <!-- 통화·환율 패널: 시작→기준(KRW) 쌍 명기, 역산확인/수동/미확인 구분 -->
+      <div class="w-full mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+        <div class="text-sm font-semibold text-blue-900 mb-2 break-ko">💱 통화·환율
+          <span class="text-xs font-normal text-blue-600">— 최종 비교 통화: KRW (환율 = 통화 → KRW)</span>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          {% for cur, info in fx_rates.items() %}
+          <form method="POST" action="{{ url_for('submissions.set_fx_rate', submission_id=sub.submission_id) }}"
+                onsubmit="return confirm('{{ cur }} → KRW 환율을 적용하면 해당 통화 항목의 원화가 재계산됩니다(견적서 원화 덮어쓰기). 계속하시겠습니까?')"
+                class="flex items-center gap-1.5 bg-white rounded-lg border px-2.5 py-1.5
+                       {{ 'border-red-300' if info.source == 'missing' else 'border-gray-200' }}">
+            <input type="hidden" name="currency" value="{{ cur }}">
+            <span class="text-xs font-bold text-gray-800">{{ cur }} → KRW</span>
+            <input type="text" name="rate" value="{{ '{:,.2f}'.format(info.rate) if info.rate else '' }}"
+                   placeholder="환율 입력" style="width:90px"
+                   class="text-xs border rounded px-1.5 py-0.5 text-right">
+            {% if info.source == 'extracted' %}
+            <span class="text-[10px] font-bold text-green-700 bg-green-100 rounded-full px-1.5 py-0.5">✓ 역산확인</span>
+            {% elif info.source == 'manual' %}
+            <span class="text-[10px] font-bold text-amber-700 bg-amber-100 rounded-full px-1.5 py-0.5">✎ 수동</span>
+            {% else %}
+            <span class="text-[10px] font-bold text-red-700 bg-red-100 rounded-full px-1.5 py-0.5">⚠ 환율 미확인</span>
+            {% endif %}
+            <button type="submit" class="text-xs bg-blue-600 text-white rounded px-2 py-0.5 hover:bg-blue-700">적용</button>
+          </form>
+          {% if info.rate %}
+          <form method="POST" action="{{ url_for('submissions.remove_fx_rate', submission_id=sub.submission_id) }}"
+                onsubmit="return confirm('{{ cur }} 환율을 삭제하면 해당 통화 항목이 원통화(미환산) 상태로 되돌아갑니다. 계속하시겠습니까?')"
+                style="display:inline">
+            <input type="hidden" name="currency" value="{{ cur }}">
+            <button type="submit" title="환율 삭제"
+                    class="text-xs text-red-500 hover:text-red-700 px-1" style="margin-left:-4px">🗑</button>
+          </form>
+          {% endif %}
+          {% endfor %}
+          <!-- 통화 직접 추가: 통화가 감지되지 않은 견적서도 환율 명기 가능 -->
+          <form method="POST" action="{{ url_for('submissions.set_fx_rate', submission_id=sub.submission_id) }}"
+                onsubmit="return confirm('입력한 통화 → KRW 환율을 적용합니다. 해당 통화 항목이 있으면 원화가 재계산됩니다. 계속하시겠습니까?')"
+                class="flex items-center gap-1.5 bg-white rounded-lg border border-dashed border-blue-300 px-2.5 py-1.5">
+            <input type="text" name="currency" placeholder="통화 (예: USD)" maxlength="5"
+                   style="width:80px" class="text-xs border rounded px-1.5 py-0.5 uppercase"
+                   oninput="this.value=this.value.toUpperCase()">
+            <span class="text-xs font-bold text-gray-500">→ KRW</span>
+            <input type="text" name="rate" placeholder="환율 입력" style="width:90px"
+                   class="text-xs border rounded px-1.5 py-0.5 text-right">
+            <button type="submit" class="text-xs bg-blue-500 text-white rounded px-2 py-0.5 hover:bg-blue-600">+ 추가</button>
+          </form>
+        </div>
+        <div class="text-[11px] text-blue-700 mt-1.5 break-ko">
+          ✓ 역산확인 = 견적서의 통화·원화에서 자동 산출 · ⚠ 미확인 통화는 환율 입력 시 원화로 확정됩니다.
+          {% if not fx_rates %}감지된 외화가 없습니다 — 필요 시 통화를 직접 추가해 환율을 명기하세요.{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% if has_role('manager') and sub.extraction_status == 'done' %}
       <!-- 도메인 분류 정합 검증 게이트 (층위 2) -->
       <div id="catBindGate" style="display:none"
            class="w-full mb-3 rounded-lg border p-3 text-sm break-ko">
@@ -581,12 +636,10 @@ function deleteItem(itemId, btn) {
     headers: {'X-Requested-With': 'XMLHttpRequest'}
   }).then(r => r.json()).then(d => {
     if (d.ok) {
-      // 라인 아이템 행 제거
-      if (btn) { const tr = btn.closest('tr'); if (tr) tr.remove(); }
-      // 트리도 갱신 (다시 그리기)
-      if (typeof TREE_DATA !== 'undefined' && typeof rebuildTree === 'function') {
-        location.reload();  // 트리/금액 재계산 위해 새로고침
-      }
+      // 삭제 성공 → 트리·금액·소계 재계산을 위해 항상 새로고침.
+      // (btn 유무와 무관: 비교 트리 삭제는 btn=null로 호출되므로
+      //  행 제거만으로는 트리가 갱신되지 않는다.)
+      location.reload();
     } else {
       alert('삭제 실패');
     }
@@ -739,6 +792,20 @@ function renderNode(node, container, depth) {
   right.style.fontWeight = node.is_leaf ? '400' : '600';
   right.style.color = node.is_leaf ? '#374151' : '#111827';
   right.textContent = wonKR(node.amount);
+  // 잎(품목)이고 단가가 있으면 금액 앞에 "단가 × 수량" 표기.
+  // 환율 적용 시 단가가 원화로 환산돼 저장되므로 여기에 그대로 노출된다.
+  let rightNode = right;
+  if (node.is_leaf && node.leaf_data && node.leaf_data.unit_price) {
+    const up = node.leaf_data.unit_price, q = node.leaf_data.qty;
+    const unitTxt = document.createElement('span');
+    unitTxt.style.cssText = 'color:#6b7280;font-size:12px;margin-right:10px;';
+    unitTxt.textContent = wonKR(up) + (q ? ' × ' + q : '');
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;';
+    wrap.appendChild(unitTxt);
+    wrap.appendChild(right);
+    rightNode = wrap;
+  }
 
   row.appendChild(left);
   // 잎(품목)이면 삭제 버튼 (manager만)
@@ -748,7 +815,7 @@ function renderNode(node, container, depth) {
     rightWrap.style.display = 'flex';
     rightWrap.style.alignItems = 'center';
     rightWrap.style.gap = '10px';
-    rightWrap.appendChild(right);
+    rightWrap.appendChild(rightNode);
     const del = document.createElement('button');
     del.textContent = '✕';
     del.title = '이 항목 삭제';
@@ -759,10 +826,10 @@ function renderNode(node, container, depth) {
     rightWrap.appendChild(del);
     row.appendChild(rightWrap);
   } else {
-    row.appendChild(right);
+    row.appendChild(rightNode);
   }
   {% else %}
-  row.appendChild(right);
+  row.appendChild(rightNode);
   {% endif %}
   if (!node.is_leaf) {
     row.onclick = function(){ treeOpen[node.path] = !treeOpen[node.path]; renderTree(); };

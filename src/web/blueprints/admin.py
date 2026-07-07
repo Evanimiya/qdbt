@@ -95,7 +95,7 @@ def categories():
 @require_role("manager")
 def category_new():
     name   = request.form.get("name", "").strip()
-    domain = request.form.get("domain", "IT").strip() or "IT"
+    domain = request.form.get("domain", "공통").strip() or "공통"
     try:
         sort_order = int(request.form.get("sort_order", "0") or 0)
     except ValueError:

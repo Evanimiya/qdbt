@@ -110,72 +110,8 @@ def generate_bid_report(bid, data: dict) -> Path:
     for i in range(2, n_v+2):
         ws.column_dimensions[get_column_letter(i)].width = 16
 
-    # ─── 시트 2~N: 카테고리별 항목 비교 ─────────────
-    for cat, rows in data["categories"].items():
-        ws2 = wb.create_sheet(cat[:20])
-        ws2.merge_cells(f"A1:{get_column_letter(n_v+3)}1")
-        ws2["A1"] = f"{cat}  상세 비교"
-        ws2["A1"].font  = Font(name="맑은 고딕", size=12, bold=True, color="FFFFFF")
-        ws2["A1"].fill  = BLUE
-        ws2["A1"].alignment = C
-        ws2.row_dimensions[1].height = 24
 
-        # 헤더
-        hdr_row = 3
-        _h(ws2.cell(hdr_row, 1), "품명",   align=L)
-        _h(ws2.cell(hdr_row, 2), "규격",   align=L)
-        _h(ws2.cell(hdr_row, 3), "단위",   align=C)
-        for col, v in enumerate(vendors, start=4):
-            _h(ws2.cell(hdr_row, col), v, align=C)
-        _h(ws2.cell(hdr_row, n_v+4), "최저가 업체", align=C)
-        _h(ws2.cell(hdr_row, n_v+5), "최고/최저",   align=C)
-        ws2.row_dimensions[hdr_row].height = 22
-
-        for i, row_data in enumerate(rows, start=1):
-            r = hdr_row + i
-            _d(ws2.cell(r, 1), row_data["name"], font=NF)
-            _d(ws2.cell(r, 2), row_data.get("spec") or "", font=SF, align=L)
-            _d(ws2.cell(r, 3), row_data.get("unit") or "", font=SF, align=C)
-
-            prices = []
-            for col, v in enumerate(vendors, start=4):
-                p = row_data["prices"].get(v)
-                _d(ws2.cell(r, col), p, align=R, fmt="#,##0")
-                if p:
-                    prices.append((p, col))
-
-            # 조건부 서식 (최저 녹색 / 최고 빨강)
-            rng = f"{get_column_letter(4)}{r}:{get_column_letter(n_v+3)}{r}"
-            gr = DifferentialStyle(fill=PatternFill("solid", start_color="C6EFCE"))
-            rd = DifferentialStyle(fill=PatternFill("solid", start_color="FFC7CE"))
-            ws2.conditional_formatting.add(rng,
-                Rule("expression", formula=[f"AND({get_column_letter(4)}{r}=MIN(${get_column_letter(4)}${r}:${get_column_letter(n_v+3)}${r}),{get_column_letter(4)}{r}>0)"], dxf=gr))
-            ws2.conditional_formatting.add(rng,
-                Rule("expression", formula=[f"AND({get_column_letter(4)}{r}=MAX(${get_column_letter(4)}${r}:${get_column_letter(n_v+3)}${r}),{get_column_letter(4)}{r}>0)"], dxf=rd))
-
-            # 최저가 업체
-            if prices:
-                min_p, min_col = min(prices, key=lambda x: x[0])
-                # 헤더에서 업체명 찾기
-                _d(ws2.cell(r, n_v+4), vendors[min_col-4], align=C, font=SF)
-                max_p = max(prices, key=lambda x: x[0])[0]
-                if min_p > 0:
-                    ws2.cell(r, n_v+5).value = f"=MAX({get_column_letter(4)}{r}:{get_column_letter(n_v+3)}{r})/MIN({get_column_letter(4)}{r}:{get_column_letter(n_v+3)}{r})"
-                    ws2.cell(r, n_v+5).number_format = '0.00"x"'
-                    ws2.cell(r, n_v+5).font = SF
-                    ws2.cell(r, n_v+5).alignment = C
-                    ws2.cell(r, n_v+5).border = BOX
-
-        ws2.column_dimensions["A"].width = 28
-        ws2.column_dimensions["B"].width = 18
-        ws2.column_dimensions["C"].width = 6
-        for col in range(4, n_v+4):
-            ws2.column_dimensions[get_column_letter(col)].width = 14
-        ws2.column_dimensions[get_column_letter(n_v+4)].width = 12
-        ws2.column_dimensions[get_column_letter(n_v+5)].width = 8
-        ws2.freeze_panes = f"D{hdr_row+1}"
-
-    # ─── 시트 N+1: 클러스터 세부 항목 ───────────────
+    # ─── 시트 2: 클러스터 세부 항목 ─────────────────
     clusters = data.get("clusters", [])
     if clusters:
         wsc = wb.create_sheet("클러스터")
@@ -229,11 +165,13 @@ def generate_bid_report(bid, data: dict) -> Path:
                 prices = []
                 for col, v in enumerate(vendors, start=4):
                     cell_data = grp.get("cells", {}).get(v)
-                    up = cell_data["unit_price"] if cell_data else None
-                    _d(wsc.cell(r, col), up, align=R, fmt="#,##0")
+                    # [버그수정] 비교는 금액(amount) 기준. 단가(unit_price)가 아니라
+                    # amount를 셀에 넣는다. (화면 비교표도 금액을 비교)
+                    amt = cell_data["amount"] if cell_data else None
+                    _d(wsc.cell(r, col), amt, align=R, fmt="#,##0")
                     wsc.cell(r, col).fill = cl_fill
-                    if up:
-                        prices.append((up, col, v))
+                    if amt:
+                        prices.append((amt, col, v))
 
                 # 최저가 녹색 강조
                 if prices:
@@ -265,6 +203,71 @@ def generate_bid_report(bid, data: dict) -> Path:
             wsc.column_dimensions[get_column_letter(col)].width = 14
         wsc.column_dimensions[get_column_letter(n_v+4)].width = 12
         wsc.freeze_panes = f"D{hdr+1}"
+
+    # ─── 시트 3~N: 업체별 세부 데이터 (각 업체 별도 탭, 테이블 구조) ───
+    # 트리가 아니라 전체 항목을 평면 테이블로. 헤더(소계)행 포함 전체 표시.
+    for vd in data.get("vendor_details", []):
+        vname = vd.get("vendor_name") or "업체"
+        # 탭 이름은 31자 제한·중복 방지
+        base_title = vname[:28]
+        title = base_title
+        _dup = 1
+        while title in wb.sheetnames:
+            _dup += 1
+            title = f"{base_title[:26]}_{_dup}"
+        wsv = wb.create_sheet(title)
+
+        ncol = 7  # 번호·분류·품명·규격·수량·단가·금액
+        wsv.merge_cells(f"A1:{get_column_letter(ncol)}1")
+        wsv["A1"] = f"{vname}  세부 내역  —  {bid['project_name']} / {bid['name']}"
+        wsv["A1"].font = Font(name="맑은 고딕", size=12, bold=True, color="FFFFFF")
+        wsv["A1"].fill = NAVY
+        wsv["A1"].alignment = C
+        wsv.row_dimensions[1].height = 24
+
+        # 공급가액 표기
+        sub_amt = vd.get("subtotal")
+        wsv["A2"] = "공급가액(원):"
+        wsv["A2"].font = SF
+        wsv["B2"] = sub_amt or 0
+        wsv["B2"].number_format = "#,##0"
+        wsv["B2"].font = BF
+
+        hdr = 4
+        headers = ["번호", "분류", "품명", "규격", "수량", "단가(원)", "금액(원)"]
+        for col, htext in enumerate(headers, start=1):
+            _h(wsv.cell(hdr, col), htext, fill=NAVY,
+               align=(L if htext in ("품명", "규격") else C))
+        wsv.row_dimensions[hdr].height = 22
+
+        r = hdr
+        for it in vd.get("items", []):
+            r += 1
+            is_header = it.get("is_header")
+            _d(wsv.cell(r, 1), it.get("line_no"), align=C, font=SF)
+            _d(wsv.cell(r, 2), it.get("category") or "", align=C, font=SF)
+            # 품명: 헤더(소계)행은 굵게
+            cell_nm = wsv.cell(r, 3)
+            cell_nm.value = it.get("name_normalized") or it.get("name_raw") or ""
+            cell_nm.font = BF if is_header else NF
+            cell_nm.alignment = L
+            cell_nm.border = BOX
+            _d(wsv.cell(r, 4), it.get("spec") or "", align=L)
+            _d(wsv.cell(r, 5), it.get("quantity"), align=R, fmt="#,##0.##")
+            _d(wsv.cell(r, 6), it.get("unit_price"), align=R, fmt="#,##0")
+            cell_amt = wsv.cell(r, 7)
+            _d(cell_amt, it.get("amount"), align=R, fmt="#,##0")
+            cell_amt.font = BF if is_header else NF
+            # 헤더(소계)행 음영
+            if is_header:
+                for col in range(1, ncol + 1):
+                    wsv.cell(r, col).fill = PatternFill("solid", start_color="EEF2F7")
+
+        # 열 너비
+        widths = [6, 12, 30, 20, 8, 14, 16]
+        for col, w in enumerate(widths, start=1):
+            wsv.column_dimensions[get_column_letter(col)].width = w
+        wsv.freeze_panes = f"A{hdr+1}"
 
     # ─── 저장 ──────────────────────────────────────
     safe_name = bid['name'].replace("/", "_").replace("\\", "_")
