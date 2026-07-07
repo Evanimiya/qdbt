@@ -5,6 +5,12 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 버전은 [유의적 버전(SemVer)](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.9.88] - 2026-07-07
+
+### Fixed
+- 업체별 비교에서 클러스터 다수결 분류로 인해 자재 품목이 인건비로 표시되던 문제 완화 (분류 섞인 클러스터에 ⚠분류혼재 경고 배지·분포 툴팁 추가, 개별 항목은 원본 분류 존중)
+- price_history project_name NULL 저장 (accept_cluster projects 조인 누락 — 맥북 Claude Code 정본 반영)
+
 ## [0.9.87] - 2026-07-07
 
 ### Fixed
