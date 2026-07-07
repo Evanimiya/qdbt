@@ -1025,11 +1025,13 @@ def accept_cluster(conn, cluster_id: str, user_id: str,
                si.name_raw, si.name_normalized, si.category,
                si.unit_price, si.quantity, si.amount,
                s.vendor_name, s.submission_id,
-               b.bid_id, b.due_date
+               b.bid_id, b.due_date,
+               p.name as project_name
         FROM catalog_cluster_members cm
         JOIN submission_items si ON cm.catalog_item_id = si.item_id
         JOIN submissions s ON si.submission_id = s.submission_id
         JOIN bids b ON s.bid_id = b.bid_id
+        LEFT JOIN projects p ON b.project_id = p.project_id
         WHERE cm.cluster_id = ?
     """, (cluster_id,)).fetchall()
 
@@ -1131,11 +1133,11 @@ def accept_cluster(conn, cluster_id: str, user_id: str,
         conn.execute("""
             INSERT INTO price_history
                 (record_id, catalog_item_id, submission_id, item_id,
-                 vendor_name, unit_price, quantity, amount, bid_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 vendor_name, unit_price, quantity, amount, bid_date, project_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (str(uuid.uuid4()), catalog_item_id, m["submission_id"],
               m["item_id"], m["vendor_name"], m["unit_price"], m["quantity"],
-              m["amount"], bid_date))
+              m["amount"], bid_date, m["project_name"]))
         ph_count += 1
 
     # ── ⑧ 클러스터에 catalog_item_id 저장 ────────
