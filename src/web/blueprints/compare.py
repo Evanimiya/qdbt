@@ -249,8 +249,39 @@ def bid_compare(bid_id):
             present.add(cl["cat"])
     dict_categories = category_order_for_bid(bid_id, present_cats=present)
 
+    # 기준통화(입찰별 선택, 기본 KRW) + 업체별 통화 환율 맵 (요약 환산용)
+    import json as _fxjson, sqlite3 as _sq3
+    data["base_currency"] = (dict(bid).get("base_currency") or "KRW").upper()
+    vendor_fx, cur_set = {}, set()
+    _c = _db_connect(); _c.row_factory = _sq3.Row
+    try:
+        for r in _c.execute("""SELECT vendor_name, fx_rates FROM submissions
+                               WHERE bid_id = ? AND extraction_status = 'done'
+                                 AND (deleted_at IS NULL)""", (bid_id,)):
+            try:
+                m = _fxjson.loads(dict(r).get("fx_rates") or "{}")
+            except Exception:
+                m = {}
+            vendor_fx[dict(r)["vendor_name"]] = m
+            cur_set.update(k for k, v in m.items() if v.get("rate"))
+    finally:
+        _c.close()
+    data["vendor_fx"] = vendor_fx
+    data["available_currencies"] = ["KRW"] + sorted(cur_set)
+
     return render_template("compare/bid.html", bid=bid, data=data,
                            dict_categories=dict_categories)
+
+
+@bp.route("/bid/<bid_id>/base-currency", methods=["POST"])
+def set_base_currency_route(bid_id):
+    """입찰의 최종 비교 기준통화 설정 (KRW 기본, USD 등 선택)."""
+    from flask import g
+    from db.queries import set_bid_base_currency
+    tok = getattr(g, "auth_token", "") or ""
+    cur = set_bid_base_currency(bid_id, request.form.get("base_currency", "KRW"))
+    flash(f"✅ 비교 기준통화: {cur}", "success")
+    return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
 
 @bp.route("/bid/<bid_id>/excel")
@@ -265,6 +296,20 @@ def bid_excel(bid_id):
     if not data["vendors"]:
         flash("비교할 데이터가 없습니다.", "error")
         return redirect(url_for("compare.bid_compare", bid_id=bid_id))
+
+    # 업체별 세부 데이터 추가 (엑셀 세부 탭용): 각 업체의 전체 항목을 테이블로
+    from db.queries import list_submissions, get_items
+    vendor_details = []
+    for sub in list_submissions(bid_id):
+        sd = dict(sub)
+        items = [dict(it) for it in get_items(sd["submission_id"], headers=True)]
+        vendor_details.append({
+            "vendor_name": sd.get("vendor_name"),
+            "submission_id": sd["submission_id"],
+            "subtotal": sd.get("subtotal_excl_vat"),
+            "items": items,
+        })
+    data["vendor_details"] = vendor_details
 
     try:
         from reports.excel_report import generate_bid_report
@@ -563,6 +608,65 @@ def move_clusters_to_category(bid_id):
         flash(msg, "success")
     if errors:
         flash(f"⚠️ {len(errors)}건 실패: {errors[0]}", "error")
+    return _redirect()
+
+
+@bp.route("/bid/<bid_id>/items/move-category", methods=["POST"])
+def move_items_to_category(bid_id):
+    """선택한 개별 항목(submission_item)을 다른 분류로 직접 이동.
+
+    클러스터를 매개하지 않으므로, 클러스터링 전 항목·미분류 항목도 이동 가능하다.
+    (기존 이동은 클러스터 단위만 지원해, 개별 항목 분류 이동이 불가능하던 문제 해소)
+    item_ids_json에 submission_items.item_id 목록, category에 대상 분류명.
+    """
+    import json as _json
+    from flask import g
+    import sqlite3
+    tok = getattr(g, "auth_token", "") or ""
+    new_cat = request.form.get("category", "").strip()
+
+    def _redirect():
+        return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
+
+    if not new_cat:
+        flash("이동할 분류를 선택하세요.", "error")
+        return _redirect()
+    try:
+        item_ids = [i for i in _json.loads(request.form.get("item_ids_json", "[]")) if i]
+    except Exception:
+        item_ids = []
+    if not item_ids:
+        flash("이동할 항목을 선택하세요. (셀 클릭으로 개별 선택)", "error")
+        return _redirect()
+
+    conn = _db_connect()
+    conn.row_factory = sqlite3.Row
+    try:
+        placeholders = ",".join("?" * len(item_ids))
+        # 안전: 해당 입찰 소속 항목만 변경 (타 입찰 항목 오변경 방지)
+        n = conn.execute(f"""
+            UPDATE submission_items SET category = ?
+            WHERE item_id IN ({placeholders})
+              AND submission_id IN (SELECT submission_id FROM submissions WHERE bid_id = ?)
+        """, (new_cat, *item_ids, bid_id)).rowcount
+        # 확정 클러스터에 속한 항목이면 카탈로그 분류도 동기화 (있을 때만)
+        conn.execute(f"""
+            UPDATE catalog_items
+               SET category_id = (SELECT category_id FROM catalog_categories
+                                   WHERE name = ? LIMIT 1)
+             WHERE catalog_item_id IN (
+                     SELECT catalog_item_id FROM item_match
+                      WHERE item_id IN ({placeholders}) AND catalog_item_id IS NOT NULL
+                        AND version = 0
+                   )
+               AND EXISTS (SELECT 1 FROM catalog_categories WHERE name = ?)
+        """, (new_cat, *item_ids, new_cat))
+        conn.commit()
+        flash(f"✅ {n}개 항목을 '{new_cat}' 분류로 이동했습니다.", "success")
+    except Exception as e:
+        flash(f"❌ 항목 분류 이동 실패: {e}", "error")
+    finally:
+        conn.close()
     return _redirect()
 
 
@@ -941,12 +1045,16 @@ def exclude_items_from_cluster(bid_id):
             DELETE FROM catalog_cluster_members
             WHERE catalog_item_id IN ({placeholders})
         """, item_ids)
-        # submission_items의 match_status도 해제 (NOT NULL이므로 'unmatched'으로)
-        conn.execute(f"""
-            UPDATE submission_items
-            SET catalog_item_id = NULL, match_status = 'unmatched'
-            WHERE item_id IN ({placeholders})
-        """, item_ids)
+        # 매칭 해제 (item_match, 원본 submission_items 불변)
+        import datetime as _dtmod
+        for _iid in item_ids:
+            conn.execute("""
+                INSERT INTO item_match (item_id, catalog_item_id, match_status, version, updated_at)
+                VALUES (?, NULL, 'unmatched', 0, ?)
+                ON CONFLICT(item_id, version) DO UPDATE SET
+                    catalog_item_id = NULL, match_status = 'unmatched',
+                    updated_at = excluded.updated_at
+            """, (_iid, _dtmod.datetime.now().isoformat()))
         conn.commit()
         conn.close()
         flash(f"✅ {len(item_ids)}개 항목을 미분류로 제외했습니다.", "success")

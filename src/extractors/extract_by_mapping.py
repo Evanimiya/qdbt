@@ -295,7 +295,9 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
 
         if currency != "KRW":
             # 외화 항목: 원본 통화값 보존 + 원화 확정값 산출
-            item["unit_price_orig"] = price_cur          # 원본 통화 단가
+            # [T2] 원통화 값을 항상 보존 — 나중 환율 수정 시 역산 복원(누적 오차) 회피.
+            item["unit_price_orig"] = price_cur          # 원본 통화 단가(없으면 None)
+            item["amount_orig"] = amt_cur                # 원본 통화 금액(단가 없는 행 대비)
             item["unit_price_currency_in_source"] = currency
             item["fx_rate_used"] = fx
             # 원화 확정: 견적서 원화열 우선, 없으면 통화×환율

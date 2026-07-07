@@ -27,9 +27,9 @@ def new_project():
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         desc = request.form.get("description", "").strip()
-        domain = request.form.get("domain", "").strip() or (domains[0] if domains else "IT")
+        domain = request.form.get("domain", "").strip() or (domains[0] if domains else "공통")
         if domain not in domains:
-            domain = domains[0] if domains else "IT"
+            domain = domains[0] if domains else "공통"
         if not name:
             flash("프로젝트명을 입력하세요.", "error")
             return render_template("projects/form.html", domains=domains)
@@ -50,7 +50,7 @@ def detail(project_id):
         abort(404)
     bids = list_bids(project_id)
     # 기준정보: 이 프로젝트 도메인의 항목(공통 + 도메인 전용)만
-    _pdomain = (dict(project).get("domain")) or "IT"
+    _pdomain = (dict(project).get("domain")) or "공통"
     attr_defs = [dict(d) for d in list_attr_defs(domain=_pdomain)]
     attrs = get_project_attrs(project_id)
     attr_options = {d["attr_key"]: attr_value_options(d["attr_key"])
@@ -76,7 +76,7 @@ def save_attrs(project_id):
         update_project_domain(project_id, new_domain)
         eff_domain = new_domain
     else:
-        eff_domain = (dict(project).get("domain")) or "IT"
+        eff_domain = (dict(project).get("domain")) or "공통"
     values = {d["attr_key"]: request.form.get(f"attr_{d['attr_key']}", "")
               for d in list_attr_defs(domain=eff_domain)}
     set_project_attrs(project_id, values)
@@ -93,7 +93,7 @@ def new_bid(project_id):
         abort(404)
     domains = list_domain_names()
     # 프로젝트 기본 도메인 → 입찰 도메인의 디폴트로 승계
-    project_domain = (dict(project).get("domain")) or (domains[0] if domains else "IT")
+    project_domain = (dict(project).get("domain")) or (domains[0] if domains else "공통")
 
     if request.method == "POST":
         name     = request.form.get("name", "").strip()

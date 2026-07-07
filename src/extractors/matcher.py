@@ -149,21 +149,12 @@ def save_match_suggestions(conn, matches: list):
     match_status = 'suggested'
     """
     from datetime import datetime
+    from db.queries import _im_upsert
     for m in matches:
-        conn.execute("""
-            UPDATE submission_items
-            SET catalog_item_id = ?,
-                match_confidence = ?,
-                match_status = ?,
-                match_note = ?
-            WHERE item_id = ?
-        """, (
-            m.get("catalog_item_id"),
-            m.get("confidence", 0),
-            "suggested" if m.get("catalog_item_id") else "unmatched",
-            m.get("reason", ""),
-            m["item_id"],
-        ))
+        # 매칭 결과를 item_match에 저장 (원본 submission_items 불변)
+        _im_upsert(conn, m["item_id"], m.get("catalog_item_id"),
+                   "suggested" if m.get("catalog_item_id") else "unmatched",
+                   confidence=m.get("confidence", 0), note=m.get("reason", ""))
     conn.commit()
 
 
@@ -175,11 +166,9 @@ def confirm_match(conn, item_id: str, catalog_item_id: str | None,
     확정 시 price_history 자동 생성.
     """
     status = "confirmed" if catalog_item_id else "unmatched"
-    conn.execute("""
-        UPDATE submission_items
-        SET catalog_item_id = ?, match_status = ?
-        WHERE item_id = ?
-    """, (catalog_item_id, status, item_id))
+    from db.queries import _im_upsert
+    # 매칭 확정을 item_match에 저장 (원본 submission_items 불변)
+    _im_upsert(conn, item_id, catalog_item_id, status)
 
     # price_history 생성 (매칭 확정 시만)
     if catalog_item_id:

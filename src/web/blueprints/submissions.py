@@ -180,7 +180,23 @@ def detail(submission_id):
     except Exception:
         prev_sheets = []
 
+    # 통화·환율 패널: 통화별 환율 맵 (extracted/manual/missing)
+    # 패치 이전에 추출된 제출서는 fx_rates 미계산(NULL) → 진입 시 1회 백필(idempotent)
+    try:
+        fx_rates = _json.loads(dict(sub).get("fx_rates") or "{}")
+    except Exception:
+        fx_rates = {}
+    if not fx_rates and dict(sub).get("extraction_status") == "done":
+        from db.queries import recompute_subtotal
+        recompute_subtotal(submission_id)
+        sub = get_submission(submission_id)
+        try:
+            fx_rates = _json.loads(dict(sub).get("fx_rates") or "{}")
+        except Exception:
+            fx_rates = {}
+
     return render_template("submissions/detail.html", sub=sub, items=items,
+                           fx_rates=fx_rates,
                            sheet_list=sheet_list, prev_sheets=prev_sheets,
                            grouped=grouped, compare_level=level,
                            tree_json=_json.dumps(tree_data, ensure_ascii=False),
@@ -443,9 +459,40 @@ def extract(submission_id):
     return redirect(url_for("submissions.detail", submission_id=submission_id, _t=tok))
 
 
-@bp.route("/<submission_id>/cancel", methods=["POST"])
+@bp.route("/<submission_id>/fx-rate", methods=["POST"])
 @require_role("manager")
-def cancel_extraction(submission_id):
+def set_fx_rate(submission_id):
+    """통화별 환율 수동 설정 → 해당 통화 항목 원화 재계산 (통화→KRW 쌍 명기).
+
+    확정 정책: 수정 환율로 재계산(견적서 원화 덮어쓰기). 원통화(unit_price_orig)
+    가 보존되므로 재추출 없이 환율만 교정 가능.
+    """
+    from db.queries import set_submission_fx_rate
+    currency = request.form.get("currency", "").strip().upper()
+    rate_raw = request.form.get("rate", "").strip().replace(",", "")
+    try:
+        rate = float(rate_raw)
+        r = set_submission_fx_rate(submission_id, currency, rate)
+        flash(f"✅ 환율 적용: {r['currency']} → KRW = {r['rate']:,.2f} "
+              f"({r['items_updated']}개 항목 원화 재계산)", "success")
+    except Exception as e:
+        flash(f"❌ 환율 설정 실패: {e}", "error")
+    return redirect(url_for("submissions.detail", submission_id=submission_id))
+
+
+@bp.route("/<submission_id>/fx-rate/remove", methods=["POST"])
+@require_role("manager")
+def remove_fx_rate(submission_id):
+    """통화 환율 삭제 → 미확인 상태로 되돌림 (원통화 환산 취소)."""
+    from db.queries import remove_submission_fx_rate
+    currency = request.form.get("currency", "").strip().upper()
+    try:
+        r = remove_submission_fx_rate(submission_id, currency)
+        flash(f"🗑 {r['currency']} 환율을 삭제했습니다 "
+              f"({r['items_reverted']}개 항목 원통화로 복귀).", "success")
+    except Exception as e:
+        flash(f"❌ 환율 삭제 실패: {e}", "error")
+    return redirect(url_for("submissions.detail", submission_id=submission_id))
     """진행 중인 추출을 중지(취소) 표시.
 
     실제 백그라운드 작업을 강제 종료하진 못하지만, 상태를 'failed'로
@@ -646,6 +693,8 @@ def delete(submission_id):
     # FK 자식 레코드 먼저 삭제 (price_history, catalog_suggestions → submission_items 참조)
     conn.execute("DELETE FROM price_history WHERE submission_id=?", (submission_id,))
     conn.execute("DELETE FROM catalog_suggestions WHERE submission_id=?", (submission_id,))
+    conn.execute("""DELETE FROM item_match WHERE item_id IN (
+        SELECT item_id FROM submission_items WHERE submission_id=?)""", (submission_id,))
     conn.execute("DELETE FROM submission_items WHERE submission_id=?", (submission_id,))
     conn.execute("DELETE FROM submissions WHERE submission_id=?", (submission_id,))
     conn.commit()
@@ -731,7 +780,7 @@ def column_map(submission_id):
     # 도메인 분류 바인딩: 대분류(cat1)를 도메인 표준 분류에 정합시키기 위한 참조.
     # 매핑 화면에서 대분류가 표준을 벗어나면 시각 경고(층위 1: 사전 바인딩).
     from db.queries import get_domain_category_binding
-    _domain = subd.get("bid_domain") or "IT"
+    _domain = subd.get("bid_domain") or "공통"
     _binding = get_domain_category_binding(_domain)
     domain_binding = {
         "domain": _domain,
@@ -788,7 +837,12 @@ def category_binding_apply(submission_id):
 @bp.route("/<submission_id>/map/extract", methods=["POST"])
 @require_role("manager")
 def column_map_extract(submission_id):
-    """확인된 열 매핑으로 코드 추출 실행 + 비교 단위 저장."""
+    """확인된 열 매핑으로 코드 추출 실행 + 비교 단위 저장.
+
+    [T6] 다중 시트 지원: payload에 sheets(시트별 매핑 배열)가 오면 각 시트를
+    개별 매핑으로 추출해 하나의 제출서로 누적 통합한다. 삭제는 1회, 삽입은 누적.
+    단일 sheet payload도 그대로 처리(하위 호환).
+    """
     import json as _json
     sub = get_submission(submission_id)
     if not sub:
@@ -797,48 +851,104 @@ def column_map_extract(submission_id):
     fpath = subd.get("file_path")
 
     payload = request.get_json(silent=True) or {}
-    sheet = payload.get("sheet")
-    # mapping: {"2":"cat1", ...} → {int: role}
-    mapping = {int(k): v for k, v in (payload.get("mapping") or {}).items()
-               if v and v != "ignore"}
-    header_row = int(payload.get("header_row") or 1)
-    compare_units = payload.get("compare_units") or []
-    excluded_rows = set(payload.get("excluded_rows") or [])
-    nego_rows = set(payload.get("nego_rows") or [])
+
+    # 시트별 매핑 목록 구성: 다중(sheets) 또는 단일(sheet) → 공통 형태로 정규화
+    sheet_specs = []
+    if payload.get("sheets"):
+        # 다중 시트: [{sheet, mapping, header_row, mount_path, compare_units,
+        #              excluded_rows, nego_rows}, ...]
+        for sp in payload["sheets"]:
+            sheet_specs.append({
+                "sheet": sp.get("sheet"),
+                "mapping": {int(k): v for k, v in (sp.get("mapping") or {}).items()
+                            if v and v != "ignore"},
+                "header_row": int(sp.get("header_row") or 1),
+                "mount_path": (sp.get("mount_path") or "").strip(),
+                "compare_units": sp.get("compare_units") or [],
+                "excluded_rows": set(sp.get("excluded_rows") or []),
+                "nego_rows": set(sp.get("nego_rows") or []),
+            })
+    else:
+        # 단일 시트 (하위 호환)
+        sheet_specs.append({
+            "sheet": payload.get("sheet"),
+            "mapping": {int(k): v for k, v in (payload.get("mapping") or {}).items()
+                        if v and v != "ignore"},
+            "header_row": int(payload.get("header_row") or 1),
+            "mount_path": "",
+            "compare_units": payload.get("compare_units") or [],
+            "excluded_rows": set(payload.get("excluded_rows") or []),
+            "nego_rows": set(payload.get("nego_rows") or []),
+        })
 
     from extractors.extract_by_mapping import extract_by_mapping
-    try:
-        result = extract_by_mapping(fpath, sheet, mapping, header_row,
-                                    excluded_rows=excluded_rows,
-                                    nego_rows=nego_rows)
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+    # 각 시트를 추출해 누적 (삽입 전에 모두 모음)
+    all_items = []
+    all_compare_units = []
+    extracted_sheet_names = []
+    sort_offset = 0
+    for spec in sheet_specs:
+        try:
+            result = extract_by_mapping(fpath, spec["sheet"], spec["mapping"],
+                                        spec["header_row"],
+                                        excluded_rows=spec["excluded_rows"],
+                                        nego_rows=spec["nego_rows"])
+        except Exception as e:
+            return jsonify({"ok": False,
+                            "error": f"[{spec['sheet']}] {type(e).__name__}: {e}"}), 200
+        sheet_items = result["items"]
+        # mount_path 접두: 이 시트 항목을 통합 트리의 특정 가지에 배치
+        mp = spec["mount_path"]
+        for it in sheet_items:
+            if mp:
+                cur_path = it.get("path") or it.get("parent_path", "")
+                it["path"] = f"{mp} > {cur_path}" if cur_path else mp
+            # sort_order는 삽입 시 enumerate로 부여되므로, 시트 순서 보존 위해 목록 순서 유지
+        all_items.extend(sheet_items)
+        all_compare_units.extend(spec["compare_units"])
+        extracted_sheet_names.append(spec["sheet"])
+        sort_offset += len(sheet_items)
 
-    items = result["items"]
-    # DB 저장 (기존 추출 항목 교체, 단 수기 nego는 보존)
+    # DB 저장: 삭제 1회(수기 nego 보존) + 누적 삽입 1회
     from db.queries import delete_submission_items, insert_items_bulk, get_items
     delete_submission_items(submission_id, keep_nego=True)
-    insert_items_bulk(submission_id, items)
+    insert_items_bulk(submission_id, all_items)
 
-    # 공급가액 = 잎(헤더/소계 제외) amount 합. 트리 합계와 동일 방식.
-    # special nego는 음수로 저장돼 있어 합산 시 자동 차감됨.
+    # 공급가액 = 잎(헤더/소계 제외) amount 합.
     leaf_items = get_items(submission_id, headers=False)
     subtotal = sum((dict(it).get("amount") or 0) for it in leaf_items)
 
-    # 비교 단위 + 추출 방식 + 매핑 설정 저장 (재진입 시 복원용)
+    # map_config v2: 시트별 매핑 보존 (재진입 복원용)
     map_config = {
-        "sheet": sheet,
-        "header_row": header_row,
-        "mapping": {str(k): v for k, v in mapping.items()},
-        "compare_units": compare_units,
-        "excluded_rows": sorted(excluded_rows),
-        "nego_rows": sorted(nego_rows),
+        "version": 2 if len(sheet_specs) > 1 else 1,
+        "sheets": {
+            spec["sheet"]: {
+                "mapping": {str(k): v for k, v in spec["mapping"].items()},
+                "header_row": spec["header_row"],
+                "mount_path": spec["mount_path"],
+                "compare_units": spec["compare_units"],
+                "excluded_rows": sorted(spec["excluded_rows"]),
+                "nego_rows": sorted(spec["nego_rows"]),
+            } for spec in sheet_specs
+        },
+        "sheet_order": extracted_sheet_names,
     }
+    # 단일 시트는 기존 평면 형태도 병기(하위 호환 복원)
+    if len(sheet_specs) == 1:
+        sp = sheet_specs[0]
+        map_config.update({
+            "sheet": sp["sheet"],
+            "header_row": sp["header_row"],
+            "mapping": {str(k): v for k, v in sp["mapping"].items()},
+            "compare_units": sp["compare_units"],
+            "excluded_rows": sorted(sp["excluded_rows"]),
+            "nego_rows": sorted(sp["nego_rows"]),
+        })
     update_submission(submission_id,
                       extraction_status="done",
                       subtotal_excl_vat=subtotal,
-                      compare_units=_json.dumps(compare_units, ensure_ascii=False),
-                      extracted_sheets=_json.dumps([sheet], ensure_ascii=False),
+                      compare_units=_json.dumps(all_compare_units, ensure_ascii=False),
+                      extracted_sheets=_json.dumps(extracted_sheet_names, ensure_ascii=False),
                       map_config=_json.dumps(map_config, ensure_ascii=False))
 
     # 추출 직후 도메인 분류 정합 검증 (층위 2: 검증 게이트).
@@ -853,7 +963,7 @@ def column_map_extract(submission_id):
     except Exception:
         binding_warn = {"unmatched": [], "n_unmatched_items": 0}
 
-    return jsonify({"ok": True, "n_items": len(items),
+    return jsonify({"ok": True, "n_items": len(all_items),
                     "binding_warn": binding_warn,
                     "redirect": url_for("submissions.detail", submission_id=submission_id)})
 
