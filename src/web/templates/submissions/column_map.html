@@ -48,11 +48,29 @@
         💡 소계·합계(subtotal)는 <b>행번호(R) 클릭</b>해 제외 · special nego는 <b>금액 클릭</b>해 차감(−)
       </span>
     </div>
+    {% if sheets|length > 1 %}
+    <div class="flex items-center gap-1.5 ml-auto">
+      <input type="text" id="mountPath" placeholder="배치 경로(선택, 예: 자재)"
+             style="width:150px" class="text-xs border border-gray-300 rounded-md px-2 py-1.5"
+             title="이 시트 항목을 통합 트리의 어느 상위 가지에 배치할지 (비우면 시트 그대로)">
+      <button onclick="addSheet()"
+              class="text-sm bg-slate-600 hover:bg-slate-700 text-white font-semibold px-3 py-1.5 rounded-lg break-ko"
+              title="이 시트 매핑을 통합 추출 목록에 추가">+ 이 시트 추가</button>
+      <button onclick="runExtract()"
+              class="text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-4 py-1.5 rounded-lg break-ko"
+              title="현재 시트만 단독 추출">단일 추출 →</button>
+    </div>
+    {% else %}
     <button onclick="runExtract()"
             class="ml-auto text-sm bg-blue-700 hover:bg-blue-800 text-white font-semibold px-4 py-1.5 rounded-lg break-ko">
       이 매핑으로 추출 →
     </button>
+    {% endif %}
   </div>
+  {% if sheets|length > 1 %}
+  <!-- 다중 시트 통합 추출: 추가된 시트 목록 -->
+  <div id="sheetListBox" class="mb-2 px-1"></div>
+  {% endif %}
   <!-- 합계·소계 자동 감지 안내 (동적) -->
   <div id="totalBanner" class="mx-4 mb-2 text-xs rounded-lg px-3 py-2 break-ko"
        style="display:none;background:#fffbeb;border:1px solid #fde68a;color:#92400e">
@@ -522,6 +540,83 @@ function delNego(itemId){
   fetch(`/submissions/${SUB_ID}/item/${itemId}/delete`, {
     method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}
   }).then(r=>r.json()).then(d=>{ if(d.ok) loadNego(); });
+}
+
+// ── 다중 시트 누적 추출 상태 ──
+// 시트별 매핑을 누적해 여러 시트를 한 제출서로 통합 추출 (백엔드 map_config v2).
+window.sheetConfigs = window.sheetConfigs || {};   // {시트명: {mapping, header_row, ...}}
+
+function currentSheetSpec(){
+  const m1 = {};
+  Object.entries(mapping).forEach(([c,r]) => { if(r && r!=='ignore') m1[parseInt(c)+1]=r; });
+  return {
+    sheet: SHEET,
+    mapping: m1,
+    header_row: headerRow,
+    mount_path: (document.getElementById('mountPath')?.value || '').trim(),
+    compare_units: collectCompareUnits(),
+    excluded_rows: Object.keys(excluded).map(Number),
+    nego_rows: Object.keys(nego).map(Number),
+  };
+}
+
+function validateSpec(spec){
+  const roles = Object.values(spec.mapping);
+  const hasCat = roles.some(r=>r.startsWith('cat') || r==='seq');
+  const hasName = roles.includes('name');
+  if(!hasCat && !hasName){ alert('분류 열(대/중/소/번호) 또는 품목명 열을 최소 1개 지정하세요.'); return false; }
+  if(!hasName && hasCat){ if(!confirm('품목명 열이 없습니다. 분류만으로 추출할까요?')) return false; }
+  return true;
+}
+
+function addSheet(){
+  const spec = currentSheetSpec();
+  if(!validateSpec(spec)) return;
+  window.sheetConfigs[spec.sheet] = spec;
+  renderSheetList();
+  alert(`[${spec.sheet}] 매핑을 추가했습니다. 다른 시트를 선택해 매핑하거나, "통합 추출"을 누르세요.`);
+}
+
+function removeSheet(name){
+  delete window.sheetConfigs[name];
+  renderSheetList();
+}
+
+function renderSheetList(){
+  const box = document.getElementById('sheetListBox');
+  if(!box) return;
+  const names = Object.keys(window.sheetConfigs);
+  if(names.length === 0){ box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="font-size:11px;color:#64748B;margin-bottom:4px">추가된 시트 (통합 추출 대상):</div>' +
+    names.map(n =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;background:#EEF2F7;
+        border:1px solid #CBD5E1;border-radius:8px;padding:2px 8px;margin:2px;font-size:11px">
+        📄 ${n}${window.sheetConfigs[n].mount_path ? ' → '+window.sheetConfigs[n].mount_path : ''}
+        <span onclick="removeSheet('${n.replace(/'/g,"\\'")}')" style="cursor:pointer;color:#DC2626;font-weight:700">×</span>
+      </span>`).join('') +
+    `<button onclick="runMultiExtract()" style="margin-left:8px;background:#0B3C5D;color:#fff;
+       border:0;border-radius:8px;padding:4px 12px;font-size:12px;font-weight:700;cursor:pointer">
+       ⤵ ${names.length}개 시트 통합 추출</button>`;
+}
+
+function runMultiExtract(){
+  // 현재 편집 중인 시트가 아직 추가 안 됐으면 포함할지 확인
+  const cur = SHEET;
+  if(!window.sheetConfigs[cur]){
+    if(confirm(`현재 시트 [${cur}]도 추가하고 통합 추출할까요?`)){
+      const spec = currentSheetSpec();
+      if(validateSpec(spec)) window.sheetConfigs[cur] = spec;
+    }
+  }
+  const sheets = Object.values(window.sheetConfigs);
+  if(sheets.length === 0){ alert('추가된 시트가 없습니다.'); return; }
+  fetch(`/submissions/${SUB_ID}/map/extract`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ sheets: sheets })
+  }).then(r=>r.json()).then(d=>{
+    if(d.ok){ alert(`통합 추출 완료: ${sheets.length}개 시트, ${d.n_items}개 항목`); location.href = d.redirect; }
+    else alert('추출 실패: ' + d.error);
+  }).catch(e=> alert('오류: '+e));
 }
 
 function runExtract(){

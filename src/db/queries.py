@@ -1641,10 +1641,17 @@ def compare_bid_submissions(bid_id):
             else:
                 min_vendor = min_price = max_vendor = max_price = None
 
-            # 클러스터 카테고리 — 멤버 다수결
+            # 클러스터 카테고리 — 대표(최빈) + 섞임 감지
+            # [분류 버그 대응] 다수결로 하나의 분류를 강제하면, 분류가 다른
+            # 소수派 품목(예: 자재)이 다수派 분류(인건비)로 잘못 표시된다.
+            # → 대표 분류는 정렬·배지용으로만 쓰고, 분류가 섞였으면 경고 플래그를
+            #   함께 넘겨 화면에서 개별 항목의 원본 분류를 존중하도록 한다.
             from collections import Counter
             cat_cnt = Counter(ci["category"] for ci in cluster_items if ci["category"])
             cl_cat  = cat_cnt.most_common(1)[0][0] if cat_cnt else "기타"
+            # 서로 다른 분류가 2종 이상이면 섞인 클러스터 (클러스터링 오류 신호)
+            cat_mixed = len(cat_cnt) > 1
+            cat_distribution = dict(cat_cnt)
 
             # 최저 업체의 대표 단가 (벤치마크 비교용 — amount와 단위 통일)
             min_unit_price = min(
@@ -1657,7 +1664,9 @@ def compare_bid_submissions(bid_id):
                 "cluster_id":          cl["cluster_id"],
                 "representative_name": cl["representative_name"],
                 "status":              cl["status"],
-                "cat":                 cl_cat,       # 카테고리 (정렬/배지용)
+                "cat":                 cl_cat,       # 대표 카테고리 (정렬/배지용)
+                "cat_mixed":           cat_mixed,    # 분류 섞임 여부 (경고 표시용)
+                "cat_distribution":    cat_distribution,  # 분류별 개수 {자재:1, 인건비:2}
                 "members":             cluster_items,
                 "groups":              groups,
                 "min_vendor":          min_vendor,

@@ -1,0 +1,211 @@
+erDiagram
+    users ||--o{ projects : "owns (owner_id)"
+    users ||--o{ bids : "creates (created_by)"
+    users ||--o{ submissions : "uploads/reviews"
+    users ||--o{ catalog_items : "creates"
+    users ||--o{ catalog_clusters : "reviews"
+    users ||--o{ catalog_suggestions : "reviews"
+    users ||--o{ bid_watchlist : "adds"
+
+    domains ||..o{ projects : "classifies (domain)"
+    domains ||..o{ bids : "classifies (domain)"
+
+    projects ||--o{ bids : "contains"
+    projects ||--o{ project_attrs : "has values"
+    project_attr_defs ||--o{ project_attrs : "defines"
+
+    bids ||--o{ submissions : "receives"
+    bids ||--o{ catalog_clusters : "groups within"
+    bids ||--o{ bid_watchlist : "watched in"
+
+    submissions ||--o{ submission_items : "extracted into"
+    submissions ||--o{ catalog_suggestions : "proposes"
+    submissions ||--o{ price_history : "records"
+
+    submission_items ||--o| catalog_items : "matched to (catalog_item_id)"
+    submission_items ||--o{ catalog_suggestions : "suggested from"
+    submission_items ||--o{ price_history : "snapshot of"
+
+    catalog_categories ||--o{ catalog_categories : "parent_id (self)"
+    catalog_categories ||--o{ catalog_items : "categorizes"
+
+    catalog_items ||--o{ catalog_cluster_members : "member of"
+    catalog_items ||--o{ price_history : "priced in"
+    catalog_items ||--o{ bid_watchlist : "watched"
+    catalog_clusters ||--o{ catalog_cluster_members : "contains"
+
+    users {
+        TEXT user_id PK
+        TEXT email
+        TEXT name
+        TEXT role "admin|manager|viewer"
+        TEXT password_hash
+        TEXT llm_provider "openai|gateway"
+        TEXT llm_model
+        TEXT llm_api_key_enc "encrypted"
+        TEXT llm_base_url
+        INTEGER llm_verify_ssl "SSL toggle (closed net)"
+        INTEGER is_active
+    }
+
+    domains {
+        TEXT domain_id PK
+        TEXT name "IT|설비|용역|..."
+        INTEGER is_active
+        INTEGER sort_order
+    }
+
+    projects {
+        TEXT project_id PK
+        TEXT name
+        TEXT owner_id FK
+        TEXT domain "project domain"
+        TEXT status
+    }
+
+    project_attr_defs {
+        TEXT attr_key PK
+        TEXT label
+        TEXT value_type
+        TEXT unit
+        TEXT domain "공통|domain-specific"
+        INTEGER sort_order
+        INTEGER is_active
+    }
+
+    project_attrs {
+        TEXT project_id PK,FK
+        TEXT attr_key PK,FK
+        TEXT value_text
+        REAL value_num
+    }
+
+    bids {
+        TEXT bid_id PK
+        TEXT project_id FK
+        TEXT name
+        DATE due_date
+        TEXT domain "bid domain"
+        TEXT status
+        TEXT category_order "JSON: per-bid category order"
+        TEXT created_by FK
+    }
+
+    submissions {
+        TEXT submission_id PK
+        TEXT bid_id FK
+        TEXT vendor_name
+        TEXT file_name
+        TEXT file_path
+        TEXT file_format "xlsx|pdf|docx"
+        TEXT currency
+        INTEGER has_usd_items
+        REAL fx_rate_used "representative FX"
+        REAL subtotal_excl_vat
+        TEXT extraction_status
+        INTEGER compare_level
+        TEXT compare_units "JSON: user-chosen unit paths"
+        TEXT map_config "JSON: column mapping"
+        TEXT uploaded_by FK
+        TEXT reviewed_by FK
+        TIMESTAMP deleted_at "soft delete"
+    }
+
+    submission_items {
+        TEXT item_id PK
+        TEXT submission_id FK
+        TEXT line_no
+        INTEGER sort_order
+        INTEGER depth
+        INTEGER is_header
+        INTEGER is_nego "special nego"
+        TEXT category
+        TEXT path "parent path (no leaf)"
+        TEXT name_raw
+        TEXT name_normalized "leaf name"
+        TEXT spec
+        REAL quantity
+        TEXT unit
+        REAL unit_price "KRW"
+        REAL unit_price_orig "source currency"
+        TEXT unit_price_currency
+        REAL fx_rate_used "per-item FX"
+        REAL amount "KRW"
+        TEXT catalog_item_id FK
+        TEXT match_status
+    }
+
+    catalog_categories {
+        TEXT category_id PK
+        TEXT name
+        TEXT domain
+        TEXT parent_id FK "self-ref"
+        INTEGER sort_order
+        TEXT aliases "JSON"
+        INTEGER is_active
+    }
+
+    catalog_items {
+        TEXT catalog_item_id PK
+        TEXT category_id FK
+        TEXT name_canonical
+        TEXT aliases "JSON: 영/한/약어"
+        TEXT canonical_path
+        INTEGER depth
+        TEXT observed_paths "JSON"
+        INTEGER is_active
+        TEXT created_by FK
+    }
+
+    catalog_clusters {
+        TEXT cluster_id PK
+        TEXT bid_id
+        TEXT representative_item_id
+        TEXT representative_name
+        TEXT compare_unit_path
+        INTEGER compare_level
+        TEXT status "pending|accepted|held|rejected"
+        TEXT similarity_summary
+        INTEGER display_order
+        TEXT reviewed_by FK
+    }
+
+    catalog_cluster_members {
+        TEXT cluster_id PK,FK
+        TEXT catalog_item_id PK
+        TEXT role "representative|member"
+        REAL similarity_score
+    }
+
+    catalog_suggestions {
+        TEXT suggestion_id PK
+        TEXT submission_id FK
+        TEXT item_id FK
+        TEXT suggestion_type
+        TEXT suggested_name
+        TEXT matched_catalog_item_id
+        REAL similarity_score
+        TEXT status
+        TEXT reviewed_by FK
+    }
+
+    price_history {
+        TEXT record_id PK
+        TEXT catalog_item_id FK
+        TEXT submission_id FK
+        TEXT item_id FK
+        TEXT vendor_name
+        DATE bid_date
+        REAL unit_price
+        REAL amount
+        TEXT item_path
+        TEXT compare_unit
+    }
+
+    bid_watchlist {
+        TEXT watchlist_id PK
+        TEXT bid_id FK
+        TEXT catalog_item_id
+        TEXT note
+        TEXT added_by FK
+    }

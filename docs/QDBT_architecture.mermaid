@@ -1,0 +1,65 @@
+flowchart TB
+    subgraph client["클라이언트 (브라우저)"]
+        UI["Jinja2 템플릿 · Tailwind CSS<br/>비교표 · 열 매핑 · 클러스터 관리"]
+    end
+
+    subgraph app["애플리케이션 계층 (Flask)"]
+        direction TB
+        entry["main.py → create_app()<br/>web/app.py (앱 팩토리 · 필터 등록)"]
+
+        subgraph bp["Blueprints (라우트)"]
+            direction LR
+            auth_bp["auth<br/>로그인·세션"]
+            proj_bp["projects<br/>프로젝트·기준정보"]
+            bid_bp["bids<br/>입찰"]
+            sub_bp["submissions<br/>업로드·열매핑·추출"]
+            cmp_bp["compare<br/>업체 비교·클러스터"]
+            cat_bp["catalog<br/>카탈로그·클러스터링"]
+            adm_bp["admin<br/>도메인·분류·기준정보정의"]
+            prof_bp["profile<br/>LLM 설정"]
+        end
+
+        subgraph svc["도메인 서비스"]
+            direction TB
+            parsers["parsers/<br/>parse_xlsx · parse_pdf · parse_docx"]
+            extract["extractors/<br/>extract_by_mapping (코드기반)<br/>llm_extractor (PDF/DOCX)<br/>pipeline (오케스트레이션)"]
+            match["extractors/matcher<br/>카탈로그 매칭"]
+            cluster["extractors/catalog_clusterer<br/>유사품목 클러스터링 (LLM)"]
+            llm["extractors/llm_provider<br/>OpenAI · 사내 게이트웨이"]
+        end
+
+        subgraph infra["인프라·보안"]
+            direction LR
+            authmod["auth/auth<br/>역할 검증 (RBAC)"]
+            crypto["auth/crypto<br/>API키 암호화"]
+            tok["auth/token_session"]
+        end
+    end
+
+    subgraph data["데이터 계층"]
+        direction TB
+        queries["db/queries.py<br/>모든 SQL · 비즈니스 쿼리"]
+        schema["db/schema.py<br/>DDL · 마이그레이션"]
+        sqlite[("SQLite<br/>15 tables")]
+    end
+
+    subgraph ext["외부"]
+        openai["OpenAI API"]
+        gateway["사내 A.X 게이트웨이<br/>(폐쇄망)"]
+    end
+
+    UI <--> bp
+    entry --> bp
+    bp --> svc
+    bp --> infra
+    svc --> queries
+    infra --> queries
+    queries --> schema
+    schema --> sqlite
+    queries --> sqlite
+    llm --> openai
+    llm --> gateway
+
+    classDef layer fill:#f8fafc,stroke:#cbd5e1,color:#1e293b
+    classDef store fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a
+    class sqlite store
