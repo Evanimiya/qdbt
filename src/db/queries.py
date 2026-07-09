@@ -1429,11 +1429,14 @@ def _apply_compare_units(all_items, units_by_sub):
                 "category": it.get("category"),
                 "path": matched,
                 "_members": [],
+                "_leaf_ids": [],          # 묶음이 품은 모든 잎 item_id
                 "is_unit_group": True,
             }
             groups[key] = g
             out.append(g)   # 첫 등장 위치에 묶음 삽입 (순서 유지)
         g["amount"] = (g["amount"] or 0) + (it.get("amount") or 0)
+        if it.get("item_id"):
+            g["_leaf_ids"].append(it.get("item_id"))
         nm = it.get("name_normalized") or it.get("name_raw") or ""
         if nm:
             g["_members"].append(nm)
@@ -1441,6 +1444,10 @@ def _apply_compare_units(all_items, units_by_sub):
     # 묶음 spec에 하위 멤버 요약 + 단가(unit_price)=합산금액 (화면 prices 표시용)
     for g in out:
         if isinstance(g, dict) and g.get("is_unit_group"):
+            # 클러스터 멤버 매칭용: 묶음이 품은 모든 잎 id 집합을 보존.
+            # (클러스터링 시 저장된 대표 잎 id가 여기 대표 id와 달라도, 잎 교집합으로
+            #  매칭하면 멤버 누락 없이 렌더 가능 — 재클러스터링 불필요)
+            g["member_item_ids"] = set(g.pop("_leaf_ids", []))
             mem = g.pop("_members", [])
             if mem:
                 g["spec"] = f"({len(mem)}개: " + ", ".join(mem[:5]) + (" ..." if len(mem) > 5 else "") + ")"
@@ -1624,7 +1631,14 @@ def compare_bid_submissions(bid_id):
             # 해당 item_id의 실제 submission_items 조회
             cluster_items = []
             for it in all_items:
-                if it["item_id"] in member_ids:
+                # 매칭: 항목 자신의 id가 멤버이거나(개별 잎),
+                #       비교단위 묶음이 품은 잎 중 하나라도 멤버이면 포함.
+                # (클러스터링 시 저장한 대표 잎 id와 렌더 대표 잎 id가 달라도 누락 없음)
+                _leaf_ids = it.get("member_item_ids") if hasattr(it, "get") else None
+                if not (it["item_id"] in member_ids
+                        or (_leaf_ids and (_leaf_ids & member_ids))):
+                    continue
+                if True:
                     # it은 sqlite Row 또는 dict (compare_units 묶음 거친 경우)
                     try:
                         _path = it["path"]
