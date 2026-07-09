@@ -17,7 +17,7 @@ class ClaudeProvider(LLMProvider):
 
     def extract(self, parsed_text: str, system_prompt: str,
                 api_key: str, model: str = None, base_url: str = None,
-                verify_ssl: bool = True) -> str:
+                verify_ssl: bool = True, temperature: float = None) -> str:
         try:
             from anthropic import Anthropic
             import httpx
@@ -35,12 +35,16 @@ class ClaudeProvider(LLMProvider):
             if not verify_ssl:
                 kwargs["http_client"] = httpx.Client(verify=False, timeout=180.0)
             client = Anthropic(**kwargs)
-            response = client.messages.create(
+            create_kwargs = dict(
                 model=self.get_model(model),
                 max_tokens=16000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": parsed_text}],
             )
+            # 분류/클러스터링처럼 결정성이 중요한 호출은 temperature=0 전달.
+            if temperature is not None:
+                create_kwargs["temperature"] = temperature
+            response = client.messages.create(**create_kwargs)
             return response.content[0].text
         except Exception as e:
             etype = type(e).__name__

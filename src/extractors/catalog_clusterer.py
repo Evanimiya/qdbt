@@ -184,12 +184,14 @@ def _format_item_line(si: dict) -> str:
     # 이름이 경로로 오염된 경우 잎만 비교단위로 사용(매칭 안정화).
     # 전체 경로는 아래 (맥락)상위/full_label로 보존해 상위 구분에 활용.
     name = _leaf_name(name)
+    # LLM이 되돌려줄 id: 긴 UUID 대신 짧은 인덱스(_llm_id)를 우선 사용.
+    _id = si.get("_llm_id") or si.get("item_id")
     if si.get("is_group"):
         ref = si.get("ref_members") or []
         ref_str = ", ".join(ref[:16])
         full = si.get("full_label") or name
         line = (
-            f"  - id={si['item_id']}"
+            f"  - id={_id}"
             f" | 비교단위={name}"
             f" | 하위·사양({si.get('n_items','')}개): {ref_str[:300]}"
             f" | 금액={si.get('amount', '')}"
@@ -199,7 +201,7 @@ def _format_item_line(si: dict) -> str:
         return line
     spec = str(si.get("spec", "") or "")
     ctx = si.get("full_label") or si.get("category") or ""
-    line = f"  - id={si['item_id']} | 비교단위={name}"
+    line = f"  - id={_id} | 비교단위={name}"
     if spec:
         line += f" | 사양={spec[:120]}"
     line += (
@@ -255,7 +257,7 @@ def _build_cluster_input(submission_items: list, catalog_items: list = None) -> 
         for si in items:
             nm = si.get("name_normalized") or si.get("name_raw") or ""
             if nm:
-                all_names.append((nm, vendor, si["item_id"]))
+                all_names.append((nm, vendor, si.get("_llm_id") or si["item_id"]))
     all_names.sort(key=lambda x: x[0].lower())
     lines.append("## 전체 품목 (이름순 — 영문/한글 짝을 빠짐없이 확인하세요)")
     lines.append("아래는 모든 업체의 품목을 이름순으로 모은 것입니다.")
@@ -383,6 +385,17 @@ def _cluster_single(
 
     from extractors.providers import get_provider
     provider  = get_provider(provider_id)
+
+    # ── 짧은 인덱스 부여(n1, n2, ...) ──────────────────────────
+    # LLM이 all_item_ids로 되돌려줄 식별자를 긴 UUID 대신 짧은 토큰으로.
+    # UUID를 한 글자라도 오타 내면 멤버가 탈락하고, 그 탓에 '2개 업체 미만'이
+    # 되면 클러스터가 통째로 폐기되던 근본 결함을 제거한다.
+    idmap = {}   # short(n1) -> 실제 item_id
+    for _k, _si in enumerate(submission_items, 1):
+        _short = f"n{_k}"
+        _si["_llm_id"] = _short
+        idmap[_short] = _si["item_id"]
+
     input_text = _build_cluster_input(submission_items, catalog_items)
 
     # 디버그: LLM 입력을 파일로 남김 (클러스터링 진단용)
@@ -404,7 +417,9 @@ def _cluster_single(
                 system_prompt=CLUSTER_PROMPT,
                 api_key=api_key,
                 model=model,
-                base_url=base_url, verify_ssl=verify_ssl,            )
+                base_url=base_url, verify_ssl=verify_ssl,
+                temperature=0,  # 분류 결정성 확보(비결정적 누락 방지)
+            )
             cleaned = response_text.strip()
             if cleaned.startswith("```"):
                 lines = cleaned.split("\n")[1:]
@@ -430,7 +445,16 @@ def _cluster_single(
 
             for rc in raw_clusters:
                 rep_name    = (rc.get("representative_name") or "").strip()
-                all_ids     = rc.get("all_item_ids", [])
+                raw_ids     = rc.get("all_item_ids", [])
+
+                # short(n1)→실제 item_id 변환. LLM이 실제 UUID를 냈어도 허용.
+                # 중복 제거하며 순서 보존.
+                all_ids = []
+                for a in raw_ids:
+                    a = str(a).strip()
+                    real = idmap.get(a) or (a if a in existing_ids else None)
+                    if real and real not in all_ids:
+                        all_ids.append(real)
 
                 # all_item_ids 검증 — 존재하는 id만, 최소 2개 업체
                 valid_ids = [i for i in all_ids if i in existing_ids]
@@ -646,8 +670,9 @@ def _build_unmatched_input(unmatched_items: list, existing_clusters: list) -> st
     lines.append(f"## 기존 클러스터 ({len(existing_clusters)}개)")
     for cl in existing_clusters:
         members_text = " | ".join(cl.get("member_names", [])[:8])
+        _cid = cl.get("_llm_cid") or cl["cluster_id"]   # 짧은 식별자 우선
         lines.append(
-            f"  - cluster_id={cl['cluster_id']}"
+            f"  - cluster_id={_cid}"
             f" | 대표명={cl['representative_name']}"
             f" | 멤버: {members_text}"
         )
@@ -687,6 +712,15 @@ def run_unmatched_verification(
 
     from extractors.providers import get_provider
     provider  = get_provider(provider_id)
+
+    # 짧은 식별자 부여: item은 n{k}, cluster는 c{k} (UUID 오타로 인한 편입 누락 방지)
+    item_map = {}     # n1 -> 실제 item_id
+    for _k, _si in enumerate(unmatched_items, 1):
+        _s = f"n{_k}"; _si["_llm_id"] = _s; item_map[_s] = _si["item_id"]
+    cl_map = {}       # c1 -> 실제 cluster_id
+    for _k, _cl in enumerate(existing_clusters, 1):
+        _s = f"c{_k}"; _cl["_llm_cid"] = _s; cl_map[_s] = _cl["cluster_id"]
+
     input_text = _build_unmatched_input(unmatched_items, existing_clusters)
 
     valid_item_ids    = {si["item_id"] for si in unmatched_items}
@@ -700,7 +734,9 @@ def run_unmatched_verification(
                 system_prompt=UNMATCHED_PROMPT,
                 api_key=api_key,
                 model=model,
-                base_url=base_url, verify_ssl=verify_ssl,            )
+                base_url=base_url, verify_ssl=verify_ssl,
+                temperature=0,
+            )
             cleaned = response_text.strip()
             if cleaned.startswith("```"):
                 lines = cleaned.split("\n")[1:]
@@ -711,14 +747,16 @@ def run_unmatched_verification(
             result   = json.loads(cleaned)
             additions = result.get("additions", [])
 
-            # 유효성 검증: 실제 존재하는 id만, 중복 item 제거
+            # short→실제 id 변환 + 유효성 검증(존재 id만, 중복 item 제거)
             valid = []
             seen_items = set()
             for a in additions:
-                iid = a.get("item_id", "")
-                cid = a.get("cluster_id", "")
+                _iid = str(a.get("item_id", "")).strip()
+                _cid = str(a.get("cluster_id", "")).strip()
+                iid = item_map.get(_iid) or (_iid if _iid in valid_item_ids else "")
+                cid = cl_map.get(_cid) or (_cid if _cid in valid_cluster_ids else "")
                 if iid in valid_item_ids and cid in valid_cluster_ids and iid not in seen_items:
-                    valid.append(a)
+                    valid.append({**a, "item_id": iid, "cluster_id": cid})
                     seen_items.add(iid)
             return valid
 
@@ -845,7 +883,9 @@ def run_cluster_validation(
                 system_prompt=VALIDATION_PROMPT,
                 api_key=api_key,
                 model=model,
-                base_url=base_url, verify_ssl=verify_ssl,            )
+                base_url=base_url, verify_ssl=verify_ssl,
+                temperature=0,
+            )
             cleaned = response_text.strip()
             if cleaned.startswith("```"):
                 lines = cleaned.split("\n")[1:]

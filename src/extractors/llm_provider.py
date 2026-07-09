@@ -24,7 +24,8 @@ class LLMProvider(ABC):
                 api_key: str,
                 model: str = None,
                 base_url: str = None,
-                verify_ssl: bool = True) -> str:
+                verify_ssl: bool = True,
+                temperature: float = None) -> str:
         """
         파싱된 텍스트를 LLM에 전달하여 응답 텍스트 반환.
 

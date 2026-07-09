@@ -26,7 +26,7 @@ class GPTProvider(LLMProvider):
 
     def extract(self, parsed_text: str, system_prompt: str,
                 api_key: str, model: str = None, base_url: str = None,
-                verify_ssl: bool = True) -> str:
+                verify_ssl: bool = True, temperature: float = None) -> str:
         try:
             from openai import OpenAI
             import httpx
@@ -47,7 +47,8 @@ class GPTProvider(LLMProvider):
                 kwargs["http_client"] = httpx.Client(verify=False, timeout=self._REQUEST_TIMEOUT)
             client = OpenAI(**kwargs)
             return self._create_with_token_param(
-                client, self.get_model(model), system_prompt, parsed_text)
+                client, self.get_model(model), system_prompt, parsed_text,
+                temperature=temperature)
         except LLMProviderError:
             raise
         except Exception as e:
@@ -66,19 +67,22 @@ class GPTProvider(LLMProvider):
     #   - 신형(gpt-5/o계열 등): max_completion_tokens
     # 하드코딩하지 않고, 표준 파라미터로 먼저 시도 후
     # 오류 메시지를 보고 자동으로 다른 파라미터로 재시도한다.
-    def _create_with_token_param(self, client, model, system_prompt, parsed_text):
+    def _create_with_token_param(self, client, model, system_prompt, parsed_text,
+                                 temperature=None):
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": parsed_text},
         ]
         order = self._preferred_token_params(model)
         last_err = None
+        extra = {"temperature": temperature} if temperature is not None else {}
         for param in order:
             try:
                 resp = client.chat.completions.create(
                     model=model,
                     messages=messages,
                     **{param: self._TOKEN_LIMIT},
+                    **extra,
                 )
                 _TOKEN_PARAM_CACHE[model] = param
                 return resp.choices[0].message.content
