@@ -21,6 +21,8 @@
   .lkc-col-h{font-size:11px;font-weight:800;color:#fff;background:#1C7293;padding:5px 8px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.04em}
   .lkc-node{background:#fff;border:1px solid #e2e8f0;border-left:3px solid #94a3b8;border-radius:8px;padding:7px 9px 7px 10px;margin-bottom:8px;font-size:12.5px;position:relative;transition:.1s}
   .lkc-node.branch{cursor:pointer;border-left-color:#1C7293}
+  .lkc-node.branch[draggable="true"]{cursor:grab}
+  .lkc-node.branch[draggable="true"]:active{cursor:grabbing}
   .lkc-node.leaf{cursor:grab;border-left-color:#3FA372}
   .lkc-node.leaf:active{cursor:grabbing}
   .lkc-ro .lkc-node.leaf{cursor:pointer}
@@ -154,9 +156,11 @@ window.LKC = (function(){
       }
       acts+='</div>';
     }
-    var canDrag = !S.readonly && n.is_leaf && n.item_id;
+    // 편집 모드: 잎(재지정)과 가지(재부모화) 모두 드래그 가능.
+    var canDrag = !S.readonly && ((n.is_leaf && n.item_id) || !n.is_leaf);
     return '<div class="'+cls+'" data-path="'+esc(n.path)+'"'
-      + (canDrag ? ' draggable="true" data-item="'+n.item_id+'"' : (n.item_id ? ' data-item="'+n.item_id+'"' : ''))
+      + (canDrag ? ' draggable="true"' : '')
+      + (n.item_id ? ' data-item="'+n.item_id+'"' : '')
       + '>'+toggle+tag
       + '<span class="lkc-nm">'+esc(n.name)+' <span class="lkc-amt">'+fmt(n.amount)+'</span></span>'
       + meta + summ + acts + '</div>';
@@ -204,19 +208,51 @@ window.LKC = (function(){
     root.querySelectorAll('.lkc-act[data-delbranch]').forEach(function(b){
       b.addEventListener('click', function(e){ e.stopPropagation(); delBranch(b.dataset.delbranch); });
     });
-    // 드래그드롭: 잎 → 상위(가지)로 놓으면 reassign-path
+    // 드래그드롭:
+    //  · 잎(leaf) → 상위 가지 : reassign-path(항목 재지정)
+    //  · 가지(branch) → 다른 상위 가지 : reparent-branch(서브트리 통째 이동)
     root.querySelectorAll('.lkc-node.leaf[data-item]').forEach(function(el){
-      el.addEventListener('dragstart', function(e){ S.drag={item:el.dataset.item, path:el.dataset.path};
+      el.addEventListener('dragstart', function(e){ S.drag={kind:'leaf', item:el.dataset.item, path:el.dataset.path};
         el.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',el.dataset.item);}catch(_){} });
       el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
     });
     root.querySelectorAll('.lkc-node.branch').forEach(function(el){
-      el.addEventListener('dragover', function(e){ if(S.drag){ e.preventDefault(); el.classList.add('drop-ok'); } });
+      // 가지 자체가 드래그 소스
+      el.addEventListener('dragstart', function(e){ S.drag={kind:'branch', path:el.dataset.path};
+        el.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',el.dataset.path);}catch(_){} });
+      el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
+      // 그리고 드롭 대상
+      el.addEventListener('dragover', function(e){ if(S.drag && canDropOn(S.drag, el.dataset.path)){ e.preventDefault(); el.classList.add('drop-ok'); } });
       el.addEventListener('dragleave', function(){ el.classList.remove('drop-ok'); });
       el.addEventListener('drop', function(e){ e.preventDefault(); el.classList.remove('drop-ok');
-        if(!S.drag) return; var target=el.dataset.path; var item=S.drag.item; S.drag=null;
-        if(target===el.dataset.path) reassign(item, target); });
+        if(!S.drag) return; var d=S.drag; var target=el.dataset.path; S.drag=null;
+        if(!canDropOn(d, target)) return;
+        if(d.kind==='leaf') reassign(d.item, target);
+        else reparentBranch(d.path, target); });
     });
+  }
+
+  // 드롭 가능 판정: 잎은 어떤 가지로도 OK. 가지는 자기 자신/자기 하위엔 불가(순환 방지).
+  function canDropOn(drag, targetPath){
+    if(!drag || !targetPath) return false;
+    if(drag.kind==='branch'){
+      if(targetPath===drag.path) return false;
+      if(targetPath.indexOf(drag.path + ' > ')===0) return false;   // 하위로 드롭 금지
+    }
+    return true;
+  }
+
+  function reparentBranch(branchPath, targetPath){
+    var rootName = branchPath.split(' > ').pop();
+    if(!confirm("이 묶음('"+rootName+"')을 아래 분류의 하위로 이동할까요?\n하위 전체(중/소/세/품명)가 함께 이동합니다.\n\n대상: "+targetPath)) return;
+    // 동명 충돌 감지: 대상의 직계 자식에 같은 이름이 있으면 병합 여부 확인
+    var collide = S.nodes.some(function(n){ return n.parent===targetPath && n.name===rootName; });
+    var merge = false;
+    if(collide){ merge = confirm("대상에 같은 이름 '"+rootName+"'이 이미 있습니다.\n\n[확인] 병합(합치기)   /   [취소] 별도 자식으로 추가"); }
+    fetch('/submissions/'+S.subId+'/tree/reparent-branch', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path:branchPath, target:targetPath, merge:merge})})
+     .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('이동 실패: '+(d.error||'')); })
+     .catch(function(e){ alert('오류: '+e); });
   }
 
   function reassign(itemId, path){

@@ -1706,6 +1706,88 @@ def delete_branch(submission_id):
     return jsonify({"ok": True, "deleted": n})
 
 
+@bp.route("/<submission_id>/tree/reparent-branch", methods=["POST"])
+@require_role("manager")
+def reparent_branch(submission_id):
+    """[연계 캔버스] 가지(묶음) 재부모화 — 최상위로 잘못 잡힌 묶음을 다른 상위 분류
+    아래로 통째로 이동. 서브트리 전체(중/소/세/품명/부품)의 path를 새 부모 기준으로
+    다시 쓴다. 금액 무변경 → 총액 불변(Δ=0).
+
+    payload: {path: 이동할 가지 경로, target: 대상 상위 경로, merge: 동명 충돌 시 병합 여부}
+      · 대상의 자식이 됨(레벨 한 단계 하강): new_base = target + ' > ' + 가지이름.
+      · 순환 방지: target이 가지 자신/하위면 거부.
+      · 동명 충돌(대상에 같은 이름 자식 존재) & merge=False → '이름 (2)'로 별도 유지(기본).
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    branch = (p.get("path") or "").strip()
+    target = (p.get("target") or "").strip()
+    merge = bool(p.get("merge"))
+    SEP = " > "
+    if not branch or not target:
+        return jsonify({"ok": False, "error": "path·target가 필요합니다."}), 200
+    if target == branch or target.startswith(branch + SEP):
+        return jsonify({"ok": False, "error": "자기 자신 또는 하위로는 이동할 수 없습니다."}), 200
+    root_name = branch.split(SEP)[-1]
+    new_base = target + SEP + root_name
+    if new_base == branch:
+        return jsonify({"ok": True, "moved": 0, "note": "변경 없음(이미 해당 위치)"})
+
+    from db.queries import get_conn, recompute_subtotal
+    moved_ids = []
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT item_id, path FROM submission_items "
+            "WHERE submission_id=? AND (path=? OR path LIKE ?)",
+            (submission_id, branch, branch + SEP + "%")).fetchall()
+        moved_ids = [dict(r)["item_id"] for r in rows]
+        if not moved_ids:
+            return jsonify({"ok": False, "error": "이동할 항목을 찾을 수 없습니다."}), 200
+
+        # 동명 충돌 시(기본) 별도 유지: new_base 를 '이름 (n)'으로 디스앰비규에이션.
+        def _collides(nb):
+            ph = ",".join("?" * len(moved_ids))
+            q = c.execute(
+                "SELECT 1 FROM submission_items WHERE submission_id=? "
+                "AND (path=? OR path LIKE ?) AND item_id NOT IN (%s) LIMIT 1" % ph,
+                [submission_id, nb, nb + SEP + "%"] + moved_ids).fetchone()
+            return q is not None
+        if not merge and _collides(new_base):
+            i = 2
+            while _collides(target + SEP + root_name + " (" + str(i) + ")"):
+                i += 1
+            new_base = target + SEP + root_name + " (" + str(i) + ")"
+
+        # branch 프리픽스를 new_base 로 교체(하위 전체).
+        n = 0
+        for r in rows:
+            d = dict(r)
+            old = d["path"] or ""
+            newp = new_base + old[len(branch):]
+            parts = [x for x in newp.split(SEP) if x.strip()]
+            c.execute(
+                "UPDATE submission_items SET path=?, depth=?, category=? WHERE item_id=?",
+                (newp, len(parts), parts[0] if parts else "기타", d["item_id"]))
+            n += 1
+
+    # 수기 이동 표시(초록) + map_config 갱신
+    try:
+        subd = dict(get_submission(submission_id))
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+        ov = mc.get("link_overrides") or {}
+        for iid in moved_ids:
+            ov[iid] = "manual"
+        mc["link_overrides"] = ov
+        update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    except Exception:
+        pass
+    recompute_subtotal(submission_id)   # 금액 불변(재부모화) — 총액 보존
+    return jsonify({"ok": True, "moved": n, "new_base": new_base})
+
+
 @bp.route("/<submission_id>/item/<item_id>/delete", methods=["POST"])
 @require_role("manager")
 def delete_item(submission_id, item_id):
