@@ -1617,7 +1617,14 @@ def link_view(submission_id):
         manual_ids = []
 
     snap = get_latest_snapshot(submission_id)
+    # [강등] 도메인 표준 대분류 목록 — 연계 캔버스에서 '상위 분류 아래로' 추천용.
+    try:
+        from db.queries import get_domain_category_binding
+        _std_cats = get_domain_category_binding(subd.get("bid_domain") or "공통").get("standard") or []
+    except Exception:
+        _std_cats = []
     return render_template("submissions/link.html", sub=subd,
+                           std_categories_json=_json.dumps(_std_cats, ensure_ascii=False),
                            levels=levels, max_depth=max_depth, flat_tree=flat,
                            tree_json=_json.dumps(tree.get("tree") or [], ensure_ascii=False),
                            residual_ids_json=_json.dumps(residual_ids, ensure_ascii=False),

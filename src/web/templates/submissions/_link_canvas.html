@@ -141,12 +141,16 @@ window.LKC = (function(){
     var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
     // [고정 그리드] 전체 트리 최대 깊이까지 열을 항상 렌더 → 접기/이동에도 그리드 안정.
     var maxD = S.maxDepth;
+    // 깊이별 전체 노드 수(접힘 무관) — 헤더에 (현재 표시/총계) 표기용.
+    var totalByDepth={};
+    S.nodes.forEach(function(n){ totalByDepth[n.depth]=(totalByDepth[n.depth]||0)+1; });
 
     var html='<div class="lkc-canvas'+(S.readonly?' lkc-ro':'')+'"><svg class="lkc-svg"></svg><div class="lkc-cols">';
     for(var d=0; d<=maxD; d++){
       var cnt=(cols[d]||[]).length;
+      var tot=totalByDepth[d]||0;
       html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))
-            + '<span class="lkc-col-n">'+cnt+'개</span></div>';
+            + '<span class="lkc-col-n">'+cnt+'/'+tot+'개</span></div>';
       (cols[d]||[]).forEach(function(n){ html += nodeCard(n); });
       html += '</div>';
     }
@@ -185,6 +189,7 @@ window.LKC = (function(){
         acts+='<button class="lkc-act" data-act="exclude" data-id="'+n.item_id+'">⛔제외</button>';
         acts+='<button class="lkc-act danger" data-act="delete" data-id="'+n.item_id+'">✕삭제</button>';
       } else if(!n.is_leaf){
+        acts+='<button class="lkc-act" data-demote="'+esc(n.path)+'">⤵상위분류</button>';
         acts+='<button class="lkc-act danger" data-delbranch="'+esc(n.path)+'">✕가지삭제</button>';
       }
       acts+='</div>';
@@ -245,6 +250,9 @@ window.LKC = (function(){
     // 액션(제외/삭제/되돌리기)
     root.querySelectorAll('.lkc-act[data-act]').forEach(function(b){
       b.addEventListener('click', function(e){ e.stopPropagation(); nodeAction(b.dataset.id, b.dataset.act); });
+    });
+    root.querySelectorAll('.lkc-act[data-demote]').forEach(function(b){
+      b.addEventListener('click', function(e){ e.stopPropagation(); demoteUnder(b.dataset.demote); });
     });
     root.querySelectorAll('.lkc-act[data-delbranch]').forEach(function(b){
       b.addEventListener('click', function(e){ e.stopPropagation(); delBranch(b.dataset.delbranch); });
@@ -318,6 +326,25 @@ window.LKC = (function(){
      .catch(function(e){ alert('오류: '+e); });
   }
 
+  // [강등] 잘못 지정된 상위 분류를 표준 대분류(자재/공사 등) 아래로 한 단계 내림.
+  //  대상 분류가 없으면 새로 만들어 그 아래로(reparent-branch, 금액 불변). 드롭 대상 카드가
+  //  없어도 이름 지정으로 강등 가능 → "자재 > 컴퓨팅 인프라 > …".
+  function demoteUnder(path){
+    var rootName = path.split(' > ').pop();
+    var tops={};
+    S.nodes.forEach(function(n){ if(n.depth===0 && n.name!==rootName) tops[n.name]=1; });
+    var std = (S.stdCats && S.stdCats.length) ? S.stdCats : ['자재','인건비','출장비','관리비','영업이익','공사'];
+    var suggest = std.concat(Object.keys(tops)).filter(function(v,i,a){ return v && a.indexOf(v)===i && v!==rootName; });
+    var target = window.prompt(
+      "‘"+rootName+"’을(를) 어느 상위 분류 아래로 내릴까요?\n(표준 대분류에 없으면 새로 만들어 그 아래로 강등 · 금액 불변)\n\n추천: "+suggest.join(', '),
+      std[0] || '자재');
+    if(target===null) return;
+    target=target.trim();
+    if(!target){ return; }
+    if(target===rootName){ alert('자기 자신 아래로는 내릴 수 없습니다.'); return; }
+    reparentBranch(path, target);
+  }
+
   function reparentBranch(branchPath, targetPath){
     var rootName = branchPath.split(' > ').pop();
     if(!confirm("이 묶음('"+rootName+"')을 아래 분류의 하위로 이동할까요?\n하위 전체(중/소/세/품명)가 함께 이동합니다.\n\n대상: "+targetPath)) return;
@@ -363,6 +390,7 @@ window.LKC = (function(){
   return {
     init: function(cfg){
       S.mount=cfg.mount; S.tree=cfg.tree||[]; S.levels=cfg.levels||[]; S.subId=cfg.subId||'';
+      S.stdCats=cfg.stdCats||[];   // 도메인 표준 대분류(강등 대상 추천). 없으면 기본값 사용.
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
       S.readonly=!!cfg.readonly;
       S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false;

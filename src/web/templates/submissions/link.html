@@ -204,6 +204,7 @@ const LK_TREE = {{ tree_json|safe }};
 const LK_RESIDUAL = {{ residual_ids_json|safe }};
 const LK_MANUAL = {{ manual_ids_json|safe }};
 const LK_LEVELS = {{ level_names_json|safe }};
+const LK_STD_CATS = {{ std_categories_json|safe }};   // 도메인 표준 대분류(강등 추천)
 
 function lkRoleKo(r){
   return ({leaf:'세부(품목·단가)', band:'밴드(분류)', seq_leaf:'세부(번호계층)',
@@ -216,7 +217,7 @@ let lkcReady = false;
 function lkEnsureCanvas(){
   if (lkcReady) return;
   LKC.init({ mount:'lkcCanvas', tree:LK_TREE, residual:LK_RESIDUAL, manual:LK_MANUAL,
-             levels:LK_LEVELS, subId:SUB_ID });
+             levels:LK_LEVELS, subId:SUB_ID, stdCats:LK_STD_CATS });
   // 분류 레벨 드롭다운 채우기(사용자 분류명, 데이터 최대 깊이까지)
   const sel = document.getElementById('lkcLevel');
   if (sel){
