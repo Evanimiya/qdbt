@@ -492,6 +492,13 @@
         <option value="4">세분류</option>
         <option value="5">품명</option>
       </select>
+      <select onchange="treeSetSort(this.value)" title="형제 노드 정렬(엑셀식)"
+              class="text-xs border border-gray-300 rounded-lg px-2 py-1.5">
+        <option value="">정렬: 트리순</option>
+        <option value="amt_desc">금액 ↓</option>
+        <option value="amt_asc">금액 ↑</option>
+        <option value="name">이름 가나다</option>
+      </select>
       <button onclick="saveCompareUnits(this)" class="text-xs bg-blue-700 text-white rounded-lg px-3 py-1.5 hover:bg-blue-800 break-ko">비교 단위 저장</button>
     </div>
   </div>
@@ -1028,6 +1035,19 @@ const TREE_DATA = {{ tree_json|safe }};
 const SAVED_UNITS = {{ compare_units_json|safe }};
 const SUB_ID = "{{ sub.submission_id }}";
 let treeOpen = {};
+let treeSort = '';   // '', 'amt_desc', 'amt_asc', 'name' — 형제 노드 정렬(엑셀식)
+function treeSetSort(v){ treeSort = v || ''; renderTree(); }
+function sortSiblings(nodes){
+  if(!treeSort) return nodes;
+  const a = nodes.slice();
+  a.sort(function(x,y){
+    if(treeSort==='amt_desc') return (y.amount||0)-(x.amount||0);
+    if(treeSort==='amt_asc')  return (x.amount||0)-(y.amount||0);
+    if(treeSort==='name')     return String(x.name||'').localeCompare(String(y.name||''),'ko');
+    return 0;
+  });
+  return a;
+}
 
 // 저장된 비교단위가 있으면 그 경로의 부모들을 펼침, 없으면 1depth만
 function initTreeOpen() {
@@ -1055,7 +1075,7 @@ function renderTree() {
   if (!body) return;
   body.innerHTML = '';
   let total = 0;
-  TREE_DATA.tree.forEach(function(node){ total += node.amount; renderNode(node, body, 0); });
+  sortSiblings(TREE_DATA.tree).forEach(function(node){ total += node.amount; renderNode(node, body, 0); });
   document.getElementById('treeTotal').textContent = wonKR(total);
   // [추출 기준정보] 대당 단가 = 총액(n대 총계, nego 포함) ÷ 대수
   const n = Math.max(1, UNIT_COUNT);
@@ -1176,7 +1196,7 @@ function renderNode(node, container, depth) {
   container.appendChild(row);
 
   if (!node.is_leaf && isOpen) {
-    node.children.forEach(function(c){ renderNode(c, container, depth+1); });
+    sortSiblings(node.children).forEach(function(c){ renderNode(c, container, depth+1); });
   }
 }
 
