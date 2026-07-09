@@ -444,7 +444,7 @@
 <details class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5" {% if residual_view %}open{% endif %}>
   <summary class="cursor-pointer flex items-center justify-between flex-wrap gap-2">
     <span class="text-base font-bold text-gray-900 break-ko">🧩 다중시트 연계 보기
-      <span class="text-xs font-normal text-gray-500">— 레벨별 열 + 드래그로 재지정(연계 화면과 동일)</span></span>
+      <span class="text-xs font-normal text-gray-500">— 레벨별 열 · 보기 전용(편집은 <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}" class="text-sky-700 underline">연계 화면</a>)</span></span>
     {% if residual_view %}<span class="text-xs font-bold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">미연계 {{ residual_view|length }}건</span>{% endif %}
   </summary>
   <div class="lkc-tools mt-3">
@@ -458,7 +458,7 @@
       <span><i style="border-color:#1C7293;border-top-style:dashed"></i>자동</span>
       <span><i style="border-color:#3FA372"></i>수기연계</span>
       <span><i style="border-color:#D96C5F;border-top-style:dashed"></i>미연계</span>
-      <span>· 잎을 상위 카드로 드래그 = 연결</span>
+      <span>· 항목 클릭 = 상·하위 강조 (보기 전용)</span>
     </span>
   </div>
   <div id="dtlCanvas"></div>
@@ -1241,7 +1241,7 @@ loadNego();
              residual: {{ residual_ids_json|safe }},
              manual: {{ manual_ids_json|safe }},
              levels: {{ level_names_json|safe }},
-             subId: SUB_ID });
+             subId: SUB_ID, readonly: true });   // 상세=보기 전용(편집은 연계 화면)
   var sel = document.getElementById('dtlLkcLevel');
   if (sel){
     var md = Math.max(LKC.maxDepth() + 1, 1);

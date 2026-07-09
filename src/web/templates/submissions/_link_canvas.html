@@ -23,6 +23,7 @@
   .lkc-node.branch{cursor:pointer;border-left-color:#1C7293}
   .lkc-node.leaf{cursor:grab;border-left-color:#3FA372}
   .lkc-node.leaf:active{cursor:grabbing}
+  .lkc-ro .lkc-node.leaf{cursor:pointer}
   .lkc-node.residual{border-left-color:#ef4444;background:#fff7f7}
   .lkc-node.manual{border-left-color:#3FA372}
   .lkc-node.excluded{opacity:.55}
@@ -55,7 +56,7 @@
 window.LKC = (function(){
   var S = { mount:null, tree:[], nodes:[], byPath:{}, maxDepth:0,
             residual:new Set(), manual:new Set(), levels:[], subId:'',
-            collapsed:{}, sel:null, onlyRed:false, drag:null };
+            collapsed:{}, sel:null, onlyRed:false, drag:null, readonly:false };
 
   function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function fmt(v){ return Math.round(v||0).toLocaleString('ko-KR'); }
@@ -112,7 +113,7 @@ window.LKC = (function(){
     var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
     var maxD = Math.max.apply(null, [0].concat(Object.keys(cols).map(Number)));
 
-    var html='<div class="lkc-canvas"><svg class="lkc-svg"></svg><div class="lkc-cols">';
+    var html='<div class="lkc-canvas'+(S.readonly?' lkc-ro':'')+'"><svg class="lkc-svg"></svg><div class="lkc-cols">';
     for(var d=0; d<=maxD; d++){
       html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))+'</div>';
       (cols[d]||[]).forEach(function(n){ html += nodeCard(n); });
@@ -139,19 +140,23 @@ window.LKC = (function(){
     var meta = parentName ? '<div class="lkc-meta">→ <b>'+esc(parentName)+'</b></div>' : '';
     var summ = (!n.is_leaf && n.nChildren && S.collapsed[n.path]) ?
       '<div class="lkc-summ">▶ 하위 '+n.nChildren+'개 (접힘)</div>' : '';
-    // 액션
-    var acts='<div class="lkc-acts">';
-    if(n.is_leaf && n.item_id){
-      if(n.status==='residual') acts+='<button class="lkc-act" data-act="unresidual" data-id="'+n.item_id+'">↩연계</button>';
-      else acts+='<button class="lkc-act" data-act="residual" data-id="'+n.item_id+'">↩미연계</button>';
-      acts+='<button class="lkc-act" data-act="exclude" data-id="'+n.item_id+'">⛔제외</button>';
-      acts+='<button class="lkc-act danger" data-act="delete" data-id="'+n.item_id+'">✕삭제</button>';
-    } else if(!n.is_leaf){
-      acts+='<button class="lkc-act danger" data-delbranch="'+esc(n.path)+'">✕가지삭제</button>';
+    // 액션 (편집 모드에서만 — 보기 전용은 생략)
+    var acts='';
+    if(!S.readonly){
+      acts='<div class="lkc-acts">';
+      if(n.is_leaf && n.item_id){
+        if(n.status==='residual') acts+='<button class="lkc-act" data-act="unresidual" data-id="'+n.item_id+'">↩연계</button>';
+        else acts+='<button class="lkc-act" data-act="residual" data-id="'+n.item_id+'">↩미연계</button>';
+        acts+='<button class="lkc-act" data-act="exclude" data-id="'+n.item_id+'">⛔제외</button>';
+        acts+='<button class="lkc-act danger" data-act="delete" data-id="'+n.item_id+'">✕삭제</button>';
+      } else if(!n.is_leaf){
+        acts+='<button class="lkc-act danger" data-delbranch="'+esc(n.path)+'">✕가지삭제</button>';
+      }
+      acts+='</div>';
     }
-    acts+='</div>';
+    var canDrag = !S.readonly && n.is_leaf && n.item_id;
     return '<div class="'+cls+'" data-path="'+esc(n.path)+'"'
-      + (n.is_leaf && n.item_id ? ' draggable="true" data-item="'+n.item_id+'"' : '')
+      + (canDrag ? ' draggable="true" data-item="'+n.item_id+'"' : (n.item_id ? ' data-item="'+n.item_id+'"' : ''))
       + '>'+toggle+tag
       + '<span class="lkc-nm">'+esc(n.name)+' <span class="lkc-amt">'+fmt(n.amount)+'</span></span>'
       + meta + summ + acts + '</div>';
@@ -191,6 +196,7 @@ window.LKC = (function(){
         S.sel = (S.sel===el.dataset.path ? null : el.dataset.path); render();
       });
     });
+    if(S.readonly) return;   // 보기 전용 — 편집(액션·드래그) 미배선
     // 액션(제외/삭제/되돌리기)
     root.querySelectorAll('.lkc-act[data-act]').forEach(function(b){
       b.addEventListener('click', function(e){ e.stopPropagation(); nodeAction(b.dataset.id, b.dataset.act); });
@@ -242,6 +248,7 @@ window.LKC = (function(){
     init: function(cfg){
       S.mount=cfg.mount; S.tree=cfg.tree||[]; S.levels=cfg.levels||[]; S.subId=cfg.subId||'';
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
+      S.readonly=!!cfg.readonly;
       S.collapsed={}; S.sel=null; S.onlyRed=false;
       flatten();
       // 초기: 전부 펼침(캔버스는 열로 보이므로). onlyRed 필터는 컨트롤로.
