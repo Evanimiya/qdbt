@@ -72,6 +72,40 @@
     mSel.setAttribute('name', 'model');
     cInp.classList.add('hidden'); cInp.removeAttribute('name'); cInp.value = '';
   });
+
+  // ── [선택 기억] 마지막으로 고른 provider/model을 브라우저에 저장·복원 ──
+  // 실행 후 페이지로 돌아왔을 때 셀렉터가 '설정 기본값'으로 되돌아가
+  // 마치 선택이 무시된 것처럼 보이는 문제를 해결. (실행 자체는 선택 모델을 사용)
+  // 저장은 브라우저 로컬 한정 — 계정 기본값(추출용)은 건드리지 않음.
+  var _K = 'qdbtModelSel_' + '{{ id_prefix }}';
+  function _persist(){
+    try{
+      var isCustom = (mSel.value === '__custom__');
+      localStorage.setItem(_K, JSON.stringify({
+        provider: pSel.value,
+        model: isCustom ? (cInp.value || '') : mSel.value,
+        custom: isCustom
+      }));
+    }catch(e){}
+  }
+  try{
+    var _saved = JSON.parse(localStorage.getItem(_K) || 'null');
+    if(_saved && _saved.provider){
+      if(pSel.value !== _saved.provider){
+        pSel.value = _saved.provider;
+        pSel.dispatchEvent(new Event('change'));
+      }
+      if(_saved.custom){
+        mSel.value = '__custom__'; syncCustom(); cInp.value = _saved.model || '';
+      }else{
+        var _has = Array.prototype.some.call(mSel.options, function(o){ return o.value === _saved.model; });
+        if(_has){ mSel.value = _saved.model; syncCustom(); }
+      }
+    }
+  }catch(e){}
+  pSel.addEventListener('change', _persist);
+  mSel.addEventListener('change', _persist);
+  cInp.addEventListener('input', _persist);
 })();
 </script>
 {% endmacro %}

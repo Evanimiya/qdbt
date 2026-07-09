@@ -393,9 +393,13 @@ def run_cluster_from_compare(bid_id):
     # 폼에서 provider/model 오버라이드 (없으면 프로필 기본값 사용)
     override_provider = request.form.get("provider_id", "").strip()
     override_model    = request.form.get("model", "").strip()
+    # provider가 함께 오면 provider+model 오버라이드. provider 없이 model만
+    # 와도(같은 provider 내 모델 변경) model을 적용 → 선택 무시 방지.
     if override_provider:
         llm = {**llm, "provider": override_provider,
                "model": override_model or None}
+    elif override_model:
+        llm = {**llm, "model": override_model}
 
     items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
     if len(items_raw) < 2:
@@ -436,9 +440,13 @@ def refine_unmatched_from_compare(bid_id):
     # 폼에서 provider/model 오버라이드 (없으면 프로필 기본값 사용)
     override_provider = request.form.get("provider_id", "").strip()
     override_model    = request.form.get("model", "").strip()
+    # provider가 함께 오면 provider+model 오버라이드. provider 없이 model만
+    # 와도(같은 provider 내 모델 변경) model을 적용 → 선택 무시 방지.
     if override_provider:
         llm = {**llm, "provider": override_provider,
                "model": override_model or None}
+    elif override_model:
+        llm = {**llm, "model": override_model}
 
     items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
     if len(items_raw) < 2:

@@ -394,10 +394,14 @@ def _cluster_worker(app, job_id, bid_id, items_raw, llm):
             return
         _active_cluster_bids.add(bid_id)
 
+    # 실제 사용 모델(오버라이드 반영) — 진행 화면에 표기해 선택이 적용됐는지 확인 가능하게.
+    _used_model = llm.get("model") or "기본"
+    _used_prov  = llm.get("provider") or ""
     _cluster_jobs[job_id] = {
         "status": "running", "phase": 1,
-        "message": f"[1/3] 품목 {len(items_raw)}개 초기 클러스터 탐색 중...",
+        "message": f"[1/3] 품목 {len(items_raw)}개 초기 클러스터 탐색 중... (모델: {_used_prov}/{_used_model})",
         "n": 0,
+        "model": f"{_used_prov}/{_used_model}",
     }
     try:
         with app.app_context():
@@ -718,6 +722,8 @@ def run_clusters():
     if override_provider:
         llm = {**llm, "provider": override_provider,
                "model": override_model or None}
+    elif override_model:
+        llm = {**llm, "model": override_model}
 
     items_raw = [dict(i) for i in list_submission_items_for_clustering(bid_id)]
     if len(items_raw) < 2:

@@ -272,6 +272,59 @@ def _build_cluster_input(submission_items: list, catalog_items: list = None) -> 
 CLUSTER_CHUNK_SIZE = 90
 
 
+def _norm_key(name: str) -> str:
+    """이름 완전일치 판정용 정규화 키.
+
+    잎명 추출 → 소문자 → 공백/괄호 제거. 띄어쓰기·대소문자·괄호 차이를 흡수해
+    '명백하게 동일한' 이름을 결정적으로 묶는다. (번역·유사어는 대상 아님 → LLM 담당)
+    """
+    import re as _re
+    s = _leaf_name(name or "")
+    s = s.strip().lower()
+    s = _re.sub(r"[\s()（）]+", "", s)
+    return s
+
+
+def _exact_match_clusters(submission_items: list):
+    """결정적(deterministic) 1차 클러스터링.
+
+    정규화 이름이 완전히 같고 2개 이상 업체에 걸친 항목을 LLM 없이 확정 병합한다.
+    → 사용자가 지정한 비교단위(is_group)나 동일 품목명이 LLM 비결정성으로
+      일부만 묶이고 나머지가 미분류로 빠지는 문제를 원천 차단.
+
+    오병합 방지: 비교단위(is_group)가 아닌 잎은 '같은 카테고리 + 같은 이름'일 때만
+    묶는다(예: 네트워크의 '스위치'와 스토리지의 '스위치'가 섞이지 않도록).
+
+    반환: (clusters, used_item_ids)
+    """
+    by_key = {}
+    for si in submission_items:
+        base = si.get("name_normalized") or si.get("name_raw") or ""
+        k = _norm_key(base)
+        if not k or k.isdigit():
+            continue
+        # 비교단위(사용자 지정)는 이름만으로, 일반 잎은 카테고리까지 키에 포함.
+        if not si.get("is_group"):
+            k = (si.get("category") or "").strip().lower() + "\x00" + k
+        by_key.setdefault(k, []).append(si)
+
+    clusters, used = [], set()
+    for _k, items in by_key.items():
+        if len({i.get("vendor_name") for i in items}) < 2:
+            continue
+        names = [i.get("name_normalized") or i.get("name_raw") or "" for i in items]
+        clusters.append({
+            "cluster_id":             str(uuid.uuid4()),
+            "representative_item_id": items[0]["item_id"],
+            "representative_name":    _pick_rep_name(names),
+            "duplicate_item_ids":     [i["item_id"] for i in items[1:]],
+            "similarity_score":       1.0,
+            "similarity_summary":     "이름 완전 일치(결정적 매칭)",
+        })
+        used.update(i["item_id"] for i in items)
+    return clusters, used
+
+
 def run_clustering(
     submission_items: list,
     api_key: str,
@@ -300,9 +353,19 @@ def run_clustering(
     if len(submission_items) < 2:
         return []
 
-    if len(submission_items) <= CLUSTER_CHUNK_SIZE:
-        return _cluster_single(submission_items, api_key, provider_id, model, base_url, verify_ssl, catalog_items)
-    return _cluster_chunked(submission_items, api_key, provider_id, model, base_url, verify_ssl, catalog_items)
+    # ── 0단계: 결정적 이름-완전일치 클러스터(무비용·비결정성 없음) ──
+    # '명백하게 동일한' 이름은 여기서 확정 병합하고, LLM에는 나머지만 넘긴다.
+    exact_clusters, used_ids = _exact_match_clusters(submission_items)
+    remaining = [si for si in submission_items if si["item_id"] not in used_ids]
+
+    llm_clusters = []
+    if len(remaining) >= 2:
+        if len(remaining) <= CLUSTER_CHUNK_SIZE:
+            llm_clusters = _cluster_single(remaining, api_key, provider_id, model, base_url, verify_ssl, catalog_items)
+        else:
+            llm_clusters = _cluster_chunked(remaining, api_key, provider_id, model, base_url, verify_ssl, catalog_items)
+
+    return exact_clusters + llm_clusters
 
 
 def _cluster_single(

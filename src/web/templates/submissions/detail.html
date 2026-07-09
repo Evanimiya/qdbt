@@ -454,6 +454,12 @@
       <option value="">분류…</option>
     </select>
     <label class="lkc-chk"><input type="checkbox" onchange="LKC.setOnlyRed(this.checked)"> 미연계(빨강)만 보기</label>
+    <select class="lkc-tbtn" onchange="LKC.setSort(this.value)" title="열 정렬(엑셀식)">
+      <option value="">정렬: 트리순</option>
+      <option value="amt_desc">금액 ↓</option>
+      <option value="amt_asc">금액 ↑</option>
+      <option value="name">이름 가나다</option>
+    </select>
     <span class="lkc-legend break-ko">
       <span><i style="border-color:#1C7293;border-top-style:dashed"></i>자동</span>
       <span><i style="border-color:#3FA372"></i>수기연계</span>

@@ -139,6 +139,17 @@ window.LKC = (function(){
       return true;
     });
     var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
+    // [정렬] 엑셀식 열 정렬(금액/이름). 기본('')은 트리 순서 유지.
+    if(S.sortBy){
+      Object.keys(cols).forEach(function(d){
+        cols[d].sort(function(a,b){
+          if(S.sortBy==='amt_desc') return (b.amount||0)-(a.amount||0);
+          if(S.sortBy==='amt_asc')  return (a.amount||0)-(b.amount||0);
+          if(S.sortBy==='name')     return String(a.name||'').localeCompare(String(b.name||''),'ko');
+          return 0;
+        });
+      });
+    }
     // [고정 그리드] 전체 트리 최대 깊이까지 열을 항상 렌더 → 접기/이동에도 그리드 안정.
     var maxD = S.maxDepth;
     // 깊이별 전체 노드 수(접힘 무관) — 헤더에 (현재 표시/총계) 표기용.
@@ -405,7 +416,7 @@ window.LKC = (function(){
       S.stdCats=cfg.stdCats||[];   // 도메인 표준 대분류(강등 대상 추천). 없으면 기본값 사용.
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
       S.readonly=!!cfg.readonly;
-      S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false;
+      S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false; S.sortBy='';
       flatten();
       // [상태 보존] 이전(이동 전) 접힘/선택/스크롤 복원. 없으면 기본(전부 펼침).
       var saved=restoreViewState();
@@ -421,6 +432,7 @@ window.LKC = (function(){
     collapseAll: function(){ S.nodes.forEach(function(n){ if(!n.is_leaf && n.nChildren) S.collapsed[n.path]=true; }); render(); },
     toLevel: function(lv){ S.collapsed={}; S.nodes.forEach(function(n){ if(!n.is_leaf && n.depth>=lv-1) S.collapsed[n.path]=true; }); render(); },
     setOnlyRed: function(v){ S.onlyRed=!!v; render(); },
+    setSort: function(mode){ S.sortBy=mode||''; render(); },
     maxDepth: function(){ return S.maxDepth; }
   };
 })();
