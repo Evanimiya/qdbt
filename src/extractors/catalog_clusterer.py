@@ -16,10 +16,18 @@ LLM이 감지 → 클러스터 제안 → 담당자가 대표 품목명 확정.
   - 향후 Phase 2에서 catalog_item 자동 생성/연결 예정
 """
 import json
+import os
 import uuid
 import sys
 from pathlib import Path
 from datetime import datetime
+
+# ── 0단계(최상단) 결정적 exact-match 사용 여부 ─────────────────────
+# 4단계 파이프라인: [0] 이름 완전일치 결정적 병합 → [1] 초기 LLM 클러스터
+#   → [2] 미분류 재검토 → [3] 적정성 검증.
+# 지금은 LLM 단독 성능을 검증하기 위해 기본 OFF. 검증이 끝나면
+# env QDBT_EXACT_MATCH=1 로 켜거나 이 기본값을 True 로 되돌린다.
+EXACT_MATCH_PREPASS = os.environ.get("QDBT_EXACT_MATCH", "0") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -294,20 +302,28 @@ def _exact_match_clusters(submission_items: list):
     → 사용자가 지정한 비교단위(is_group)나 동일 품목명이 LLM 비결정성으로
       일부만 묶이고 나머지가 미분류로 빠지는 문제를 원천 차단.
 
-    오병합 방지: 비교단위(is_group)가 아닌 잎은 '같은 카테고리 + 같은 이름'일 때만
-    묶는다(예: 네트워크의 '스위치'와 스토리지의 '스위치'가 섞이지 않도록).
+    상위 분류 존중(핵심): 이름이 같아도 최상위 분류(대분류)가 다르면 절대 묶지
+    않는다. 예) '자재 > CPU 서버'와 '공사 > CPU 서버'는 이름은 같지만 대분류가
+    달라 별개로 유지 — LLM이 상위 분류체계를 존중하는 것과 동일한 기준.
 
     반환: (clusters, used_item_ids)
     """
+    def _top_cat(si):
+        # 최상위 분류(대분류) 추출: 경로 첫 세그먼트 우선, 없으면 category.
+        p = (si.get("compare_unit_path") or si.get("full_label")
+             or si.get("path") or si.get("category") or "")
+        p = str(p)
+        seg = p.replace(" > ", ">").split(">")[0] if ">" in p else p
+        return seg.strip().lower().replace(" ", "")
+
     by_key = {}
     for si in submission_items:
         base = si.get("name_normalized") or si.get("name_raw") or ""
         k = _norm_key(base)
         if not k or k.isdigit():
             continue
-        # 비교단위(사용자 지정)는 이름만으로, 일반 잎은 카테고리까지 키에 포함.
-        if not si.get("is_group"):
-            k = (si.get("category") or "").strip().lower() + "\x00" + k
+        # 최상위 분류(대분류)를 항상 키에 포함 → 상위 분류가 다르면 분리.
+        k = _top_cat(si) + "\x00" + k
         by_key.setdefault(k, []).append(si)
 
     clusters, used = [], set()
@@ -357,8 +373,12 @@ def run_clustering(
 
     # ── 0단계: 결정적 이름-완전일치 클러스터(무비용·비결정성 없음) ──
     # '명백하게 동일한' 이름은 여기서 확정 병합하고, LLM에는 나머지만 넘긴다.
-    exact_clusters, used_ids = _exact_match_clusters(submission_items)
-    remaining = [si for si in submission_items if si["item_id"] not in used_ids]
+    # (현재 기본 OFF — LLM 단독 성능 검증용. EXACT_MATCH_PREPASS 로 제어)
+    if EXACT_MATCH_PREPASS:
+        exact_clusters, used_ids = _exact_match_clusters(submission_items)
+        remaining = [si for si in submission_items if si["item_id"] not in used_ids]
+    else:
+        exact_clusters, remaining = [], submission_items
 
     llm_clusters = []
     if len(remaining) >= 2:
