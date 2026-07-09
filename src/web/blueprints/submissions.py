@@ -1708,6 +1708,39 @@ def link_node_status(submission_id):
     return jsonify({"ok": True})
 
 
+@bp.route("/<submission_id>/category/register-standard", methods=["POST"])
+@require_role("manager")
+def register_standard_category(submission_id):
+    """[기준정보] 이 견적에서 필요한 새 대분류를 '도메인 표준'(catalog_categories)에 등록.
+
+    거버넌스 원칙: 임시 라벨이 아니라 공유 표준에 실제 등록해야 이후 모든 견적의 선택·
+    업체 비교·클러스터링이 같은 대분류로 정합된다. 도메인은 이 견적의 bid_domain을 따른다
+    (공통 아님). 이미 표준(또는 별칭)에 있으면 중복 생성하지 않는다.
+    payload: {name}
+    """
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "분류명이 필요합니다."}), 200
+    domain = dict(sub).get("bid_domain") or "공통"
+    from db.queries import get_domain_category_binding, create_catalog_category
+    try:
+        binding = get_domain_category_binding(domain)
+    except Exception:
+        binding = {"standard": [], "lookup": {}}
+    # 표준명 또는 별칭에 이미 있으면(대소문자·공백 무시) 등록 생략.
+    def _n(s):
+        return "".join(str(s or "").split()).lower()
+    known = set(_n(s) for s in (binding.get("standard") or []))
+    known |= set(_n(k) for k in (binding.get("lookup") or {}).keys())
+    if _n(name) in known:
+        return jsonify({"ok": True, "already": True, "domain": domain, "name": name})
+    create_catalog_category(name, domain=domain)
+    return jsonify({"ok": True, "registered": True, "domain": domain, "name": name})
+
+
 @bp.route("/<submission_id>/tree/delete-branch", methods=["POST"])
 @require_role("manager")
 def delete_branch(submission_id):

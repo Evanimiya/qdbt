@@ -342,6 +342,18 @@ window.LKC = (function(){
     target=target.trim();
     if(!target){ return; }
     if(target===rootName){ alert('자기 자신 아래로는 내릴 수 없습니다.'); return; }
+    // [거버넌스] 표준 대분류에 없는 이름이면 도메인 표준으로 등록 제안 → 이후 비교/클러스터링 정합.
+    var norm=function(s){ return String(s||'').replace(/\s/g,'').toLowerCase(); };
+    var isStd=(S.stdCats||[]).some(function(s){ return norm(s)===norm(target); });
+    if(!isStd){
+      if(confirm("‘"+target+"’는 도메인 표준 대분류에 없습니다.\n표준으로 등록할까요?\n(등록해야 다른 업체 비교·클러스터링에 정합됩니다. 도메인 표준에 추가됨)")){
+        fetch('/submissions/'+S.subId+'/category/register-standard', {method:'POST',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:target})})
+         .then(function(r){return r.json();}).then(function(){ reparentBranch(path, target); })
+         .catch(function(){ reparentBranch(path, target); });
+        return;
+      }
+    }
     reparentBranch(path, target);
   }
 
