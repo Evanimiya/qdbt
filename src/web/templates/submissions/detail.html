@@ -79,9 +79,10 @@
       {% endif %}
       {% if has_role('manager') and sub.extraction_status == 'done' %}
       <!-- 통화·환율 패널: 시작→기준(KRW) 쌍 명기, 역산확인/수동/미확인 구분 -->
+      {% set _known_cur = ['USD','EUR','JPY','CNY','KRW'] %}
       <div class="w-full mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
         <div class="text-sm font-semibold text-blue-900 mb-2 break-ko">💱 통화·환율
-          <span class="text-xs font-normal text-blue-600">— 최종 비교 통화: KRW (환율 = 통화 → KRW)</span>
+          <span class="text-xs font-normal text-blue-600">— 타겟(비교) 통화: KRW · 환율 = 원화 환산율(1 외화 = ? 원)</span>
         </div>
         <div class="flex flex-wrap gap-2">
           {% for cur, info in fx_rates.items() %}
@@ -90,10 +91,11 @@
                 class="flex items-center gap-1.5 bg-white rounded-lg border px-2.5 py-1.5
                        {{ 'border-red-300' if info.source == 'missing' else 'border-gray-200' }}">
             <input type="hidden" name="currency" value="{{ cur }}">
-            <span class="text-xs font-bold text-gray-800">{{ cur }} → KRW</span>
-            <input type="text" name="rate" value="{{ '{:,.2f}'.format(info.rate) if info.rate else '' }}"
-                   placeholder="환율 입력" style="width:90px"
+            <span class="text-xs font-bold text-gray-800">1 {{ cur }} =</span>
+            <input type="number" step="any" min="0" name="rate" value="{{ '{:.2f}'.format(info.rate) if info.rate else '' }}"
+                   placeholder="숫자" style="width:84px"
                    class="text-xs border rounded px-1.5 py-0.5 text-right">
+            <span class="text-xs font-bold text-gray-500">원(KRW)</span>
             {% if info.source == 'extracted' %}
             <span class="text-[10px] font-bold text-green-700 bg-green-100 rounded-full px-1.5 py-0.5">✓ 역산확인</span>
             {% elif info.source == 'manual' %}
@@ -113,22 +115,28 @@
           </form>
           {% endif %}
           {% endfor %}
-          <!-- 통화 직접 추가: 통화가 감지되지 않은 견적서도 환율 명기 가능 -->
+          <!-- 통화 직접 추가: 주요 통화를 드롭다운으로 선택 + 원화 환산율(숫자) 입력 -->
           <form method="POST" action="{{ url_for('submissions.set_fx_rate', submission_id=sub.submission_id) }}"
-                onsubmit="return confirm('입력한 통화 → KRW 환율을 적용합니다. 해당 통화 항목이 있으면 원화가 재계산됩니다. 계속하시겠습니까?')"
+                onsubmit="return confirm('선택한 통화 → KRW 환율을 적용합니다. 해당 통화 항목이 있으면 원화가 재계산됩니다. 계속하시겠습니까?')"
                 class="flex items-center gap-1.5 bg-white rounded-lg border border-dashed border-blue-300 px-2.5 py-1.5">
-            <input type="text" name="currency" placeholder="통화 (예: USD)" maxlength="5"
-                   style="width:80px" class="text-xs border rounded px-1.5 py-0.5 uppercase"
-                   oninput="this.value=this.value.toUpperCase()">
-            <span class="text-xs font-bold text-gray-500">→ KRW</span>
-            <input type="text" name="rate" placeholder="환율 입력" style="width:90px"
+            <span class="text-xs font-bold text-gray-500">1</span>
+            <select name="currency" class="text-xs border rounded px-1 py-0.5 font-semibold text-blue-700"
+                    onchange="var t=this.form.querySelector('.cur-custom'); if(this.value==='__c__'){t.style.display='';t.name='currency';this.name='';}else{t.style.display='none';t.name='';this.name='currency';}">
+              {% for c in _known_cur %}{% if c not in fx_rates %}<option value="{{ c }}">{{ c }}</option>{% endif %}{% endfor %}
+              <option value="__c__">직접입력…</option>
+            </select>
+            <input type="text" class="cur-custom text-xs border rounded px-1 py-0.5 uppercase" placeholder="예: THB"
+                   maxlength="5" style="display:none;width:64px" oninput="this.value=this.value.toUpperCase()">
+            <span class="text-xs font-bold text-gray-500">=</span>
+            <input type="number" step="any" min="0" name="rate" placeholder="숫자" style="width:84px"
                    class="text-xs border rounded px-1.5 py-0.5 text-right">
+            <span class="text-xs font-bold text-gray-500">원(KRW)</span>
             <button type="submit" class="text-xs bg-blue-500 text-white rounded px-2 py-0.5 hover:bg-blue-600">+ 추가</button>
           </form>
         </div>
-        <div class="text-[11px] text-blue-700 mt-1.5 break-ko">
+        <div class="text-[11px] text-blue-600 mt-1.5 break-ko">
           ✓ 역산확인 = 견적서의 통화·원화에서 자동 산출 · ⚠ 미확인 통화는 환율 입력 시 원화로 확정됩니다.
-          {% if not fx_rates %}감지된 외화가 없습니다 — 필요 시 통화를 직접 추가해 환율을 명기하세요.{% endif %}
+          {% if not fx_rates %}감지된 외화가 없습니다 — 필요 시 위에서 통화를 골라 원화 환산율을 입력하세요.{% endif %}
         </div>
       </div>
       {% endif %}
@@ -168,18 +176,6 @@
           🔄 재추출
         </button>
       </form>
-      {% if sub.file_format == 'xlsx' %}
-      <a href="{{ url_for('submissions.column_map', submission_id=sub.submission_id) }}"
-         class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
-                px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
-        🧩 열 매핑 추출
-      </a>
-      {% endif %}
-      <a href="{{ url_for('submissions.match', submission_id=sub.submission_id) }}"
-         class="text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
-                px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
-        🔗 카탈로그 매칭
-      </a>
       {% endif %}
       {% if has_role('manager') and sub.extraction_status in ('done', 'failed') %}
       <form method="POST" action="{{ url_for('submissions.reset', submission_id=sub.submission_id) }}"
@@ -208,6 +204,23 @@
           📎 파일 다시 올리기
         </button>
       </form>
+      {% endif %}
+      {% if has_role('manager') and sub.extraction_status == 'done' %}
+      <!-- [추출화면 A] 추출/매칭 방식은 다음 줄로 분리(데이터 관리 버튼과 구분) -->
+      <div class="basis-full h-0 m-0 p-0"></div>
+      {% if sub.file_format == 'xlsx' %}
+      <a href="{{ url_for('submissions.column_map', submission_id=sub.submission_id) }}"
+         class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
+        🧩 열 매핑 추출
+      </a>
+      {% endif %}
+      <a href="{{ url_for('submissions.match', submission_id=sub.submission_id) }}"
+         title="추출된 품목을 표준 카탈로그 품목과 연결(매칭)해 단가 이력·업체 간 비교에 반영하는 단계입니다."
+         class="text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold
+                px-3 py-1.5 rounded-lg transition-colors break-ko whitespace-nowrap">
+        🔗 카탈로그 매칭 <span class="font-normal text-blue-400">(표준 품목 연결)</span>
+      </a>
       {% endif %}
       <span class="text-xs px-2 py-1 rounded-full
         {% if sub.extraction_status=='done' %}bg-green-100 text-green-700
@@ -325,6 +338,18 @@
 </div>
 {% endif %}
 
+<!-- ══ [T7] 다중시트 연계 화면 진입 (미연계 없어도 항상 노출) ══ -->
+{% if items %}
+<div class="flex items-center justify-between flex-wrap gap-2 bg-sky-50 border border-sky-200 rounded-xl p-3 mb-5">
+  <div class="text-sm break-ko" style="color:#0c4a6e;">
+    🧩 <b>다중시트 연계</b> — 시트별로 흩어진 분류를 하나의 트리로 잇고 확정합니다.
+    {% if residual_view %}<span style="color:#b45309;">미연계 {{ residual_view|length }}건</span>{% else %}<span style="color:#256b45;">미연계 없음 · 재검토·확정 가능</span>{% endif %}
+  </div>
+  <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}"
+     class="text-sm bg-sky-700 text-white font-semibold rounded-lg px-4 py-1.5 hover:bg-sky-800 break-ko" style="text-decoration:none">🧩 연계 화면 열기 →</a>
+</div>
+{% endif %}
+
 <!-- ══ [T7] 스티칭 미해결(residual) 검토 ══ -->
 {% if residual_view %}
 <div class="bg-amber-50 rounded-xl shadow-sm border border-amber-300 p-4 sm:p-5 mb-5" id="residualPanel">
@@ -384,6 +409,36 @@
 </div>
 {% endif %}
 
+<!-- ══ 추출 기준정보: 장비 대수 · 대당 단가 ══ -->
+{% if items %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5">
+  <div class="flex items-center flex-wrap gap-x-6 gap-y-2">
+    <div class="text-sm font-bold text-gray-900 break-ko">📐 추출 기준정보</div>
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-600 break-ko">장비 대수</label>
+      {% if has_role('manager') %}
+      <input type="number" id="unitCountInput" min="1" step="1" value="{{ sub.unit_count or 1 }}"
+             onchange="saveUnitCount(this.value)"
+             class="w-20 text-right text-sm border border-gray-300 rounded-lg px-2 py-1">
+      {% else %}<span class="font-semibold">{{ sub.unit_count or 1 }}</span>{% endif %}
+      <span class="text-gray-600 break-ko">대</span>
+    </div>
+    <div class="text-sm">
+      <span class="text-gray-600 break-ko">총액(n대 기준)</span>
+      <span id="basisTotal" class="font-semibold text-gray-900 ml-1"></span>
+    </div>
+    <div class="text-sm">
+      <span class="text-gray-600 break-ko">대당 단가</span>
+      <span id="perUnitPrice" class="font-bold text-blue-700 ml-1"></span>
+      <span class="text-xs text-gray-400 break-ko">= 총액 ÷ 대수</span>
+    </div>
+  </div>
+  <p class="text-[11px] text-gray-400 mt-1.5 break-ko">
+    ※ Special nego는 <b>n대 총계</b>에 반영됩니다. 대당 단가에는 nego 금액도 <b>÷{{ sub.unit_count or 1 }}</b>로 균등 배분되어 포함됩니다.
+  </p>
+</div>
+{% endif %}
+
 <!-- ══ 비교 단위 트리 (그룹별 깊이) ══ -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5">
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
@@ -397,12 +452,15 @@
     <div class="flex items-center gap-2">
       <button onclick="treeExpandAll()" class="text-xs border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 break-ko">모두 펼치기</button>
       <button onclick="treeCollapseAll()" class="text-xs border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 break-ko">모두 접기</button>
-      <select id="fuLevel" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5">
+      <select id="fuLevel" onchange="treeExpandToLevel(parseInt(this.value))"
+              title="선택한 분류 레벨까지 트리를 펼칩니다. 펼치지 않은 가지가 비교 단위가 됩니다."
+              class="text-xs border border-gray-300 rounded-lg px-2 py-1.5">
+        <option value="1">대분류</option>
         <option value="2">중분류</option>
         <option value="3" selected>소분류</option>
+        <option value="4">세분류</option>
+        <option value="5">품명</option>
       </select>
-      <button onclick="setFunctionUnit()" title="지정 레벨(기능단위)로 비교 단위를 자동 설정 → 업체 간 기능단위 비교/카탈로그에 반영"
-              class="text-xs bg-emerald-700 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-800 break-ko">기능단위로 비교 설정</button>
       <button onclick="saveCompareUnits(this)" class="text-xs bg-blue-700 text-white rounded-lg px-3 py-1.5 hover:bg-blue-800 break-ko">비교 단위 저장</button>
     </div>
   </div>
@@ -960,6 +1018,7 @@ function initTreeOpen() {
 
 const wonKR = function(n){ return Math.round(n||0).toLocaleString('ko-KR'); };
 
+const UNIT_COUNT = {{ sub.unit_count or 1 }};
 function renderTree() {
   const body = document.getElementById('treeBody');
   if (!body) return;
@@ -967,6 +1026,21 @@ function renderTree() {
   let total = 0;
   TREE_DATA.tree.forEach(function(node){ total += node.amount; renderNode(node, body, 0); });
   document.getElementById('treeTotal').textContent = wonKR(total);
+  // [추출 기준정보] 대당 단가 = 총액(n대 총계, nego 포함) ÷ 대수
+  const n = Math.max(1, UNIT_COUNT);
+  const bt = document.getElementById('basisTotal');
+  const pu = document.getElementById('perUnitPrice');
+  if (bt) bt.textContent = wonKR(total) + ' 원';
+  if (pu) pu.textContent = wonKR(total / n) + ' 원' + (n > 1 ? ' /대' : '');
+}
+function saveUnitCount(v){
+  var n = Math.max(1, parseInt(v) || 1);
+  fetch('/submissions/' + SUB_ID + '/unit-count', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({unit_count: n})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok) location.reload();
+  }).catch(function(e){ alert('저장 실패: ' + e); });
 }
 
 function renderNode(node, container, depth) {
@@ -1096,6 +1170,17 @@ function treeExpandAll(){
   walk(TREE_DATA.tree); renderTree();
 }
 function treeCollapseAll(){ treeOpen = {}; renderTree(); }
+// [비교트리 A·B] 선택한 분류 레벨(대=1…품명=5)까지 펼침. depth<lv 가지를 열고,
+//  그 레벨의 가지는 접힌 채 남겨 '비교 단위'가 되게 한다.
+function treeExpandToLevel(lv){
+  treeOpen = {};
+  (function walk(nodes){
+    nodes.forEach(function(n){
+      if(!n.is_leaf){ if(n.depth < lv) treeOpen[n.path] = true; walk(n.children); }
+    });
+  })(TREE_DATA.tree);
+  renderTree();
+}
 
 function saveCompareUnits(btn){
   const units = collectCompareUnits();
