@@ -16,9 +16,11 @@
   .lkc-svg path.auto{stroke:#1C7293;stroke-dasharray:4 3;opacity:.55}
   .lkc-svg path.manual{stroke:#3FA372;opacity:.85}
   .lkc-svg path.residual{stroke:#D96C5F;stroke-dasharray:4 3;opacity:.85}
-  .lkc-cols{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;position:relative;z-index:2}
-  .lkc-col{flex:1 0 210px;min-width:210px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px}
-  .lkc-col-h{font-size:11px;font-weight:800;color:#fff;background:#1C7293;padding:5px 8px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.04em}
+  /* [고정 그리드] 레벨 열 폭 고정 → 노드 폭이 이동/접기에도 변하지 않음. 가로 스크롤. */
+  .lkc-cols{display:flex;gap:12px;overflow-x:auto;padding-bottom:8px;position:relative;z-index:2}
+  .lkc-col{flex:0 0 var(--lkc-colw,230px);width:var(--lkc-colw,230px);background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px}
+  .lkc-col-h{position:sticky;top:0;z-index:3;font-size:11px;font-weight:800;color:#fff;background:#1C7293;padding:6px 8px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.04em}
+  .lkc-col-h .lkc-col-n{display:block;font-size:9px;font-weight:600;opacity:.75}
   .lkc-node{background:#fff;border:1px solid #e2e8f0;border-left:3px solid #94a3b8;border-radius:8px;padding:7px 9px 7px 10px;margin-bottom:8px;font-size:12.5px;position:relative;transition:.1s}
   .lkc-node.branch{cursor:pointer;border-left-color:#1C7293}
   .lkc-node.branch[draggable="true"]{cursor:grab}
@@ -30,6 +32,8 @@
   .lkc-node.manual{border-left-color:#3FA372}
   .lkc-node.excluded{opacity:.55}
   .lkc-node.sel{outline:2px solid #0ea5e9;outline-offset:1px}
+  .lkc-node.multi{outline:2px solid #7c3aed;outline-offset:1px;background:#f5f3ff}
+  .lkc-node.multi::before{content:'✓';position:absolute;left:-7px;top:-7px;width:16px;height:16px;background:#7c3aed;color:#fff;border-radius:50%;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;z-index:4}
   .lkc-node.kin-anc{background:#eef6ff}
   .lkc-node.kin-desc{background:#f0fdf4}
   .lkc-node.dragging{opacity:.35}
@@ -58,7 +62,26 @@
 window.LKC = (function(){
   var S = { mount:null, tree:[], nodes:[], byPath:{}, maxDepth:0,
             residual:new Set(), manual:new Set(), levels:[], subId:'',
-            collapsed:{}, sel:null, onlyRed:false, drag:null, readonly:false };
+            collapsed:{}, sel:null, selected:new Set(), onlyRed:false, drag:null, readonly:false };
+
+  // [상태 보존] 접힘/선택/스크롤을 sessionStorage에 저장·복원(이동·리로드 후 유지).
+  function viewKey(){ return 'lkc:' + S.subId + ':' + S.mount; }
+  function saveViewState(){
+    try{
+      var cols=document.getElementById(S.mount); cols=cols&&cols.querySelector('.lkc-cols');
+      sessionStorage.setItem(viewKey(), JSON.stringify({
+        collapsed:S.collapsed, sel:S.sel, scroll: cols?cols.scrollLeft:0 }));
+    }catch(e){}
+  }
+  function restoreViewState(){
+    try{
+      var raw=sessionStorage.getItem(viewKey()); if(!raw) return null;
+      var v=JSON.parse(raw);
+      if(v.collapsed) S.collapsed=v.collapsed;
+      if(v.sel) S.sel=v.sel;
+      return v;
+    }catch(e){ return null; }
+  }
 
   function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function fmt(v){ return Math.round(v||0).toLocaleString('ko-KR'); }
@@ -106,6 +129,9 @@ window.LKC = (function(){
   function render(){
     var root=document.getElementById(S.mount);
     if(!root) return;
+    // 스크롤 위치 보존(리렌더로 innerHTML 재생성 시 초기화 방지)
+    var prevScroll = 0; var prevCols = root.querySelector('.lkc-cols');
+    if(prevCols) prevScroll = prevCols.scrollLeft;
     // 보이는 노드(조상 접힘/필터 제외) → 열별 그룹
     var visible = S.nodes.filter(function(n){
       if(ancestorCollapsed(n)) return false;
@@ -113,22 +139,29 @@ window.LKC = (function(){
       return true;
     });
     var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
-    var maxD = Math.max.apply(null, [0].concat(Object.keys(cols).map(Number)));
+    // [고정 그리드] 전체 트리 최대 깊이까지 열을 항상 렌더 → 접기/이동에도 그리드 안정.
+    var maxD = S.maxDepth;
 
     var html='<div class="lkc-canvas'+(S.readonly?' lkc-ro':'')+'"><svg class="lkc-svg"></svg><div class="lkc-cols">';
     for(var d=0; d<=maxD; d++){
-      html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))+'</div>';
+      var cnt=(cols[d]||[]).length;
+      html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))
+            + '<span class="lkc-col-n">'+cnt+'개</span></div>';
       (cols[d]||[]).forEach(function(n){ html += nodeCard(n); });
       html += '</div>';
     }
     html += '</div></div>';
-    root.innerHTML = html || '<div class="lkc-empty">표시할 항목이 없습니다.</div>';
+    root.innerHTML = html;
+    var newCols = root.querySelector('.lkc-cols');
+    if(newCols && prevScroll) newCols.scrollLeft = prevScroll;
     bind(root);
+    saveViewState();   // 접힘/선택/스크롤을 매 렌더 시 보존 → 이동·리로드 후 복원
     requestAnimationFrame(function(){ drawLinks(root); });
   }
 
   function nodeCard(n){
-    var cls=['lkc-node', n.is_leaf?'leaf':'branch', n.status, kinClass(n)].join(' ');
+    var multi = S.selected.has(n.path) ? 'multi' : '';
+    var cls=['lkc-node', n.is_leaf?'leaf':'branch', n.status, kinClass(n), multi].join(' ');
     var tag='';
     if(n.is_leaf){
       if(n.status==='residual') tag='<span class="lkc-tag no">미연계</span>';
@@ -193,11 +226,19 @@ window.LKC = (function(){
       b.addEventListener('click', function(e){ e.stopPropagation();
         var p=b.dataset.toggle; S.collapsed[p]=!S.collapsed[p]; render(); });
     });
-    // 선택 하이라이트
+    // 선택: 일반 클릭=단일 강조(상·하위), Ctrl/Cmd/Shift-클릭=다중 선택 토글(편집 모드).
     root.querySelectorAll('.lkc-node').forEach(function(el){
       el.addEventListener('click', function(e){
         if(e.target.closest('.lkc-act')||e.target.closest('.lkc-toggle')) return;
-        S.sel = (S.sel===el.dataset.path ? null : el.dataset.path); render();
+        var p=el.dataset.path;
+        if(!S.readonly && (e.ctrlKey||e.metaKey||e.shiftKey)){
+          if(S.selected.has(p)) S.selected.delete(p); else S.selected.add(p);
+          S.sel=null;
+        } else {
+          S.selected.clear();
+          S.sel = (S.sel===p ? null : p);
+        }
+        render();
       });
     });
     if(S.readonly) return;   // 보기 전용 — 편집(액션·드래그) 미배선
@@ -211,35 +252,70 @@ window.LKC = (function(){
     // 드래그드롭:
     //  · 잎(leaf) → 상위 가지 : reassign-path(항목 재지정)
     //  · 가지(branch) → 다른 상위 가지 : reparent-branch(서브트리 통째 이동)
+    // 드래그 시작: 다중 선택에 포함된 노드를 끌면 선택 전체가 payload(일괄 이동).
+    function startDrag(el, e){
+      var p=el.dataset.path;
+      if(S.selected.has(p) && S.selected.size>1){ S.drag={kind:'multi', paths:Array.from(S.selected)}; }
+      else { var n=S.byPath[p]; S.drag = n && n.is_leaf ? {kind:'leaf', item:el.dataset.item, path:p} : {kind:'branch', path:p}; }
+      el.classList.add('dragging'); e.dataTransfer.effectAllowed='move';
+      try{e.dataTransfer.setData('text/plain',p);}catch(_){}
+    }
     root.querySelectorAll('.lkc-node.leaf[data-item]').forEach(function(el){
-      el.addEventListener('dragstart', function(e){ S.drag={kind:'leaf', item:el.dataset.item, path:el.dataset.path};
-        el.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',el.dataset.item);}catch(_){} });
+      el.addEventListener('dragstart', function(e){ startDrag(el, e); });
       el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
     });
     root.querySelectorAll('.lkc-node.branch').forEach(function(el){
-      // 가지 자체가 드래그 소스
-      el.addEventListener('dragstart', function(e){ S.drag={kind:'branch', path:el.dataset.path};
-        el.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',el.dataset.path);}catch(_){} });
+      el.addEventListener('dragstart', function(e){ startDrag(el, e); });
       el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
-      // 그리고 드롭 대상
+      // 드롭 대상(모든 가지)
       el.addEventListener('dragover', function(e){ if(S.drag && canDropOn(S.drag, el.dataset.path)){ e.preventDefault(); el.classList.add('drop-ok'); } });
       el.addEventListener('dragleave', function(){ el.classList.remove('drop-ok'); });
       el.addEventListener('drop', function(e){ e.preventDefault(); el.classList.remove('drop-ok');
         if(!S.drag) return; var d=S.drag; var target=el.dataset.path; S.drag=null;
         if(!canDropOn(d, target)) return;
-        if(d.kind==='leaf') reassign(d.item, target);
+        if(d.kind==='multi') bulkReparent(d.paths, target);
+        else if(d.kind==='leaf') reassign(d.item, target);
         else reparentBranch(d.path, target); });
     });
   }
 
   // 드롭 가능 판정: 잎은 어떤 가지로도 OK. 가지는 자기 자신/자기 하위엔 불가(순환 방지).
+  //  다중은 대상이 선택 항목 자신·그 하위(가지)면 불가.
   function canDropOn(drag, targetPath){
     if(!drag || !targetPath) return false;
     if(drag.kind==='branch'){
       if(targetPath===drag.path) return false;
-      if(targetPath.indexOf(drag.path + ' > ')===0) return false;   // 하위로 드롭 금지
+      if(targetPath.indexOf(drag.path + ' > ')===0) return false;
+    } else if(drag.kind==='multi'){
+      for(var i=0;i<drag.paths.length;i++){
+        var p=drag.paths[i];
+        if(targetPath===p) return false;
+        var n=S.byPath[p];
+        if(n && !n.is_leaf && targetPath.indexOf(p + ' > ')===0) return false;
+      }
     }
     return true;
+  }
+
+  // 다중 일괄 이동: 선택 항목 각각을 잎/가지로 분기해 서버 한 번에 재부모화(원자적).
+  //  중첩 선택(가지+그 하위)은 상위 가지만 이동(하위는 함께 따라감).
+  function bulkReparent(paths, target){
+    var items=[];
+    paths.forEach(function(p){
+      var n=S.byPath[p]; if(!n) return;
+      // 다른 선택 가지의 하위면 스킵(그 가지와 함께 이동)
+      var nested=paths.some(function(o){ var on=S.byPath[o]; return o!==p && on && !on.is_leaf && p.indexOf(o+' > ')===0; });
+      if(nested) return;
+      if(!canDropOn({kind:n.is_leaf?'leaf':'branch', path:p, item:n.item_id}, target)) return;
+      items.push({kind:n.is_leaf?'leaf':'branch', path:p, item_id:n.item_id||null});
+    });
+    if(!items.length){ alert('이동할 항목이 없습니다(대상이 선택 항목 자신/하위).'); return; }
+    if(!confirm(items.length+'개 항목을 다음 분류 하위로 일괄 이동할까요? (하위 전체 포함)\n\n대상: '+target)) return;
+    saveViewState();
+    fetch('/submissions/'+S.subId+'/link/bulk-reparent', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({target:target, items:items})})
+     .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('일괄 이동 실패: '+(d.error||'')); })
+     .catch(function(e){ alert('오류: '+e); });
   }
 
   function reparentBranch(branchPath, targetPath){
@@ -249,6 +325,7 @@ window.LKC = (function(){
     var collide = S.nodes.some(function(n){ return n.parent===targetPath && n.name===rootName; });
     var merge = false;
     if(collide){ merge = confirm("대상에 같은 이름 '"+rootName+"'이 이미 있습니다.\n\n[확인] 병합(합치기)   /   [취소] 별도 자식으로 추가"); }
+    saveViewState();
     fetch('/submissions/'+S.subId+'/tree/reparent-branch', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({path:branchPath, target:targetPath, merge:merge})})
      .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('이동 실패: '+(d.error||'')); })
@@ -257,6 +334,7 @@ window.LKC = (function(){
 
   function reassign(itemId, path){
     if(!confirm('이 항목을 다음 분류로 이어붙일까요? (수기 연계)\n\n'+path)) return;
+    saveViewState();
     fetch('/submissions/'+S.subId+'/item/'+itemId+'/reassign-path', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path:path})
     }).then(function(r){return r.json();}).then(function(d){
@@ -267,6 +345,7 @@ window.LKC = (function(){
     var msg={delete:'이 항목을 영구 삭제할까요?', exclude:'이 항목을 합계에서 제외할까요? (복원 가능)',
              residual:'이 항목을 미연계(빨강)로 되돌릴까요?', unresidual:'이 항목을 연계 완료로 표시할까요?'}[action];
     if(msg && !confirm(msg)) return;
+    saveViewState();
     fetch('/submissions/'+S.subId+'/link/node', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({item_id:itemId, action:action})})
      .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
@@ -274,6 +353,7 @@ window.LKC = (function(){
   }
   function delBranch(path){
     if(!confirm('이 가지와 하위 전체를 삭제할까요?\n\n'+path)) return;
+    saveViewState();
     fetch('/submissions/'+S.subId+'/tree/delete-branch', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({path:path})})
      .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
@@ -285,11 +365,15 @@ window.LKC = (function(){
       S.mount=cfg.mount; S.tree=cfg.tree||[]; S.levels=cfg.levels||[]; S.subId=cfg.subId||'';
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
       S.readonly=!!cfg.readonly;
-      S.collapsed={}; S.sel=null; S.onlyRed=false;
+      S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false;
       flatten();
-      // 초기: 전부 펼침(캔버스는 열로 보이므로). onlyRed 필터는 컨트롤로.
+      // [상태 보존] 이전(이동 전) 접힘/선택/스크롤 복원. 없으면 기본(전부 펼침).
+      var saved=restoreViewState();
       render();
-      var self=this;
+      if(saved && saved.scroll){
+        var cols=document.getElementById(S.mount); cols=cols&&cols.querySelector('.lkc-cols');
+        if(cols){ cols.scrollLeft=saved.scroll; saveViewState(); }  // 복원한 스크롤 재저장
+      }
       window.addEventListener('resize', function(){ var r=document.getElementById(S.mount); if(r) drawLinks(r); });
     },
     refresh: function(){ render(); },

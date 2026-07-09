@@ -246,7 +246,8 @@ function lkGo(s){
       ? '<b>미연계(빨강 파선)</b> 잎을 상위 분류 카드로 <b>드래그</b>하면 연결(초록)됩니다. 카드 [＋]/[－]로 하위 레벨 접기.'
       : '전 항목 연계 완료. 카드를 드래그해 재지정하거나 [＋]/[－]로 살펴보고 확정하세요.';
     lkEnsureCanvas();
-    requestAnimationFrame(function(){ LKC.expandAll(); });  // 초기 전체 표시 + 링크 재계산
+    // 패널이 보이게 된 뒤 재렌더(숨김 상태에서 계산된 링크·스크롤 보정, 접힘상태 유지).
+    requestAnimationFrame(function(){ LKC.refresh(); });
   }
 }
 

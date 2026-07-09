@@ -1810,6 +1810,95 @@ def reparent_branch(submission_id):
     return jsonify({"ok": True, "moved": n, "new_base": new_base})
 
 
+@bp.route("/<submission_id>/link/bulk-reparent", methods=["POST"])
+@require_role("manager")
+def bulk_reparent(submission_id):
+    """[연계 캔버스] 다중 선택 항목(잎/가지 혼합)을 한 대상 하위로 원자적 일괄 이동.
+
+    payload: {target: 대상 상위 경로, items: [{kind:'leaf'|'branch', path, item_id}]}
+      · 잎: path=target(대상 직계 자식). 가지: 프리픽스 교체(서브트리 통째).
+      · 순환 방지(가지가 target 자신/하위면 skip). 한 트랜잭션에서 처리 → 원자적.
+      · 금액 무변경 → 총액 불변(Δ=0). 이동 항목 manual 표시 + residual 해제.
+      · 동명 충돌은 자연 병합(프리픽스 교체) — 일괄은 병합 기본(완전중복은 dedup 관할).
+    """
+    import json as _json
+    from db.queries import get_conn, recompute_subtotal
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    target = (p.get("target") or "").strip()
+    moves = p.get("items") or []
+    if not target or not isinstance(moves, list) or not moves:
+        return jsonify({"ok": False, "error": "target·items가 필요합니다."}), 200
+    SEP = " > "
+    moved_ids, moved_rows, total_moved = [], set(), 0
+    with get_conn() as c:
+        for mv in moves:
+            kind = mv.get("kind")
+            path = (mv.get("path") or "").strip()
+            if not path:
+                continue
+            if kind == "branch":
+                if target == path or target.startswith(path + SEP):
+                    continue   # 순환 방지
+                root = path.split(SEP)[-1]
+                nb = target + SEP + root
+                rows = c.execute(
+                    "SELECT item_id, path, line_no FROM submission_items "
+                    "WHERE submission_id=? AND (path=? OR path LIKE ?)",
+                    (submission_id, path, path + SEP + "%")).fetchall()
+                for r in rows:
+                    d = dict(r)
+                    newp = nb + (d["path"] or "")[len(path):]
+                    parts = [x for x in newp.split(SEP) if x.strip()]
+                    c.execute("UPDATE submission_items SET path=?, depth=?, category=? "
+                              "WHERE item_id=?",
+                              (newp, len(parts), parts[0] if parts else "기타", d["item_id"]))
+                    moved_ids.append(d["item_id"])
+                    ln = str(d.get("line_no") or "")
+                    if ln[1:].isdigit():
+                        moved_rows.add(int(ln[1:]))
+                    total_moved += 1
+            else:   # leaf
+                iid = mv.get("item_id")
+                if not iid:
+                    continue
+                row = c.execute("SELECT line_no FROM submission_items "
+                                "WHERE item_id=? AND submission_id=?",
+                                (iid, submission_id)).fetchone()
+                if not row:
+                    continue
+                parts = [x for x in target.split(SEP) if x.strip()]
+                c.execute("UPDATE submission_items SET path=?, depth=?, category=? "
+                          "WHERE item_id=? AND submission_id=?",
+                          (target, len(parts), parts[0] if parts else "기타",
+                           iid, submission_id))
+                moved_ids.append(iid)
+                ln = str(dict(row).get("line_no") or "")
+                if ln[1:].isdigit():
+                    moved_rows.add(int(ln[1:]))
+                total_moved += 1
+    try:
+        subd = dict(get_submission(submission_id))
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+        ov = mc.get("link_overrides") or {}
+        for iid in moved_ids:
+            ov[iid] = "manual"
+        mc["link_overrides"] = ov
+        st = mc.get("stitch") or {}
+        resids = st.get("residuals") or []
+        if resids and moved_rows:
+            st["residuals"] = [r for r in resids if r.get("row") not in moved_rows]
+            st["n_residuals"] = len(st["residuals"])
+            mc["stitch"] = st
+        update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    except Exception:
+        pass
+    recompute_subtotal(submission_id)
+    return jsonify({"ok": True, "moved": total_moved})
+
+
 @bp.route("/<submission_id>/item/<item_id>/delete", methods=["POST"])
 @require_role("manager")
 def delete_item(submission_id, item_id):
