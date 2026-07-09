@@ -973,19 +973,22 @@ def insert_items_bulk(submission_id, items: list[dict]):
                 c.execute("""
                     INSERT INTO submission_items
                         (item_id, submission_id, line_no, sort_order, depth, is_header,
-                         category, path, name_raw, name_normalized, spec,
+                         category, path, name_raw, name_normalized, spec, maker,
                          quantity, unit, unit_price, unit_price_orig,
-                         unit_price_currency, fx_rate_used, amount, amount_orig, is_nego)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         unit_price_currency, fx_rate_used, amount, amount_orig, is_nego,
+                         merge_status)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     iid, submission_id,
                     it.get("line_no"), i, it.get("depth", 0),
-                    1 if it.get("is_category_header") else 0,
+                    # [중복 병합] 병합 제외행은 is_header=1로 저장 → 모든 합계 쿼리에서 자동 제외.
+                    1 if (it.get("is_category_header") or it.get("merge_status")) else 0,
                     it.get("category"),
                     it.get("path") or it.get("parent_path", ""),
                     _strip_indent_prefix(it.get("name_raw") or ""),
                     it.get("name_normalized"),
                     it.get("spec"),
+                    it.get("maker"),
                     _to_number(it.get("quantity")),
                     it.get("unit"),
                     _to_number(it.get("unit_price")),
@@ -995,6 +998,7 @@ def insert_items_bulk(submission_id, items: list[dict]):
                     _to_number(it.get("amount")),
                     _to_number(it.get("amount_orig")),
                     1 if it.get("is_nego") else 0,
+                    it.get("merge_status"),
                 ))
             except Exception as e:
                 # 어느 항목에서 터졌는지 명확히 출력
@@ -1062,17 +1066,24 @@ def build_items_tree(submission_id):
                     "name": part, "path": " > ".join(acc),
                     "amount": 0.0, "n_items": 0, "depth": i + 1,
                     "_children": {}, "leaf_data": None,
+                    "_makers": set(), "_specs": set(),
                     "_order": order_counter[0],
                 }
                 order_counter[0] += 1
             cur[part]["amount"] += amt
             cur[part]["n_items"] += 1
+            # [개선 6] 가지(레벨)의 대표 메이커/규격 집계 — 하위 잎들의 값 모음.
+            if d.get("maker"):
+                cur[part]["_makers"].add(str(d.get("maker")).strip())
+            if d.get("spec"):
+                cur[part]["_specs"].add(str(d.get("spec")).strip())
             if i == len(parts) - 1:
                 cur[part]["leaf_data"] = {
                     "item_id": d.get("item_id"),
                     "line_no": d.get("line_no"),
                     "name": d.get("name_normalized") or d.get("name_raw") or "",
                     "spec": d.get("spec"),
+                    "maker": d.get("maker"),
                     "qty": d.get("quantity"), "unit": d.get("unit"),
                     "unit_price": d.get("unit_price"), "amount": amt,
                 }
@@ -1082,11 +1093,16 @@ def build_items_tree(submission_id):
         out = []
         for node in sorted(nd.values(), key=lambda n: n["_order"]):
             children = to_list(node["_children"])
+            _mk = node.get("_makers") or set()
+            _sp = node.get("_specs") or set()
+            maker_rep = (next(iter(_mk)) if len(_mk) == 1 else ("혼합" if len(_mk) > 1 else None))
+            spec_rep = (next(iter(_sp)) if len(_sp) == 1 else None)
             out.append({
                 "name": node["name"], "path": node["path"],
                 "amount": node["amount"], "n_items": node["n_items"],
                 "depth": node["depth"], "is_leaf": len(children) == 0,
                 "leaf_data": node["leaf_data"], "children": children,
+                "maker_rep": maker_rep, "spec_rep": spec_rep,
             })
         return out
 

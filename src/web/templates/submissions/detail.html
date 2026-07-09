@@ -303,6 +303,87 @@
 </div>
 {% endif %}
 
+<!-- ══ [중복 병합] 요약↔상세 정리 리포트 ══ -->
+{% set _rec = stitch_meta.reconciliation if stitch_meta else None %}
+{% if _rec and (_rec.rollups or _rec.duplicates) %}
+<div class="bg-emerald-50 rounded-xl border border-emerald-300 p-4 mb-5">
+  <div class="text-sm font-bold break-ko" style="color:#065f46;">
+    ✓ 중복 병합: 견적서(요약)와 상세의 중복 계상을 정리했습니다 <span class="font-normal">(총액 불변)</span>
+  </div>
+  <div class="text-[12px] text-emerald-800 break-ko mt-1">
+    {% if _rec.rollups %}요약행 <b>{{ _rec.rollups|length }}건</b>이 상세 잎 합계와 일치해 총액에서 제외됨.{% endif %}
+    {% if _rec.duplicates %} 완전중복 잎 <b>{{ _rec.duplicates }}건</b> 제거됨.{% endif %}
+  </div>
+  {% if _rec.rollups %}
+  <ul class="text-[11px] text-gray-600 break-ko mt-1.5 space-y-0.5">
+    {% for r in _rec.rollups[:8] %}
+    <li>· <b>{{ r.name }}</b> ({{ "{:,.0f}".format(r.amount or 0) }}) = 상세 「{{ r.matched_category }}」 합 {{ "{:,.0f}".format(r.detail_sum or 0) }} → 요약으로 제외</li>
+    {% endfor %}
+    {% if _rec.rollups|length > 8 %}<li>· … 외 {{ _rec.rollups|length - 8 }}건</li>{% endif %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ══ [T7] 스티칭 미해결(residual) 검토 ══ -->
+{% if residual_view %}
+<div class="bg-amber-50 rounded-xl shadow-sm border border-amber-300 p-4 sm:p-5 mb-5" id="residualPanel">
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+    <h2 class="text-base font-bold break-ko" style="color:#92400e;">
+      🧩 다중시트 연계 — 사람 확인 필요 <span class="text-sm font-normal">({{ residual_view|length }}건)</span>
+    </h2>
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-xs break-ko" style="color:#b45309;">스티칭 모드: <b>{{ stitch_meta.mode }}</b></span>
+      <button onclick="suggestResiduals()" id="llmSuggestBtn"
+              class="text-xs bg-white border border-amber-400 text-amber-800 rounded-lg px-3 py-1.5 hover:bg-amber-100 break-ko">🤖 LLM 제안</button>
+      <button onclick="applyAllResiduals()" id="applyAllBtn"
+              class="text-xs bg-emerald-700 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-800 break-ko">✅ 제안 일괄 적용</button>
+      <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}"
+         class="text-xs bg-sky-700 text-white rounded-lg px-3 py-1.5 hover:bg-sky-800 break-ko" style="text-decoration:none">🧩 연계 화면(드래그)</a>
+    </div>
+  </div>
+  <div class="space-y-2">
+    {% for rv in residual_view %}
+    <div class="bg-white rounded-lg border border-amber-200 p-3" data-item="{{ rv.item_id }}"
+         style="border-left:3px solid #f87171">
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-semibold text-gray-900 break-ko">
+            <span style="font-size:9px;font-weight:700;color:#dc2626;background:#fee2e2;border-radius:9px;padding:1px 6px;margin-right:5px;vertical-align:middle;">미연계</span>{{ rv.name }}
+            {% if rv.amount %}<span class="text-[11px] font-normal text-gray-400" style="margin-left:6px;">{{ "{:,.0f}".format(rv.amount) }}</span>{% endif %}
+          </div>
+          <div class="text-[11px] text-amber-700 break-ko">⚠ {{ rv.reason_ko }}</div>
+          <div class="text-[11px] text-gray-500 break-ko">현재 경로: {{ rv.current_path or '(없음)' }}</div>
+        </div>
+        <div class="flex items-center gap-1.5" style="flex-wrap:wrap">
+          <select class="residual-sel text-xs border border-gray-300 rounded-lg px-2 py-1.5 break-ko"
+                  style="max-width:22rem" id="resel-{{ rv.item_id }}">
+            <option value="">— 올바른 상위 분류 선택 —</option>
+            {% for c in rv.candidates %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+          </select>
+          <button onclick="toggleCustomPath('{{ rv.item_id }}')"
+                  class="text-xs border border-gray-300 text-gray-600 rounded-lg px-2 py-1.5 hover:bg-gray-50 break-ko shrink-0" title="후보에 없는 표준분류를 직접 입력해 추가">➕ 표준분류 추가</button>
+          <button onclick="applyResidual('{{ rv.item_id }}')"
+                  class="text-xs bg-emerald-600 text-white font-semibold rounded-lg px-4 py-1.5 hover:bg-emerald-700 break-ko shrink-0">✔ 확정</button>
+        </div>
+      </div>
+      <div id="custom-{{ rv.item_id }}" class="mt-2 flex items-center gap-1.5" style="display:none;flex-wrap:wrap">
+        <input type="text" id="custin-{{ rv.item_id }}" placeholder="대분류 > 중분류 > 소분류 > 세분류"
+               class="text-xs border border-emerald-300 rounded-lg px-2 py-1.5 break-ko" style="min-width:22rem">
+        <button onclick="addCustomPath('{{ rv.item_id }}')"
+                class="text-xs bg-emerald-700 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-800 break-ko shrink-0">＋ 후보에 추가</button>
+        <span class="text-[11px] text-gray-400 break-ko">' > ' 로 계층 구분. 추가하면 모든 항목 목록에 나타납니다.</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="text-[11px] text-gray-500 mt-2 break-ko">
+    ① [🤖 LLM 제안]으로 상위 분류를 자동 채운 뒤 ② 각 항목 [✔ 확정] 또는 [✅ 제안 일괄 적용].
+    금액은 바뀌지 않고 분류 경로만 이동하며, 확정하면 목록에서 사라집니다.
+  </p>
+</div>
+{% endif %}
+
 <!-- ══ 비교 단위 트리 (그룹별 깊이) ══ -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5">
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
@@ -316,13 +397,19 @@
     <div class="flex items-center gap-2">
       <button onclick="treeExpandAll()" class="text-xs border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 break-ko">모두 펼치기</button>
       <button onclick="treeCollapseAll()" class="text-xs border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50 break-ko">모두 접기</button>
-      <button onclick="saveCompareUnits()" class="text-xs bg-blue-700 text-white rounded-lg px-3 py-1.5 hover:bg-blue-800 break-ko">비교 단위 저장</button>
+      <select id="fuLevel" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5">
+        <option value="2">중분류</option>
+        <option value="3" selected>소분류</option>
+      </select>
+      <button onclick="setFunctionUnit()" title="지정 레벨(기능단위)로 비교 단위를 자동 설정 → 업체 간 기능단위 비교/카탈로그에 반영"
+              class="text-xs bg-emerald-700 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-800 break-ko">기능단위로 비교 설정</button>
+      <button onclick="saveCompareUnits(this)" class="text-xs bg-blue-700 text-white rounded-lg px-3 py-1.5 hover:bg-blue-800 break-ko">비교 단위 저장</button>
     </div>
   </div>
   <div class="border border-gray-200 rounded-lg overflow-hidden">
     <div class="flex justify-between px-3 py-2 bg-gray-50 text-xs text-gray-500 font-medium">
       <span class="break-ko">분류 트리</span>
-      <span class="break-ko">금액 (하위 합산)</span>
+      <span class="break-ko">레벨별 단가 = 금액 (하위 잎 합산)</span>
     </div>
     <div id="treeBody"></div>
     <div class="flex justify-between px-3 py-2 bg-gray-50 border-t-2 border-gray-200 font-bold text-gray-900 text-sm">
@@ -446,6 +533,131 @@
 {% block scripts %}
 <script>
 const SUBMISSION_ID = "{{ sub.submission_id }}";
+
+/* ── 비교 단위 트리: 가지(분류) 삭제 ── */
+function deleteBranch(path){
+  if(!confirm('이 가지와 그 아래 모든 품목을 삭제할까요? 되돌릴 수 없습니다.\n\n' + path)) return;
+  fetch('/submissions/' + SUBMISSION_ID + '/tree/delete-branch', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ path: path })
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){ location.reload(); } else alert('삭제 실패: ' + (d.error||''));
+  }).catch(function(e){ alert('오류: ' + e); });
+}
+
+/* ── [T7] 기능단위로 비교 단위 자동 설정 ── */
+function setFunctionUnit(){
+  var lv = parseInt(document.getElementById('fuLevel').value || '3');
+  fetch('/submissions/'+SUBMISSION_ID+'/compare-units/function-unit', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ level: lv })
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){ alert('기능단위('+(lv===2?'중분류':'소분류')+') '+d.count+'개로 비교 단위를 설정했습니다.\n이제 비교 페이지에서 클러스터링하면 기능단위로 업체 비교됩니다.'); location.reload(); }
+    else alert('설정 실패: '+(d.error||''));
+  }).catch(function(e){ alert('오류: '+e); });
+}
+
+/* ── [T7] residual LLM/휴리스틱 제안 ── */
+function suggestResiduals(){
+  var btn = document.getElementById('llmSuggestBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '제안 중…'; }
+  fetch('/submissions/'+SUBMISSION_ID+'/residuals/suggest', {method:'POST'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn){ btn.disabled = false; btn.textContent = '🤖 LLM 제안'; }
+      if(!d.ok){ alert('제안 실패: '+(d.error||'')); return; }
+      var n = 0;
+      Object.keys(d.suggestions||{}).forEach(function(iid){
+        var sel = document.getElementById('resel-'+iid);
+        var sug = d.suggestions[iid];
+        if(sel && sug && sug.path){
+          sel.value = sug.path;
+          if(sel.value === sug.path){
+            n++;
+            var card = document.querySelector('#residualPanel [data-item="'+iid+'"]');
+            if(card && !card.querySelector('.sug-badge')){
+              var b = document.createElement('span');
+              b.className = 'sug-badge text-[10px] font-bold rounded-full px-1.5 py-0.5 ml-1';
+              b.style.cssText = 'background:'+(sug.method==='llm'?'#dbeafe;color:#1e40af':'#f3f4f6;color:#4b5563');
+              b.textContent = sug.method==='llm' ? 'LLM 제안' : '휴리스틱 제안';
+              (card.querySelector('.text-amber-700')||card).appendChild(b);
+            }
+          }
+        }
+      });
+      alert('제안 완료: '+n+'건 채움 ('+(d.method||'')+'). 확인 후 [적용]하세요.');
+    }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='🤖 LLM 제안';} alert('오류: '+e); });
+}
+
+/* ── [T7] 표준분류 직접 추가(후보에 없을 때) ── */
+function toggleCustomPath(itemId){
+  var box = document.getElementById('custom-'+itemId);
+  if(!box) return;
+  box.style.display = (box.style.display === 'none') ? 'flex' : 'none';
+  if(box.style.display === 'flex'){ var inp=document.getElementById('custin-'+itemId); if(inp) inp.focus(); }
+}
+function addCustomPath(itemId){
+  var inp = document.getElementById('custin-'+itemId);
+  var val = (inp && inp.value || '').trim().replace(/\s*>\s*/g, ' > ').replace(/\s+/g,' ').trim();
+  if(!val){ alert('분류 경로를 입력하세요. 예: 네트워크 인프라 > 백본 스위치 > Leaf 스위치 > 스위치'); return; }
+  // 모든 residual 드롭다운에 옵션 추가(중복 방지) → 재사용 가능
+  var added = 0;
+  document.querySelectorAll('#residualPanel select.residual-sel').forEach(function(sel){
+    var exists = Array.prototype.some.call(sel.options, function(o){ return o.value === val; });
+    if(!exists){ var o=document.createElement('option'); o.value=val; o.textContent=val+' (직접추가)'; sel.appendChild(o); added++; }
+  });
+  // 이 항목 드롭다운에서 방금 추가한 값 선택
+  var mine = document.getElementById('resel-'+itemId);
+  if(mine){ mine.value = val; }
+  if(inp) inp.value='';
+  toggleCustomPath(itemId);
+  alert('표준분류를 후보에 추가했습니다:\n'+val+'\n(모든 항목 목록에 반영). [✔ 확정]으로 적용하세요.');
+}
+
+/* ── [T7] 제안 일괄 적용 ── */
+function applyAllResiduals(){
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#residualPanel [data-item]'));
+  var jobs = [];
+  cards.forEach(function(card){
+    var iid = card.getAttribute('data-item');
+    var sel = document.getElementById('resel-'+iid);
+    if(sel && sel.value){ jobs.push({iid:iid, path:sel.value}); }
+  });
+  if(jobs.length === 0){ alert('선택(또는 제안)된 항목이 없습니다. 먼저 [🤖 LLM 제안]을 누르거나 드롭다운에서 선택하세요.'); return; }
+  if(!confirm(jobs.length+'건을 일괄 확정합니다. 계속할까요?')) return;
+  var btn = document.getElementById('applyAllBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '적용 중…'; }
+  var i = 0;
+  function next(){
+    if(i >= jobs.length){ location.reload(); return; }
+    var j = jobs[i++];
+    fetch('/submissions/'+SUBMISSION_ID+'/item/'+j.iid+'/reassign-path', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: j.path })
+    }).then(function(r){return r.json();}).then(function(){ next(); })
+      .catch(function(){ next(); });
+  }
+  next();
+}
+
+/* ── [T7] 스티칭 residual 수동 보정 ── */
+function applyResidual(itemId){
+  var sel = document.getElementById('resel-'+itemId);
+  var newPath = sel ? sel.value : '';
+  if(!newPath){ alert('올바른 상위 분류를 선택하세요.'); return; }
+  fetch('/submissions/'+SUBMISSION_ID+'/item/'+itemId+'/reassign-path', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ path: newPath })
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){
+      var card = document.querySelector('#residualPanel [data-item="'+itemId+'"]');
+      if(card) card.remove();
+      var panel = document.getElementById('residualPanel');
+      if(panel && !panel.querySelector('[data-item]')){
+        location.reload();  // 모두 해결 → 트리 갱신
+      }
+    } else { alert('적용 실패: ' + (d.error||'')); }
+  }).catch(function(e){ alert('오류: '+e); });
+}
 
 /* ── 도메인 분류 정합 검증 게이트 (층위 2) ── */
 var _catBindData = null;
@@ -785,6 +997,12 @@ function renderNode(node, container, depth) {
     + (node.is_leaf && node.leaf_data && node.leaf_data.spec
         ? '<span style="color:#9ca3af;font-size:11px;margin-left:8px;">' + escapeHtml(node.leaf_data.spec) + '</span>'
         : '')
+    + (node.is_leaf && node.leaf_data && node.leaf_data.maker
+        ? '<span style="color:#0d9488;font-size:11px;margin-left:8px;border:1px solid #99f6e4;border-radius:6px;padding:0 5px;">🏷 ' + escapeHtml(node.leaf_data.maker) + '</span>'
+        : '')
+    + (!node.is_leaf && node.maker_rep
+        ? '<span style="color:' + (node.maker_rep==='혼합' ? '#9ca3af' : '#0d9488') + ';font-size:11px;margin-left:8px;">🏷 ' + escapeHtml(node.maker_rep) + '</span>'
+        : '')
     + (isCompareUnit ? '<span style="margin-left:8px;font-size:10px;background:#3b82f6;color:#fff;padding:1px 6px;border-radius:999px;">비교 단위</span>' : '');
 
   const right = document.createElement('span');
@@ -825,6 +1043,22 @@ function renderNode(node, container, depth) {
     del.onclick = function(e){ e.stopPropagation(); deleteItem(node.leaf_data.item_id, null); };
     rightWrap.appendChild(del);
     row.appendChild(rightWrap);
+  } else if (!node.is_leaf) {
+    // 가지(분류) 삭제 — 경로 하위 전체 품목 삭제
+    const rightWrap = document.createElement('span');
+    rightWrap.style.display = 'flex';
+    rightWrap.style.alignItems = 'center';
+    rightWrap.style.gap = '10px';
+    rightWrap.appendChild(rightNode);
+    const delB = document.createElement('button');
+    delB.textContent = '🗑';
+    delB.title = '이 가지와 하위 전체 삭제';
+    delB.style.cssText = 'color:#d1d5db;font-size:13px;border:none;background:none;cursor:pointer;';
+    delB.onmouseenter = () => delB.style.color = '#dc2626';
+    delB.onmouseleave = () => delB.style.color = '#d1d5db';
+    delB.onclick = function(e){ e.stopPropagation(); deleteBranch(node.path); };
+    rightWrap.appendChild(delB);
+    row.appendChild(rightWrap);
   } else {
     row.appendChild(rightNode);
   }
@@ -863,17 +1097,23 @@ function treeExpandAll(){
 }
 function treeCollapseAll(){ treeOpen = {}; renderTree(); }
 
-function saveCompareUnits(){
+function saveCompareUnits(btn){
   const units = collectCompareUnits();
+  var old = btn ? btn.textContent : null;
+  if(btn){ btn.disabled = true; btn.textContent = '저장 중…'; }
   fetch('/submissions/' + SUB_ID + '/compare-units', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({units: units})
-  }).then(function(r){return r.json();}).then(function(d){
-    const msg = document.getElementById('saveMsg');
-    msg.textContent = '✅ 비교 단위 ' + d.count + '개 저장됨';
-    msg.classList.remove('hidden');
-    setTimeout(function(){ msg.classList.add('hidden'); }, 3000);
-  });
+  }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(d){
+      // 버튼 옆 즉시 피드백(트리 아래 메시지가 안 보일 수 있어 이중 표시)
+      if(btn){ btn.textContent = '✅ 저장됨 (' + d.count + ')'; setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 2000); }
+      const msg = document.getElementById('saveMsg');
+      if(msg){ msg.textContent = '✅ 비교 단위 ' + d.count + '개 저장됨'; msg.classList.remove('hidden'); setTimeout(function(){ msg.classList.add('hidden'); }, 3000); }
+    }).catch(function(e){
+      if(btn){ btn.textContent = old; btn.disabled = false; }
+      alert('비교 단위 저장 실패: ' + e);
+    });
 }
 
 initTreeOpen();

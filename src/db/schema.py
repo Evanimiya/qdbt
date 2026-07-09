@@ -598,6 +598,16 @@ def migrate_db(db_path=None):
     if "amount_orig" not in si_cols:
         # 원본 통화 금액 (단가 없는 외화 행의 원통화 보존, T2)
         migrations.append("ALTER TABLE submission_items ADD COLUMN amount_orig REAL")
+    if "maker" not in si_cols:
+        # 메이커(제조사/브랜드) — 추출 시 열 매핑으로 지정. 품목 비교 시 참고.
+        migrations.append("ALTER TABLE submission_items ADD COLUMN maker TEXT")
+    if "merge_status" not in si_cols:
+        # [중복 병합] 요약↔상세 중복 정리 표시. NULL=정상 잎,
+        #   'rolled_up'=상위 요약행(상세 잎 합으로 대체·총액 제외),
+        #   'duplicate'=다른 시트의 완전중복 잎(총액 제외).
+        #   플래그 행은 is_header=1로 저장돼 모든 합계 쿼리에서 제외되며,
+        #   삭제하지 않고 보존(되돌리기 가능: is_header=0·merge_status=NULL).
+        migrations.append("ALTER TABLE submission_items ADD COLUMN merge_status TEXT")
 
     # submissions.fx_rates: 통화별 환율 맵 JSON — {"USD":{"rate":1380,"base":"KRW","source":"extracted|manual"}}
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]

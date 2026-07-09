@@ -195,10 +195,14 @@ def detail(submission_id):
         except Exception:
             fx_rates = {}
 
+    # [T7] 스티칭 미해결(residual) 검토용
+    stitch_meta, residual_view = _build_residual_view(_subd, items)
+
     return render_template("submissions/detail.html", sub=sub, items=items,
                            fx_rates=fx_rates,
                            sheet_list=sheet_list, prev_sheets=prev_sheets,
                            grouped=grouped, compare_level=level,
+                           stitch_meta=stitch_meta, residual_view=residual_view,
                            tree_json=_json.dumps(tree_data, ensure_ascii=False),
                            compare_units_json=_json.dumps(compare_units, ensure_ascii=False))
 
@@ -233,6 +237,40 @@ def set_compare_units(submission_id):
         units = []
     update_submission(submission_id, compare_units=_json.dumps(units, ensure_ascii=False))
     return jsonify({"ok": True, "count": len(units)})
+
+
+@bp.route("/<submission_id>/compare-units/function-unit", methods=["POST"])
+@require_role("manager")
+def set_function_unit_compare(submission_id):
+    """[T7·기능단위 비교] compare_units를 '기능단위' 레벨(대개 중/소분류)로 자동 설정.
+
+    스티칭으로 잎(구성성분)까지 저장된 트리를, 지정 레벨(depth)의 분류 경로로 묶어
+    compare_units에 저장한다. 이렇게 하면 기존 클러스터링·카탈로그 파이프라인
+    (list_submission_items_for_clustering → 클러스터 → catalog_items·price_history)이
+    품명이 아닌 '기능단위'로 업체 간 비교를 수행한다.
+
+    payload: {level: int}  (기능단위 깊이. 기본 3 = 소분류. 2 = 중분류)
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    level = int((request.get_json(silent=True) or {}).get("level", 3))
+    level = max(1, min(level, 6))
+    items = get_items(submission_id, headers=False)
+    units = set()
+    for it in items:
+        d = dict(it)
+        p = (d.get("path") or "").split(" > ")
+        p = [x for x in p if x.strip()]
+        if not p:
+            continue
+        # 지정 레벨까지 자른 상위 경로 = 기능단위 묶음 지점
+        units.add(" > ".join(p[:min(level, len(p))]))
+    units = sorted(units)
+    update_submission(submission_id, compare_units=_json.dumps(units, ensure_ascii=False),
+                      compare_level=level)
+    return jsonify({"ok": True, "level": level, "count": len(units), "units": units[:50]})
 
 
 @bp.route("/<submission_id>/grouped.json")
@@ -762,15 +800,23 @@ def column_map(submission_id):
         except Exception:
             pass
 
-    # 합계·소계 의심 행 감지 (자동 삭제 아님 — UI에서 기본 제외 선택으로 제안)
+    # [매핑 보존] 현재 시트의 저장된 매핑(다중시트 드래프트 포함)을 우선 복원.
+    cur_saved = None
+    if saved_config:
+        _sheets_cfg = saved_config.get("sheets") or {}
+        if sheet in _sheets_cfg:
+            cur_saved = _sheets_cfg[sheet]                 # 다중시트 드래프트
+        elif saved_config.get("sheet") == sheet and saved_config.get("mapping"):
+            cur_saved = saved_config                       # 단일시트(하위호환)
+
+    # 합계·소계 의심 행 감지 — [버그2] 반드시 '현재 시트'의 매핑으로만 판단.
     from extractors.extract_by_mapping import detect_total_rows
     total_suggestion = []
     try:
-        _map_for_detect = (saved_config.get("mapping") if saved_config else None) \
+        _map_for_detect = (cur_saved.get("mapping") if cur_saved else None) \
                           or suggestion.get("mapping") or {}
-        _hr_for_detect = (saved_config.get("header_row") if saved_config else None) \
+        _hr_for_detect = (cur_saved.get("header_row") if cur_saved else None) \
                          or suggestion.get("header_row") or 1
-        # 키가 문자열로 직렬화됐을 수 있으니 int 변환
         _map_for_detect = {int(k): v for k, v in _map_for_detect.items()}
         if _map_for_detect:
             total_suggestion = detect_total_rows(fpath, sheet, _map_for_detect, _hr_for_detect)
@@ -789,11 +835,23 @@ def column_map(submission_id):
         "alias_map": _binding["alias_map"],
     }
 
+    # 시트별 역할 자동 판정(갑지·설명 시트 사전 해제용). 데이터 없는 시트는 'unknown'.
+    sheet_roles = {}
+    try:
+        if len(sheets) > 1:
+            from extractors.stitch import classify_workbook
+            for _s in classify_workbook(fpath).get("sheets", []):
+                sheet_roles[_s["name"]] = _s["role"]
+    except Exception:
+        sheet_roles = {}
+
     return render_template("submissions/column_map.html",
                            sub=subd, sheets=sheets, current_sheet=sheet,
+                           sheet_roles=sheet_roles,
                            grid_json=_json.dumps(grid_data, ensure_ascii=False),
                            suggest_json=_json.dumps(suggestion, ensure_ascii=False),
                            saved_config_json=_json.dumps(saved_config, ensure_ascii=False),
+                           cur_saved_json=_json.dumps(cur_saved, ensure_ascii=False),
                            total_suggestion_json=_json.dumps(total_suggestion, ensure_ascii=False),
                            domain_binding_json=_json.dumps(domain_binding, ensure_ascii=False))
 
@@ -832,6 +890,260 @@ def category_binding_apply(submission_id):
         return jsonify({"ok": True, **r})
     except Exception as e:
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+
+
+_RESIDUAL_REASON_KO = {
+    "ambiguous_join_key": "모호한 연결(같은 분류명이 여러 상위에 걸림)",
+    "skeleton_unmatched": "상위 분류 미매칭",
+    "level_skip": "레벨 생략(상위 분류 비어 상속 추정)",
+    "seq_parent_missing": "번호계층 상위 이름 없음",
+    "summary_item": "요약 항목(‘외 N종’) — 세부 시트로 대체 필요",
+    "summary_unmatched": "요약행이나 상세와 금액 정합 안 됨 — 확인 필요",
+}
+
+
+def _build_residual_view(subd, items):
+    """map_config.stitch.residuals ↔ 현재 항목 매칭해 검토용 목록 생성.
+    반환: (stitch_meta, residual_view[{item_id,name,reason,reason_ko,current_path,candidates}])"""
+    import json as _json
+    try:
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+        stitch_meta = mc.get("stitch") or {}
+    except Exception:
+        stitch_meta = {}
+    view = []
+    if stitch_meta and stitch_meta.get("residuals"):
+        ln_map = {dict(it).get("line_no"): dict(it) for it in items}
+        item_paths = {dict(it).get("path") for it in items if dict(it).get("path")}
+        # 후보 = 스티칭이 복원한 정상 분류경로(스켈레톤) ∪ 항목 경로. 스켈레톤이 우선.
+        skel = set(stitch_meta.get("candidates") or [])
+        all_paths = sorted(skel | item_paths)
+        for rs in stitch_meta["residuals"]:
+            it = ln_map.get(f"R{rs.get('row')}")
+            if not it:
+                continue
+            view.append({
+                "item_id": it.get("item_id"),
+                "name": rs.get("name") or it.get("name_normalized"),
+                "reason": rs.get("reason"),
+                "reason_ko": _RESIDUAL_REASON_KO.get(rs.get("reason"), rs.get("reason")),
+                "current_path": it.get("path"),
+                "amount": it.get("amount"),
+                # 현재 경로도 포함(모호 조인은 현재값이 정답일 수 있음 → '확인' 선택지)
+                "candidates": all_paths,
+            })
+    return stitch_meta, view
+
+
+def _heuristic_pick(name, candidates):
+    """LLM 미가용 시 폴백: 토큰 겹침 + 공백제거 부분일치로 최적 상위 경로 선택.
+
+    한국어는 표기 시 띄어쓰기가 제각각('관리서버' vs '관리 서버')이라, 토큰 집합만으론
+    부족하다. 공백 제거 후 세그먼트 포함 관계까지 점수화해 매칭 강건성을 높인다.
+    """
+    import re as _re
+    def toks(s):
+        return set(t.lower() for t in _re.split(r"[\s>·/\-()]+", s or "") if len(t) >= 2)
+    def ns(s):
+        return _re.sub(r"[\s>·/\-()]+", "", (s or "").lower())
+    nt = toks(name)
+    name_ns = ns(name)
+    best, best_score = None, 0
+    for c in candidates:
+        score = len(nt & toks(c))
+        # 공백제거 세그먼트 포함 관계 (가장 하위 세그먼트일수록 가중)
+        for seg in [s for s in (c or "").split(" > ") if s.strip()]:
+            seg_ns = ns(seg)
+            if seg_ns and (seg_ns in name_ns or name_ns in seg_ns):
+                score += max(2, len(seg_ns) // 2)
+        if score > best_score:
+            best, best_score = c, score
+    return best, best_score
+
+
+@bp.route("/<submission_id>/residuals/suggest", methods=["POST"])
+@require_role("manager")
+def residuals_suggest(submission_id):
+    """[T7·LLM] 미해결 residual의 상위 분류를 LLM(가용 시) 또는 휴리스틱으로 1차 제안.
+    사람이 최종 확인(적용)하는 흐름 — 자동 반영하지 않는다."""
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    items = get_items(submission_id)
+    _stitch, view = _build_residual_view(dict(sub), items)
+    if not view:
+        return jsonify({"ok": True, "suggestions": {}, "method": "none"})
+
+    suggestions = {}
+    method = "heuristic"
+    # 1) LLM 시도 (사용자 키 보유 시)
+    try:
+        from db.queries import get_user_llm_settings
+        llm = get_user_llm_settings(session.get("user_id", ""))
+    except Exception:
+        llm = {}
+    if llm.get("api_key"):
+        try:
+            from extractors.providers import get_provider
+            prov = get_provider(llm["provider"])
+            payload = [{"id": v["item_id"], "name": v["name"],
+                        "current_path": v["current_path"],
+                        "candidates": v["candidates"]} for v in view]
+            sys_prompt = (
+                "너는 조달 견적서 분류 보조자다. 각 품목(name)을 의미적으로 가장 알맞은 "
+                "상위 분류 경로에 매칭하라. 반드시 그 품목의 candidates 목록 중에서 하나를 "
+                "고르고, 애매하면 빈 문자열을 반환하라. 영어·한국어 동의어(GPU서버=GPU Server, "
+                "방화벽=Firewall 등)를 고려하라. 오직 JSON만 출력: "
+                '{"assignments":[{"id":"...","path":"..."}]}')
+            raw = prov.extract(_json.dumps(payload, ensure_ascii=False), sys_prompt,
+                               api_key=llm["api_key"], model=llm.get("model"),
+                               base_url=llm.get("base_url"),
+                               verify_ssl=llm.get("verify_ssl", True))
+            data = _json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+            valid = {v["item_id"]: set(v["candidates"]) for v in view}
+            for a in data.get("assignments", []):
+                iid, p = a.get("id"), (a.get("path") or "").strip()
+                if iid in valid and p in valid[iid]:
+                    suggestions[iid] = {"path": p, "method": "llm"}
+            method = "llm"
+        except Exception as e:
+            method = f"heuristic (LLM 실패: {type(e).__name__})"
+
+    # 2) LLM이 못 채운 항목은 휴리스틱으로 보완
+    for v in view:
+        if v["item_id"] in suggestions:
+            continue
+        pick, score = _heuristic_pick(v["name"], v["candidates"])
+        if pick and score > 0:
+            suggestions[v["item_id"]] = {"path": pick, "method": "heuristic"}
+
+    return jsonify({"ok": True, "suggestions": suggestions, "method": method,
+                    "n": len(suggestions)})
+
+
+@bp.route("/<submission_id>/map/save-sheet", methods=["POST"])
+@require_role("manager")
+def map_save_sheet(submission_id):
+    """[T7 매핑 보존] 추출하지 않고 '한 시트의 매핑 지정사항'만 map_config에 드래프트 저장.
+
+    시트 전환·재진입 시 지정사항이 사라지던 문제 해결의 핵심. 시트를 바꾸기 전에
+    현재 시트 매핑을 여기로 저장해 두면, 새로고침·재진입 후에도 복원된다.
+    payload: {sheet, mapping:{col:role}, header_row, mount_path, compare_units, excluded_rows, nego_rows}
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    sheet = p.get("sheet")
+    if not sheet:
+        return jsonify({"ok": False, "error": "sheet 필요"}), 200
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    sheets = mc.get("sheets") or {}
+    sheets[sheet] = {
+        "mapping": {str(k): v for k, v in (p.get("mapping") or {}).items() if v and v != "ignore"},
+        "header_row": int(p.get("header_row") or 1),
+        "mount_path": (p.get("mount_path") or "").strip(),
+        "compare_units": p.get("compare_units") or [],
+        "excluded_rows": sorted(p.get("excluded_rows") or []),
+        "nego_rows": sorted(p.get("nego_rows") or []),
+    }
+    order = mc.get("sheet_order") or []
+    if sheet not in order:
+        order.append(sheet)
+    mc["sheets"] = sheets
+    mc["sheet_order"] = order
+    mc["version"] = 2 if len(sheets) > 1 else mc.get("version", 1)
+    mc["draft"] = True   # 아직 추출 전 드래프트임을 표시
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    return jsonify({"ok": True, "saved_sheets": sorted(sheets.keys())})
+
+
+@bp.route("/<submission_id>/map/auto-stitch", methods=["POST"])
+@require_role("manager")
+def map_auto_stitch(submission_id):
+    """[T7] 원클릭: 모든 시트의 헤더를 자동 인식해 한 번에 스티칭 추출.
+
+    시트별 매핑을 수동으로 추가하지 않아도, 코드가 각 시트 헤더를 제안하고
+    밴드/시퀀스/올인원을 자동 판별해 하나의 잎-보존 트리로 통합한다.
+    (자동 인식이 어긋나면 기존 '열 역할 지정 → + 이 시트 추가 → 통합 추출' 수동 흐름 사용.)
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    subd = dict(sub)
+    fpath = subd.get("file_path")
+    _raw_sheets = (request.get_json(silent=True) or {}).get("sheets")
+    if _raw_sheets is not None and len(_raw_sheets) == 0:
+        return jsonify({"ok": False, "error": "추출할 시트를 1개 이상 선택하세요."}), 200
+    only_sheets = _raw_sheets or None
+    # [매핑 보존] 저장된 시트별 매핑이 있으면 그것을 사용, 없는 시트만 자동 제안.
+    try:
+        _mc = _json.loads(subd.get("map_config") or "{}") or {}
+    except Exception:
+        _mc = {}
+    _saved_sheets = _mc.get("sheets") or {}
+    try:
+        from extractors.stitch import stitch_sheets, stitch_workbook
+        from parsers.parse_xlsx import get_xlsx_sheet_names
+        from extractors.extract_by_mapping import suggest_column_mapping
+        all_names = [s for s in get_xlsx_sheet_names(fpath) if not s.startswith("_")]
+        target = [s for s in (only_sheets or all_names) if s in all_names]
+        specs = []
+        for sh in target:
+            sv = _saved_sheets.get(sh)
+            if sv and sv.get("mapping"):
+                specs.append({"sheet": sh,
+                              "mapping": {int(k): v for k, v in sv["mapping"].items()},
+                              "header_row": sv.get("header_row", 1)})
+            else:
+                sug = suggest_column_mapping(fpath, sh)
+                specs.append({"sheet": sh, "mapping": sug["mapping"],
+                              "header_row": sug["header_row"]})
+        sres = stitch_sheets(fpath, specs)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"[auto-stitch] {type(e).__name__}: {e}"}), 200
+
+    items = sres["items"]
+    from db.queries import delete_submission_items, insert_items_bulk, get_items
+    delete_submission_items(submission_id, keep_nego=True)
+    insert_items_bulk(submission_id, items)
+    leaf_items = get_items(submission_id, headers=False)
+    subtotal = sum((dict(it).get("amount") or 0) for it in leaf_items)
+
+    sheets_meta = sres.get("sheets", [])
+    map_config = {
+        "version": 2 if len(sheets_meta) > 1 else 1,
+        "sheets": {
+            s["name"]: {
+                "mapping": {str(k): v for k, v in s["mapping"].items()},
+                "header_row": s["header_row"], "mount_path": "",
+                "compare_units": [], "excluded_rows": [], "nego_rows": [],
+            } for s in sheets_meta
+        },
+        "sheet_order": [s["name"] for s in sheets_meta],
+        "stitch": {
+            "mode": sres["mode"], "n_items": sres["n_items"],
+            "n_residuals": sres["n_residuals"],
+            "residuals": sres["residuals"][:50],
+            "candidates": sres.get("candidates", [])[:300],
+            "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
+            "n_dropped": sres.get("n_dropped", 0),
+        },
+    }
+    update_submission(submission_id, extraction_status="done",
+                      subtotal_excl_vat=subtotal,
+                      extracted_sheets=_json.dumps([s["name"] for s in sheets_meta], ensure_ascii=False),
+                      map_config=_json.dumps(map_config, ensure_ascii=False))
+    n_kept = sum(1 for it in items if not it.get("merge_status"))
+    return jsonify({"ok": True, "n_items": n_kept,
+                    "stitch": map_config["stitch"],
+                    "redirect": url_for("submissions.detail", submission_id=submission_id)})
 
 
 @bp.route("/<submission_id>/map/extract", methods=["POST"])
@@ -882,32 +1194,79 @@ def column_map_extract(submission_id):
         })
 
     from extractors.extract_by_mapping import extract_by_mapping
-    # 각 시트를 추출해 누적 (삽입 전에 모두 모음)
     all_items = []
     all_compare_units = []
-    extracted_sheet_names = []
-    sort_offset = 0
-    for spec in sheet_specs:
+    extracted_sheet_names = [spec["sheet"] for spec in sheet_specs]
+    stitch_info = None
+
+    # ── [T7] 다중시트 스티칭 분기 ─────────────────────────────
+    #  겹치는 밴드([대/중/소]·[중/소/세]·[세/품목])나 목록/트리/세부처럼
+    #  '여러 시트를 하나의 트리로 꿰매야' 하는 경우, mount_path 이어붙이기 대신
+    #  스티칭 엔진으로 공유레벨/번호계층을 조인해 통합 잎 데이터셋을 만든다.
+    #  요청에 stitch=true가 오거나, 다중시트이고 mount_path가 없고 자동판정이
+    #  band/seq이면 스티칭. (단일시트·mount_path 지정 시는 기존 T6 경로 유지.)
+    use_stitch = False
+    if len(sheet_specs) > 1 and not any(sp["mount_path"] for sp in sheet_specs):
+        # 외화(통화 환산) 매핑이 있으면 스티칭이 원화 파이프라인을 타지 않으므로 T6 유지.
+        _has_currency = any(r in ("currency", "price_krw", "amount_krw")
+                            for sp in sheet_specs for r in sp["mapping"].values())
+        if payload.get("stitch") is True:
+            use_stitch = True
+        elif payload.get("stitch") is None and not _has_currency:
+            # 다중 시트(견적서+상세 등)는 스티칭 엔진으로 — 총계행 정확 제외 +
+            # 요약↔상세 중복 병합(총액 불변). mount_path 명시 배치는 위에서 제외됨.
+            use_stitch = True
+
+    if use_stitch:
         try:
-            result = extract_by_mapping(fpath, spec["sheet"], spec["mapping"],
-                                        spec["header_row"],
-                                        excluded_rows=spec["excluded_rows"],
-                                        nego_rows=spec["nego_rows"])
+            from extractors.stitch import stitch_sheets
+            sres = stitch_sheets(fpath, sheet_specs)
         except Exception as e:
             return jsonify({"ok": False,
-                            "error": f"[{spec['sheet']}] {type(e).__name__}: {e}"}), 200
-        sheet_items = result["items"]
-        # mount_path 접두: 이 시트 항목을 통합 트리의 특정 가지에 배치
-        mp = spec["mount_path"]
-        for it in sheet_items:
-            if mp:
-                cur_path = it.get("path") or it.get("parent_path", "")
-                it["path"] = f"{mp} > {cur_path}" if cur_path else mp
-            # sort_order는 삽입 시 enumerate로 부여되므로, 시트 순서 보존 위해 목록 순서 유지
-        all_items.extend(sheet_items)
-        all_compare_units.extend(spec["compare_units"])
-        extracted_sheet_names.append(spec["sheet"])
-        sort_offset += len(sheet_items)
+                            "error": f"[stitch] {type(e).__name__}: {e}"}), 200
+        # nego 행 반영(스티칭 잎 중 지정 nego 행은 차감)
+        nego_all = set()
+        for sp in sheet_specs:
+            nego_all |= set(sp["nego_rows"])
+        for it in sres["items"]:
+            ln = it.get("line_no", "")
+            rownum = int(ln[1:]) if isinstance(ln, str) and ln[1:].isdigit() else None
+            if rownum in nego_all:
+                it["is_nego"] = True
+                for f in ("amount", "unit_price"):
+                    if it.get(f) is not None:
+                        it[f] = -abs(it[f])
+        all_items = sres["items"]
+        for sp in sheet_specs:
+            all_compare_units.extend(sp["compare_units"])
+        stitch_info = {
+            "mode": sres["mode"],
+            "n_items": sres["n_items"],
+            "n_residuals": sres["n_residuals"],
+            "residuals": sres["residuals"][:50],   # UI 노출용 상한
+            "candidates": sres.get("candidates", [])[:300],  # 정상 분류경로(재지정 후보)
+            "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
+            "n_dropped": sres.get("n_dropped", 0),
+        }
+    else:
+        # ── 기존 T6 경로: 시트별 추출 후 mount_path 누적 ──
+        for spec in sheet_specs:
+            try:
+                result = extract_by_mapping(fpath, spec["sheet"], spec["mapping"],
+                                            spec["header_row"],
+                                            excluded_rows=spec["excluded_rows"],
+                                            nego_rows=spec["nego_rows"])
+            except Exception as e:
+                return jsonify({"ok": False,
+                                "error": f"[{spec['sheet']}] {type(e).__name__}: {e}"}), 200
+            sheet_items = result["items"]
+            mp = spec["mount_path"]
+            for it in sheet_items:
+                if mp:
+                    cur_path = it.get("path") or it.get("parent_path", "")
+                    it["path"] = f"{mp} > {cur_path}" if cur_path else mp
+            all_items.extend(sheet_items)
+            all_compare_units.extend(spec["compare_units"])
 
     # DB 저장: 삭제 1회(수기 nego 보존) + 누적 삽입 1회
     from db.queries import delete_submission_items, insert_items_bulk, get_items
@@ -932,6 +1291,7 @@ def column_map_extract(submission_id):
             } for spec in sheet_specs
         },
         "sheet_order": extracted_sheet_names,
+        "stitch": stitch_info,   # [T7] 스티칭 결과(mode·residual). None이면 미사용.
     }
     # 단일 시트는 기존 평면 형태도 병기(하위 호환 복원)
     if len(sheet_specs) == 1:
@@ -963,9 +1323,120 @@ def column_map_extract(submission_id):
     except Exception:
         binding_warn = {"unmatched": [], "n_unmatched_items": 0}
 
-    return jsonify({"ok": True, "n_items": len(all_items),
+    n_kept = sum(1 for it in all_items if not it.get("merge_status"))
+    return jsonify({"ok": True, "n_items": n_kept,
                     "binding_warn": binding_warn,
+                    "stitch": stitch_info,
                     "redirect": url_for("submissions.detail", submission_id=submission_id)})
+
+
+@bp.route("/<submission_id>/item/<item_id>/reassign-path", methods=["POST"])
+@require_role("manager")
+def reassign_item_path(submission_id, item_id):
+    """[T7] 스티칭 residual 수동 보정: 항목의 분류 경로(path)를 사람이 재지정.
+
+    새 경로로 path·depth·category를 갱신하고, 해당 residual을 map_config에서 제거해
+    상세 재진입 시 미해결 목록에서 사라지게 한다. (금액 불변 → 합계 영향 없음)
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    new_path = ((request.get_json(silent=True) or {}).get("path") or "").strip()
+    if not new_path:
+        return jsonify({"ok": False, "error": "새 경로(path)가 필요합니다."}), 200
+    parts = [p for p in new_path.split(" > ") if p.strip()]
+    depth = len(parts)
+    category = parts[0] if parts else "기타"
+
+    from db.queries import get_conn
+    line_no = None
+    with get_conn() as c:
+        row = c.execute("SELECT line_no FROM submission_items "
+                        "WHERE item_id=? AND submission_id=?",
+                        (item_id, submission_id)).fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "항목을 찾을 수 없습니다."}), 200
+        line_no = dict(row).get("line_no")
+        c.execute("UPDATE submission_items SET path=?, depth=?, category=? "
+                  "WHERE item_id=? AND submission_id=?",
+                  (new_path, depth, category, item_id, submission_id))
+
+    # map_config.stitch.residuals 에서 이 행(line_no=R{row}) 제거
+    try:
+        subd = dict(get_submission(submission_id))
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+        st = mc.get("stitch") or {}
+        resids = st.get("residuals") or []
+        target_row = int(line_no[1:]) if isinstance(line_no, str) and line_no[1:].isdigit() else None
+        if target_row is not None:
+            st["residuals"] = [r for r in resids if r.get("row") != target_row]
+            st["n_residuals"] = len(st["residuals"])
+            mc["stitch"] = st
+            update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "path": new_path, "depth": depth})
+
+
+@bp.route("/<submission_id>/link", methods=["GET"])
+@login_required
+def link_view(submission_id):
+    """[개선 9] 다중시트 연계 캔버스 — 레벨별 열에 노드를 놓고, 미연계(잘못 분류된)
+    잎을 올바른 상위 분류로 드래그해 이어붙인다. 목업(QDBT_다중시트연계_목업.html) 기반.
+    드래그 연결 = reassign-path 호출. 확정 = 상세로 복귀."""
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    items = get_items(submission_id)
+    from db.queries import build_items_tree
+    tree = build_items_tree(submission_id)
+    _stitch_meta, residual_view = _build_residual_view(dict(sub), items)
+    residual_ids = {rv["item_id"] for rv in residual_view}
+
+    levels = {}   # depth -> [nodes]
+    def _walk(n, depth):
+        ld = n.get("leaf_data") or {}
+        levels.setdefault(depth, []).append({
+            "name": n.get("name"), "path": n.get("path"),
+            "amount": n.get("amount") or 0, "is_leaf": n.get("is_leaf"),
+            "item_id": ld.get("item_id"),
+            "residual": ld.get("item_id") in residual_ids if ld.get("item_id") else False,
+        })
+        for ch in (n.get("children") or []):
+            _walk(ch, depth + 1)
+    roots = tree.get("tree")
+    roots = roots if isinstance(roots, list) else ([roots] if roots else [])
+    for r in roots:
+        if r:
+            _walk(r, 0)
+    max_depth = max(levels) if levels else 0
+    return render_template("submissions/link.html", sub=dict(sub),
+                           levels=levels, max_depth=max_depth,
+                           n_residual=len(residual_view))
+
+
+@bp.route("/<submission_id>/tree/delete-branch", methods=["POST"])
+@require_role("manager")
+def delete_branch(submission_id):
+    """[비교단위 트리] 가지(분류 경로) 삭제 — 그 경로와 하위의 모든 품목을 함께 삭제."""
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    path = ((request.get_json(silent=True) or {}).get("path") or "").strip()
+    if not path:
+        return jsonify({"ok": False, "error": "path가 필요합니다."}), 200
+    from db.queries import get_conn, recompute_subtotal
+    with get_conn() as c:
+        cur = c.execute(
+            "DELETE FROM submission_items WHERE submission_id=? AND (path=? OR path LIKE ?)",
+            (submission_id, path, path + " > %"))
+        n = cur.rowcount
+    if n:
+        recompute_subtotal(submission_id)
+    return jsonify({"ok": True, "deleted": n})
 
 
 @bp.route("/<submission_id>/item/<item_id>/delete", methods=["POST"])
