@@ -2682,12 +2682,12 @@ def delete_domain(domain_id: str) -> bool:
 
 
 def get_bid_domain(bid_id: str) -> str:
-    """입찰의 도메인 반환 (없으면 'IT')"""
+    """입찰의 도메인 반환 (없으면 '공통' — 이 도구는 특정 산업(IT)에 종속되지 않음)."""
     with get_conn() as c:
         row = c.execute(
             "SELECT domain FROM bids WHERE bid_id = ?", (bid_id,)
         ).fetchone()
-    return (row["domain"] if row and row["domain"] else "IT")
+    return (row["domain"] if row and row["domain"] else "공통")
 
 
 # ─── 도메인 관리 ─────────────────────────────────

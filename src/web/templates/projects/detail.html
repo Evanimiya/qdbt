@@ -113,7 +113,7 @@
       <span class="text-gray-500 text-xs break-ko">분류 체계(도메인)</span>
       <div class="font-medium text-gray-900 break-ko">
         <span class="inline-block px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-xs font-semibold">
-          {{ project.domain or 'IT' }}</span>
+          {{ project.domain or '공통' }}</span>
       </div>
     </div>
     {% for d in attr_defs %}
@@ -136,8 +136,8 @@
         <select name="domain"
                 class="mt-0.5 w-full text-sm border border-gray-300 rounded-lg px-2.5 py-1.5
                        focus:ring-2 focus:ring-blue-500 break-ko">
-          {% for dn in (domains or ['IT','설비','용역','기타']) %}
-          <option value="{{ dn }}" {% if dn == (project.domain or 'IT') %}selected{% endif %}>{{ dn }}</option>
+          {% for dn in (domains or ['공통','IT','설비','용역','기타']) %}
+          <option value="{{ dn }}" {% if dn == (project.domain or '공통') %}selected{% endif %}>{{ dn }}</option>
           {% endfor %}
         </select>
       </label>

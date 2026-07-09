@@ -338,7 +338,7 @@
 
 <!-- ══ [T7] 다중시트 연계 화면 진입 (미연계 없어도 항상 노출) ══ -->
 {% if items %}
-<div class="flex items-center justify-between flex-wrap gap-2 bg-sky-50 border border-sky-200 rounded-xl p-3 mb-5">
+<div class="flex items-center justify-between flex-wrap gap-2 rounded-xl p-3 mb-5" style="background:#f0f9ff;border:1px solid #bae6fd;">
   <div class="text-sm break-ko" style="color:#0c4a6e;">
     🧩 <b>다중시트 연계</b> — 시트별로 흩어진 분류를 하나의 트리로 잇고 확정합니다.
     {% if residual_view %}<span style="color:#b45309;">미연계 {{ residual_view|length }}건</span>{% else %}<span style="color:#256b45;">미연계 없음 · 재검토·확정 가능</span>{% endif %}
