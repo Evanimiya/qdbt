@@ -224,12 +224,26 @@ def detail(submission_id):
     # [T7] 스티칭 미해결(residual) 검토용
     stitch_meta, residual_view = _build_residual_view(_subd, items)
 
+    # [연계 캔버스 공유] 상세 페이지에서도 동일 컴포넌트로 연계 트리 표시.
+    residual_ids = sorted({rv["item_id"] for rv in residual_view} if residual_view else set(),
+                          key=lambda x: str(x))
+    try:
+        _mc_all = _json.loads(_subd.get("map_config") or "{}") or {}
+        manual_ids = [k for k, v in (_mc_all.get("link_overrides") or {}).items() if v == "manual"]
+    except Exception:
+        manual_ids = []
+    level_names = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
+
     return render_template("submissions/detail.html", sub=sub, items=items,
                            fx_rates=fx_rates,
                            sheet_list=sheet_list, prev_sheets=prev_sheets,
                            grouped=grouped, compare_level=level,
                            stitch_meta=stitch_meta, residual_view=residual_view,
                            tree_json=_json.dumps(tree_data, ensure_ascii=False),
+                           canvas_tree_json=_json.dumps(tree_data.get("tree") or [], ensure_ascii=False),
+                           residual_ids_json=_json.dumps(residual_ids, ensure_ascii=False),
+                           manual_ids_json=_json.dumps(manual_ids, ensure_ascii=False),
+                           level_names_json=_json.dumps(level_names, ensure_ascii=False),
                            compare_units_json=_json.dumps(compare_units, ensure_ascii=False))
 
 
@@ -1491,7 +1505,11 @@ def reassign_item_path(submission_id, item_id):
             st["residuals"] = [r for r in resids if r.get("row") != target_row]
             st["n_residuals"] = len(st["residuals"])
             mc["stitch"] = st
-            update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+        # [연계 캔버스] 드래그로 수기 연결한 항목 → manual(초록) 표시 지속(link_overrides).
+        ov = mc.get("link_overrides") or {}
+        ov[item_id] = "manual"
+        mc["link_overrides"] = ov
+        update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
     except Exception:
         pass
 
@@ -1573,15 +1591,21 @@ def link_view(submission_id):
     # [연계 D] 레벨 → 사용자 분류명 매핑(대/중/소/세/품명/부품…). 깊이 순서 기본값.
     level_names = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
 
-    # [연계 트리] 잎에 item_id·residual 플래그를 실어 나른다(제외/삭제/되돌리기용).
+    # [연계 캔버스] 잎에 item_id·residual/manual 플래그를 실어 나른다.
     residual_ids = sorted(residual_view and {rv["item_id"] for rv in residual_view} or set(),
                           key=lambda x: str(x))
+    try:
+        _mc_all = _json.loads(subd.get("map_config") or "{}") or {}
+        manual_ids = [k for k, v in (_mc_all.get("link_overrides") or {}).items() if v == "manual"]
+    except Exception:
+        manual_ids = []
 
     snap = get_latest_snapshot(submission_id)
     return render_template("submissions/link.html", sub=subd,
                            levels=levels, max_depth=max_depth, flat_tree=flat,
                            tree_json=_json.dumps(tree.get("tree") or [], ensure_ascii=False),
                            residual_ids_json=_json.dumps(residual_ids, ensure_ascii=False),
+                           manual_ids_json=_json.dumps(manual_ids, ensure_ascii=False),
                            level_names_json=_json.dumps(level_names, ensure_ascii=False),
                            total=tree.get("total") or 0,
                            n_residual=len(residual_view),
