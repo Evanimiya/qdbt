@@ -1,0 +1,260 @@
+{# ── 재사용 다중시트 연계 캔버스 (목업 3열 방식) ──
+   /link 및 detail.html 공유. 페이지에서 <div id="..."></div> 마운트 후
+   LKC.init({mount, tree, residual, manual, levels, subId}) 호출.
+   레벨별 열 + 노드 카드 + SVG 연결선(auto=파선teal/manual=green/residual=파선coral)
+   + [+]/[-] 접기 + 선택 하이라이트(상·하위) + 드래그드롭 재지정 + 제외/삭제/되돌리기. #}
+<style>
+  .lkc-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .lkc-tbtn{font-size:11.5px;font-weight:700;border:1px solid #D8E3EA;background:#fff;color:#0F2A43;border-radius:8px;padding:5px 11px;cursor:pointer}
+  .lkc-tbtn:hover{background:#F5F9FB}
+  .lkc-chk{font-size:11.5px;color:#64748B;display:inline-flex;align-items:center;gap:4px}
+  .lkc-legend{font-size:11px;color:#94A3B8;margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+  .lkc-legend i{display:inline-block;width:18px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:3px}
+  .lkc-canvas{position:relative}
+  .lkc-svg{position:absolute;inset:0;pointer-events:none;z-index:1;overflow:visible}
+  .lkc-svg path{fill:none;stroke-width:2}
+  .lkc-svg path.auto{stroke:#1C7293;stroke-dasharray:4 3;opacity:.55}
+  .lkc-svg path.manual{stroke:#3FA372;opacity:.85}
+  .lkc-svg path.residual{stroke:#D96C5F;stroke-dasharray:4 3;opacity:.85}
+  .lkc-cols{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;position:relative;z-index:2}
+  .lkc-col{flex:1 0 210px;min-width:210px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px}
+  .lkc-col-h{font-size:11px;font-weight:800;color:#fff;background:#1C7293;padding:5px 8px;border-radius:6px;margin-bottom:10px;text-align:center;letter-spacing:.04em}
+  .lkc-node{background:#fff;border:1px solid #e2e8f0;border-left:3px solid #94a3b8;border-radius:8px;padding:7px 9px 7px 10px;margin-bottom:8px;font-size:12.5px;position:relative;transition:.1s}
+  .lkc-node.branch{cursor:pointer;border-left-color:#1C7293}
+  .lkc-node.leaf{cursor:grab;border-left-color:#3FA372}
+  .lkc-node.leaf:active{cursor:grabbing}
+  .lkc-node.residual{border-left-color:#ef4444;background:#fff7f7}
+  .lkc-node.manual{border-left-color:#3FA372}
+  .lkc-node.excluded{opacity:.55}
+  .lkc-node.sel{outline:2px solid #0ea5e9;outline-offset:1px}
+  .lkc-node.kin-anc{background:#eef6ff}
+  .lkc-node.kin-desc{background:#f0fdf4}
+  .lkc-node.dragging{opacity:.35}
+  .lkc-node.drop-ok{outline:2px dashed #0ea5e9;outline-offset:1px;background:#eff6ff}
+  .lkc-nm{font-weight:700;color:#0F2A43;display:block;padding-right:44px;word-break:break-all}
+  .lkc-node.leaf .lkc-nm{font-weight:600}
+  .lkc-meta{font-size:10px;color:#64748B;margin-top:2px}
+  .lkc-meta b{color:#0B3C5D}
+  .lkc-amt{font-weight:700;color:#1C7293}
+  .lkc-tag{position:absolute;top:6px;right:8px;font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px}
+  .lkc-tag.auto{background:#EAF0F5;color:#1C7293}
+  .lkc-tag.no{background:#FCEBE9;color:#D96C5F}
+  .lkc-tag.ok{background:#E6F5EC;color:#256b45}
+  .lkc-toggle{position:absolute;top:5px;right:8px;width:18px;height:18px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#475569;font-size:12px;font-weight:800;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+  .lkc-toggle:hover{background:#eef2f7}
+  .lkc-summ{font-size:10px;color:#94A3B8;margin-top:3px}
+  .lkc-acts{margin-top:5px;display:none;gap:4px;flex-wrap:wrap}
+  .lkc-node:hover .lkc-acts{display:flex}
+  .lkc-act{font-size:10px;border:1px solid #e2e8f0;background:#fff;border-radius:6px;padding:1px 6px;cursor:pointer;color:#64748b}
+  .lkc-act:hover{background:#f1f5f9;color:#0f172a}
+  .lkc-act.danger:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5}
+  .lkc-empty{font-size:12px;color:#94A3B8;padding:8px}
+</style>
+
+<script>
+window.LKC = (function(){
+  var S = { mount:null, tree:[], nodes:[], byPath:{}, maxDepth:0,
+            residual:new Set(), manual:new Set(), levels:[], subId:'',
+            collapsed:{}, sel:null, onlyRed:false, drag:null };
+
+  function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function fmt(v){ return Math.round(v||0).toLocaleString('ko-KR'); }
+  function levelName(d){ return S.levels[d] || ('레벨' + (d+1)); }
+
+  function flatten(){
+    var out=[], byPath={};
+    (function walk(list, depth, parent){
+      (list||[]).forEach(function(n){
+        var ld=n.leaf_data||{}; var iid=ld.item_id||null;
+        var status = !n.is_leaf ? 'branch'
+          : (iid && S.residual.has(iid) ? 'residual'
+            : (iid && S.manual.has(iid) ? 'manual' : 'linked'));
+        var node={ path:n.path, name:n.name, amount:n.amount||0, depth:depth,
+                   is_leaf:!!n.is_leaf, item_id:iid, parent:parent,
+                   nChildren:(n.children||[]).length, status:status };
+        out.push(node); byPath[n.path]=node;
+        if(!n.is_leaf) walk(n.children, depth+1, n.path);
+      });
+    })(S.tree, 0, null);
+    S.nodes=out; S.byPath=byPath;
+    S.maxDepth = out.reduce(function(m,n){ return Math.max(m,n.depth); }, 0);
+  }
+
+  function ancestorCollapsed(node){
+    var p=node.parent;
+    while(p){ if(S.collapsed[p]) return true; var pn=S.byPath[p]; p=pn?pn.parent:null; }
+    return false;
+  }
+  function subtreeHasResidual(node){
+    if(node.is_leaf) return node.status==='residual';
+    return S.nodes.some(function(x){ return x.status==='residual' &&
+      (x.path===node.path || x.path.indexOf(node.path+' > ')===0); });
+  }
+  function kinClass(node){
+    if(!S.sel) return '';
+    if(node.path===S.sel) return 'sel';
+    // 조상: sel 이 node.path 로 시작(하위) → node 는 조상
+    if(S.sel.indexOf(node.path+' > ')===0) return 'kin-anc';
+    // 후손: node.path 가 sel 로 시작
+    if(node.path.indexOf(S.sel+' > ')===0) return 'kin-desc';
+    return '';
+  }
+
+  function render(){
+    var root=document.getElementById(S.mount);
+    if(!root) return;
+    // 보이는 노드(조상 접힘/필터 제외) → 열별 그룹
+    var visible = S.nodes.filter(function(n){
+      if(ancestorCollapsed(n)) return false;
+      if(S.onlyRed && !subtreeHasResidual(n)) return false;
+      return true;
+    });
+    var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
+    var maxD = Math.max.apply(null, [0].concat(Object.keys(cols).map(Number)));
+
+    var html='<div class="lkc-canvas"><svg class="lkc-svg"></svg><div class="lkc-cols">';
+    for(var d=0; d<=maxD; d++){
+      html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))+'</div>';
+      (cols[d]||[]).forEach(function(n){ html += nodeCard(n); });
+      html += '</div>';
+    }
+    html += '</div></div>';
+    root.innerHTML = html || '<div class="lkc-empty">표시할 항목이 없습니다.</div>';
+    bind(root);
+    requestAnimationFrame(function(){ drawLinks(root); });
+  }
+
+  function nodeCard(n){
+    var cls=['lkc-node', n.is_leaf?'leaf':'branch', n.status, kinClass(n)].join(' ');
+    var tag='';
+    if(n.is_leaf){
+      if(n.status==='residual') tag='<span class="lkc-tag no">미연계</span>';
+      else if(n.status==='manual') tag='<span class="lkc-tag ok">수기연계</span>';
+      else tag='<span class="lkc-tag auto">자동</span>';
+    }
+    var toggle = (!n.is_leaf && n.nChildren) ?
+      '<button class="lkc-toggle" data-toggle="'+esc(n.path)+'">'+(S.collapsed[n.path]?'+':'−')+'</button>' : '';
+    // 부모(상위분류) 표기
+    var parentName = n.parent ? (S.byPath[n.parent]? S.byPath[n.parent].name : n.parent.split(' > ').pop()) : '';
+    var meta = parentName ? '<div class="lkc-meta">→ <b>'+esc(parentName)+'</b></div>' : '';
+    var summ = (!n.is_leaf && n.nChildren && S.collapsed[n.path]) ?
+      '<div class="lkc-summ">▶ 하위 '+n.nChildren+'개 (접힘)</div>' : '';
+    // 액션
+    var acts='<div class="lkc-acts">';
+    if(n.is_leaf && n.item_id){
+      if(n.status==='residual') acts+='<button class="lkc-act" data-act="unresidual" data-id="'+n.item_id+'">↩연계</button>';
+      else acts+='<button class="lkc-act" data-act="residual" data-id="'+n.item_id+'">↩미연계</button>';
+      acts+='<button class="lkc-act" data-act="exclude" data-id="'+n.item_id+'">⛔제외</button>';
+      acts+='<button class="lkc-act danger" data-act="delete" data-id="'+n.item_id+'">✕삭제</button>';
+    } else if(!n.is_leaf){
+      acts+='<button class="lkc-act danger" data-delbranch="'+esc(n.path)+'">✕가지삭제</button>';
+    }
+    acts+='</div>';
+    return '<div class="'+cls+'" data-path="'+esc(n.path)+'"'
+      + (n.is_leaf && n.item_id ? ' draggable="true" data-item="'+n.item_id+'"' : '')
+      + '>'+toggle+tag
+      + '<span class="lkc-nm">'+esc(n.name)+' <span class="lkc-amt">'+fmt(n.amount)+'</span></span>'
+      + meta + summ + acts + '</div>';
+  }
+
+  function drawLinks(root){
+    var svg=root.querySelector('.lkc-svg'), canvas=root.querySelector('.lkc-canvas');
+    if(!svg||!canvas) return;
+    var cr=canvas.getBoundingClientRect();
+    svg.setAttribute('width',cr.width); svg.setAttribute('height',cr.height);
+    var byPathEl={};
+    root.querySelectorAll('.lkc-node').forEach(function(el){ byPathEl[el.dataset.path]=el; });
+    var paths='';
+    root.querySelectorAll('.lkc-node').forEach(function(el){
+      var node=S.byPath[el.dataset.path]; if(!node||!node.parent) return;
+      var pEl=byPathEl[node.parent]; if(!pEl) return;  // 부모가 접혀 안보이면 생략
+      var a=el.getBoundingClientRect(), b=pEl.getBoundingClientRect();
+      var x1=a.left-cr.left, y1=a.top-cr.top+a.height/2;
+      var x2=b.right-cr.left, y2=b.top-cr.top+b.height/2;
+      var mx=(x1+x2)/2;
+      var cls = node.status==='residual' ? 'residual' : (node.status==='manual' ? 'manual' : 'auto');
+      paths += '<path class="'+cls+'" d="M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2+'"/>';
+    });
+    svg.innerHTML=paths;
+  }
+
+  function bind(root){
+    // 접기 토글
+    root.querySelectorAll('.lkc-toggle').forEach(function(b){
+      b.addEventListener('click', function(e){ e.stopPropagation();
+        var p=b.dataset.toggle; S.collapsed[p]=!S.collapsed[p]; render(); });
+    });
+    // 선택 하이라이트
+    root.querySelectorAll('.lkc-node').forEach(function(el){
+      el.addEventListener('click', function(e){
+        if(e.target.closest('.lkc-act')||e.target.closest('.lkc-toggle')) return;
+        S.sel = (S.sel===el.dataset.path ? null : el.dataset.path); render();
+      });
+    });
+    // 액션(제외/삭제/되돌리기)
+    root.querySelectorAll('.lkc-act[data-act]').forEach(function(b){
+      b.addEventListener('click', function(e){ e.stopPropagation(); nodeAction(b.dataset.id, b.dataset.act); });
+    });
+    root.querySelectorAll('.lkc-act[data-delbranch]').forEach(function(b){
+      b.addEventListener('click', function(e){ e.stopPropagation(); delBranch(b.dataset.delbranch); });
+    });
+    // 드래그드롭: 잎 → 상위(가지)로 놓으면 reassign-path
+    root.querySelectorAll('.lkc-node.leaf[data-item]').forEach(function(el){
+      el.addEventListener('dragstart', function(e){ S.drag={item:el.dataset.item, path:el.dataset.path};
+        el.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',el.dataset.item);}catch(_){} });
+      el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
+    });
+    root.querySelectorAll('.lkc-node.branch').forEach(function(el){
+      el.addEventListener('dragover', function(e){ if(S.drag){ e.preventDefault(); el.classList.add('drop-ok'); } });
+      el.addEventListener('dragleave', function(){ el.classList.remove('drop-ok'); });
+      el.addEventListener('drop', function(e){ e.preventDefault(); el.classList.remove('drop-ok');
+        if(!S.drag) return; var target=el.dataset.path; var item=S.drag.item; S.drag=null;
+        if(target===el.dataset.path) reassign(item, target); });
+    });
+  }
+
+  function reassign(itemId, path){
+    if(!confirm('이 항목을 다음 분류로 이어붙일까요? (수기 연계)\n\n'+path)) return;
+    fetch('/submissions/'+S.subId+'/item/'+itemId+'/reassign-path', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path:path})
+    }).then(function(r){return r.json();}).then(function(d){
+      if(d.ok) location.reload(); else alert('연결 실패: '+(d.error||''));
+    }).catch(function(e){ alert('오류: '+e); });
+  }
+  function nodeAction(itemId, action){
+    var msg={delete:'이 항목을 영구 삭제할까요?', exclude:'이 항목을 합계에서 제외할까요? (복원 가능)',
+             residual:'이 항목을 미연계(빨강)로 되돌릴까요?', unresidual:'이 항목을 연계 완료로 표시할까요?'}[action];
+    if(msg && !confirm(msg)) return;
+    fetch('/submissions/'+S.subId+'/link/node', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item_id:itemId, action:action})})
+     .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
+     .catch(function(e){ alert('오류: '+e); });
+  }
+  function delBranch(path){
+    if(!confirm('이 가지와 하위 전체를 삭제할까요?\n\n'+path)) return;
+    fetch('/submissions/'+S.subId+'/tree/delete-branch', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({path:path})})
+     .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
+     .catch(function(e){ alert('오류: '+e); });
+  }
+
+  return {
+    init: function(cfg){
+      S.mount=cfg.mount; S.tree=cfg.tree||[]; S.levels=cfg.levels||[]; S.subId=cfg.subId||'';
+      S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
+      S.collapsed={}; S.sel=null; S.onlyRed=false;
+      flatten();
+      // 초기: 전부 펼침(캔버스는 열로 보이므로). onlyRed 필터는 컨트롤로.
+      render();
+      var self=this;
+      window.addEventListener('resize', function(){ var r=document.getElementById(S.mount); if(r) drawLinks(r); });
+    },
+    refresh: function(){ render(); },
+    expandAll: function(){ S.collapsed={}; render(); },
+    collapseAll: function(){ S.nodes.forEach(function(n){ if(!n.is_leaf && n.nChildren) S.collapsed[n.path]=true; }); render(); },
+    toLevel: function(lv){ S.collapsed={}; S.nodes.forEach(function(n){ if(!n.is_leaf && n.depth>=lv-1) S.collapsed[n.path]=true; }); render(); },
+    setOnlyRed: function(v){ S.onlyRed=!!v; render(); },
+    maxDepth: function(){ return S.maxDepth; }
+  };
+})();
+</script>

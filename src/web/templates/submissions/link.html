@@ -67,39 +67,6 @@
   .lk-recon-row{font-size:11px;color:#256b45}
   .lk-recon-row.bad{color:#b45309}
 
-  /* step2·3 접이식 트리 */
-  .lk-tree-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px}
-  .lk-tbtn{font-size:11.5px;font-weight:700;border:1px solid var(--line);background:#fff;color:var(--navy);border-radius:8px;padding:5px 11px;cursor:pointer}
-  .lk-tbtn:hover{background:var(--cloud)}
-  .lk-tsel{font-size:11.5px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;color:var(--navy)}
-  .lk-tchk{font-size:11.5px;color:var(--slate);display:inline-flex;align-items:center;gap:4px}
-  .lk-tlegend{font-size:11px;color:var(--mute);margin-left:auto}
-  .lk-tree{border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .lk-trow{display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px solid #f1f5f9;font-size:12.5px;cursor:default;position:relative}
-  .lk-trow:first-child{border-top:0}
-  .lk-trow:hover{background:#fafcfe}
-  .lk-trow.sel{background:#e0f2fe}
-  .lk-trow.kin{background:#f0f9ff}
-  .lk-trow .tw-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--navy)}
-  .lk-trow.leafrow .tw-name{font-weight:400;color:var(--ink)}
-  .lk-trow .tw-amt{font-weight:700;color:var(--teal);font-variant-numeric:tabular-nums}
-  .lk-trow .tw-sum{font-size:10.5px;color:var(--mute);margin-left:6px}
-  .lk-lvtag{font-size:9px;font-weight:700;color:#fff;background:var(--teal);border-radius:8px;padding:1px 6px}
-  .lk-toggle{width:20px;height:20px;flex-shrink:0;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#475569;font-size:12px;font-weight:800;cursor:pointer;line-height:1;display:inline-flex;align-items:center;justify-content:center}
-  .lk-toggle:hover{background:#eef2f7}
-  .lk-toggle.ph{border-color:transparent;background:transparent;cursor:default;color:transparent}
-  .lk-trow.st-residual{border-left:3px solid #ef4444;background:#fff5f5}
-  .lk-trow.st-excluded{border-left:3px solid #cbd5e1;opacity:.6}
-  .lk-trow.st-excluded .tw-name{text-decoration:line-through;color:#94a3b8}
-  .lk-trow.st-linked{border-left:3px solid #22c55e}
-  .lk-tbadge{font-size:8.5px;font-weight:800;border-radius:8px;padding:1px 6px;margin-right:2px}
-  .lk-tbadge.no{background:#fee2e2;color:#dc2626}
-  .lk-tacts{display:inline-flex;gap:3px;opacity:0;transition:.12s}
-  .lk-trow:hover .lk-tacts{opacity:1}
-  .lk-tact{font-size:11px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:1px 6px;cursor:pointer;color:#64748b}
-  .lk-tact:hover{background:#f1f5f9;color:#0f172a}
-  .lk-tact.danger:hover{background:#fee2e2;color:#dc2626;border-color:#fca5a5}
-
   /* step4 final tree */
   .lk-ft{font-size:12.5px}
   .lk-ft-node{padding:5px 10px;border-radius:6px;margin-bottom:2px;display:flex;align-items:center;justify-content:space-between}
@@ -175,21 +142,27 @@
   </div>
   {% endif %}
 
-  <!-- 트리 도구모음 -->
-  <div class="lk-tree-tools">
-    <button class="lk-tbtn" onclick="lkTreeExpandAll()">＋ 모두 펼치기</button>
-    <button class="lk-tbtn" onclick="lkTreeCollapseAll()">－ 모두 접기</button>
-    <select id="lkExpandLevel" class="lk-tsel" onchange="lkTreeToLevel(parseInt(this.value))" title="선택한 분류 레벨까지 펼칩니다">
-      <option value="0">분류…</option>
+  <!-- 캔버스 도구모음 -->
+  <div class="lkc-tools">
+    <button class="lkc-tbtn" onclick="LKC.expandAll()">＋ 모두 펼치기</button>
+    <button class="lkc-tbtn" onclick="LKC.collapseAll()">－ 모두 접기</button>
+    <select id="lkcLevel" class="lkc-tbtn" onchange="if(this.value)LKC.toLevel(parseInt(this.value))" title="선택한 분류 레벨까지 펼침(하위 접기)">
+      <option value="">분류…</option>
     </select>
-    <label class="lk-tchk"><input type="checkbox" id="lkOnlyRed" onchange="lkRenderTree()"> 미연계(빨강)만 보기</label>
-    <span class="lk-tlegend break-ko">🟥 미연계 · 🟩 연계 · ⬜ 제외 — 항목 클릭 = 상·하위 강조</span>
+    <label class="lkc-chk"><input type="checkbox" id="lkcOnlyRed" onchange="LKC.setOnlyRed(this.checked)"> 미연계(빨강)만 보기</label>
+    <span class="lkc-legend break-ko">
+      <span><i style="border-color:#1C7293;border-top-style:dashed"></i>자동</span>
+      <span><i style="border-color:#3FA372"></i>수기연계</span>
+      <span><i style="border-color:#D96C5F;border-top-style:dashed"></i>미연계</span>
+      <span>· 잎을 상위 카드로 드래그 = 연결 · 클릭 = 상·하위 강조</span>
+    </span>
   </div>
   <div class="text-[11px] break-ko mb-1" style="color:var(--slate)" id="lkModeHint"></div>
-  <div id="lkTree" class="lk-tree"></div>
+  <!-- 재사용 연계 캔버스 마운트 -->
+  <div id="lkcCanvas"></div>
 
   <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
-    <div class="text-[12px] break-ko" style="color:var(--slate)">오른쪽 [＋]/[－]로 하위 레벨을 접고 펼치세요. 각 항목의 ⛔ 제외 · ✕ 삭제 · ↩ 미연계 가능.</div>
+    <div class="text-[12px] break-ko" style="color:var(--slate)">레벨(왼→오)이 상위입니다. 잎 카드를 상위 분류 카드로 드래그해 연결하세요.</div>
     <div class="flex gap-2">
       <button class="lk-btn lk-btn-primary" id="lkToConfirm" onclick="lkGo(4)">확정 단계 →</button>
     </div>
@@ -217,6 +190,9 @@
   </div>
   <div class="mt-3 text-[12px] break-ko" style="color:var(--slate)">확정 시 통합 트리가 <b>스냅샷</b>으로 보존됩니다(금액 불변). 수정 후 재확정하면 다음 버전으로 승격됩니다.</div>
 </div>
+
+{# 재사용 연계 캔버스 컴포넌트(정의만; 데이터는 아래 scripts에서 LKC.init) #}
+{% include "submissions/_link_canvas.html" %}
 {% endblock %}
 
 {% block scripts %}
@@ -225,156 +201,33 @@ const SUB_ID = "{{ sub.submission_id }}";
 let lkCur = 1;
 const lkNResidual = {{ n_residual }};
 const LK_TREE = {{ tree_json|safe }};
-const LK_RESIDUAL = new Set({{ residual_ids_json|safe }});
+const LK_RESIDUAL = {{ residual_ids_json|safe }};
+const LK_MANUAL = {{ manual_ids_json|safe }};
 const LK_LEVELS = {{ level_names_json|safe }};
-
-function lkLevelName(depth){ return LK_LEVELS[depth] || ('레벨' + (depth + 1)); }
-function lkFmt(v){ return Math.round(v || 0).toLocaleString('ko-KR'); }
-function lkEsc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-
-/* ── 트리 상태 ── */
-let lkOpen = {};          // path -> true(펼침)
-let lkSel = null;         // 선택 경로(강조 기준)
-let lkMaxDepth = 0;
-
-// 잎의 상태: residual(빨강)/excluded(회색)/linked(녹색)
-function lkLeafStatus(node){
-  const ld = node.leaf_data || {};
-  if (ld.item_id && LK_RESIDUAL.has(ld.item_id)) return 'residual';
-  return 'linked';
-}
-// 서브트리에 미연계(빨강)가 있는지
-function lkHasResidual(node){
-  if (node.is_leaf) return lkLeafStatus(node) === 'residual';
-  return (node.children || []).some(lkHasResidual);
-}
-
-// 초기: 전부 접되, 미연계(빨강) 잎의 조상 경로만 펼침(C: 처음엔 빨강만 보이게)
-function lkInitOpen(){
-  lkOpen = {};
-  (function walk(nodes, anc){
-    nodes.forEach(function(n){
-      if (n.is_leaf) return;
-      const kids = n.children || [];
-      if (kids.some(lkHasResidual)) { lkOpen[n.path] = true; }
-      lkMaxDepth = Math.max(lkMaxDepth, (n.depth||1));
-      walk(kids, anc.concat(n.path));
-    });
-  })(LK_TREE, []);
-}
-
-/* ── 렌더 ── */
-function lkRenderTree(){
-  const box = document.getElementById('lkTree');
-  if (!box) return;
-  const onlyRed = document.getElementById('lkOnlyRed').checked;
-  const kin = lkKinPaths();   // 선택 항목의 상·하위 경로 집합
-  let html = '';
-  (function walk(nodes, depth){
-    nodes.forEach(function(n){
-      const isOpen = !!lkOpen[n.path];
-      const hasRed = lkHasResidual(n);
-      if (onlyRed && !hasRed) return;        // 빨강만 보기 필터
-      const kids = n.children || [];
-      const status = n.is_leaf ? lkLeafStatus(n) : (hasRed ? '' : 'linked');
-      const sel = (n.path === lkSel);
-      const isKin = kin.has(n.path);
-      const cls = ['lk-trow', n.is_leaf ? 'leafrow' : 'branchrow',
-                   status ? ('st-' + status) : '',
-                   sel ? 'sel' : (isKin ? 'kin' : '')].join(' ');
-      const pad = 8 + depth * 18;
-      // 토글(가지) 또는 자리표시(잎)
-      let toggle;
-      if (!n.is_leaf && kids.length) {
-        toggle = '<button class="lk-toggle" onclick="lkToggle(event, this)" data-path="'+lkEsc(n.path)+'">'+(isOpen?'−':'+')+'</button>';
-      } else {
-        toggle = '<span class="lk-toggle ph">·</span>';
-      }
-      // 접힌 가지 요약(B): [첫자식 외 N개]
-      let summ = '';
-      if (!n.is_leaf && kids.length && !isOpen) {
-        const first = kids[0] ? kids[0].name : '';
-        const extra = kids.length - 1;
-        summ = '<span class="tw-sum break-ko">['+lkEsc(first)+(extra>0?(' 외 '+extra+'개'):'')+']</span>';
-      }
-      const badge = (n.is_leaf && status==='residual') ? '<span class="lk-tbadge no">미연계</span>' : '';
-      const lvtag = !n.is_leaf ? '<span class="lk-lvtag break-ko">'+lkEsc(lkLevelName(depth))+'</span>' : '';
-      // 액션(E·F)
-      const iid = (n.leaf_data||{}).item_id || '';
-      let acts = '<span class="lk-tacts">';
-      if (n.is_leaf && iid){
-        if (status==='residual')
-          acts += '<button class="lk-tact" title="자동연계로 되돌리기" onclick="lkNode(event,\''+iid+'\',\'unresidual\')">↩연계</button>';
-        else
-          acts += '<button class="lk-tact" title="미연계(빨강)로 되돌리기" onclick="lkNode(event,\''+iid+'\',\'residual\')">↩미연계</button>';
-        acts += '<button class="lk-tact" title="제외(합계에서 뺌·보존)" onclick="lkNode(event,\''+iid+'\',\'exclude\')">⛔제외</button>';
-        acts += '<button class="lk-tact danger" title="영구 삭제" onclick="lkNode(event,\''+iid+'\',\'delete\')">✕삭제</button>';
-      } else if (!n.is_leaf){
-        acts += '<button class="lk-tact danger" title="이 가지와 하위 전체 삭제" onclick="lkDelBranch(event,\''+lkEsc(n.path).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">✕가지삭제</button>';
-      }
-      acts += '</span>';
-
-      html += '<div class="'+cls+'" style="padding-left:'+pad+'px" data-path="'+lkEsc(n.path)+'" onclick="lkSelect(\''+lkEsc(n.path).replace(/'/g,"\\'")+'\')">'
-            + toggle
-            + '<span class="tw-name break-ko">'+badge+lvtag+' '+lkEsc(n.name)+summ+'</span>'
-            + acts
-            + '<span class="tw-amt">'+lkFmt(n.amount)+'</span>'
-            + '</div>';
-      if (!n.is_leaf && isOpen) walk(kids, depth + 1);
-    });
-  })(LK_TREE, 0);
-  box.innerHTML = html || '<div class="lk-trow"><span class="tw-name break-ko" style="color:var(--mute)">표시할 항목이 없습니다.</span></div>';
-}
-
-// 선택 항목의 조상+후손 경로(강조용)
-function lkKinPaths(){
-  const s = new Set();
-  if (!lkSel) return s;
-  const parts = lkSel.split(' > ');
-  let acc = [];
-  for (let i=0;i<parts.length;i++){ acc.push(parts[i]); s.add(acc.join(' > ')); }
-  // 후손: lkSel로 시작하는 모든 경로
-  (function walk(nodes){ nodes.forEach(function(n){
-    if (n.path === lkSel || n.path.indexOf(lkSel + ' > ')===0) s.add(n.path);
-    if (!n.is_leaf) walk(n.children||[]);
-  }); })(LK_TREE);
-  return s;
-}
-
-function lkToggle(ev, btn){ ev.stopPropagation(); const p = btn.dataset.path; lkOpen[p] = !lkOpen[p]; lkRenderTree(); }
-function lkSelect(path){ lkSel = (lkSel===path ? null : path); lkRenderTree(); }
-function lkTreeExpandAll(){ (function walk(nodes){ nodes.forEach(function(n){ if(!n.is_leaf){ lkOpen[n.path]=true; walk(n.children||[]); } }); })(LK_TREE); lkRenderTree(); }
-function lkTreeCollapseAll(){ lkOpen = {}; lkRenderTree(); }
-function lkTreeToLevel(lv){
-  if(!lv){ return; }
-  lkOpen = {};
-  (function walk(nodes){ nodes.forEach(function(n){ if(!n.is_leaf){ if((n.depth||1) < lv) lkOpen[n.path]=true; walk(n.children||[]); } }); })(LK_TREE);
-  lkRenderTree();
-}
-
-// 잎 상태 조정(E·F) → 서버
-function lkNode(ev, itemId, action){
-  ev.stopPropagation();
-  const msg = {delete:'이 항목을 영구 삭제할까요?', exclude:'이 항목을 합계에서 제외할까요? (보존·복원 가능)',
-               residual:'이 항목을 미연계(빨강)로 되돌릴까요?', unresidual:'이 항목을 연계 완료로 표시할까요?'}[action];
-  if (msg && !confirm(msg)) return;
-  fetch('/submissions/'+SUB_ID+'/link/node', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({item_id:itemId, action:action})})
-   .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
-   .catch(function(e){ alert('오류: '+e); });
-}
-function lkDelBranch(ev, path){
-  ev.stopPropagation();
-  if(!confirm('이 가지와 하위 전체 항목을 삭제할까요?\n\n'+path)) return;
-  fetch('/submissions/'+SUB_ID+'/tree/delete-branch', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({path:path})})
-   .then(function(r){return r.json();}).then(function(d){ if(d.ok) location.reload(); else alert('실패: '+(d.error||'')); })
-   .catch(function(e){ alert('오류: '+e); });
-}
 
 function lkRoleKo(r){
   return ({leaf:'세부(품목·단가)', band:'밴드(분류)', seq_leaf:'세부(번호계층)',
            seq_tree:'트리(번호계층)', seq_list:'목록', unknown:'미상'})[r] || (r||'—');
+}
+
+// 재사용 캔버스 초기화(마운트 lkcCanvas). 한 번만 init하고 단계 전환 시 재렌더는 불필요
+// (열 캔버스는 항상 전체 표시 + 접기 상태 유지).
+let lkcReady = false;
+function lkEnsureCanvas(){
+  if (lkcReady) return;
+  LKC.init({ mount:'lkcCanvas', tree:LK_TREE, residual:LK_RESIDUAL, manual:LK_MANUAL,
+             levels:LK_LEVELS, subId:SUB_ID });
+  // 분류 레벨 드롭다운 채우기(사용자 분류명, 데이터 최대 깊이까지)
+  const sel = document.getElementById('lkcLevel');
+  if (sel){
+    const md = Math.max(LKC.maxDepth() + 1, 1);
+    for (let d=1; d<=md; d++){
+      const o = document.createElement('option');
+      o.value = d; o.textContent = (LK_LEVELS[d-1] || ('레벨'+d)) + '까지';
+      sel.appendChild(o);
+    }
+  }
+  lkcReady = true;
 }
 
 function lkGo(s){
@@ -390,9 +243,10 @@ function lkGo(s){
   const hint = document.getElementById('lkModeHint');
   if(s===2||s===3){
     hint.innerHTML = lkNResidual
-      ? '처음엔 <b>미연계(빨강)</b> 항목만 펼쳐집니다. [＋]로 하위를 열고, 항목을 클릭하면 상·하위가 강조됩니다.'
-      : '전 항목 연계 완료. [＋]/[－]로 원하는 레벨까지 살펴보고 확정하세요.';
-    lkRenderTree();
+      ? '<b>미연계(빨강 파선)</b> 잎을 상위 분류 카드로 <b>드래그</b>하면 연결(초록)됩니다. 카드 [＋]/[－]로 하위 레벨 접기.'
+      : '전 항목 연계 완료. 카드를 드래그해 재지정하거나 [＋]/[－]로 살펴보고 확정하세요.';
+    lkEnsureCanvas();
+    requestAnimationFrame(function(){ LKC.expandAll(); });  // 초기 전체 표시 + 링크 재계산
   }
 }
 
@@ -411,20 +265,6 @@ function lkConfirm(){
     }).catch(function(err){ btn.disabled=false; btn.textContent='확정 (스냅샷 저장)'; alert('오류: '+err); });
 }
 
-// [연계 D] 분류 레벨 드롭다운 채우기(사용자 분류명, 데이터 최대 깊이까지)
-(function initLevelSelect(){
-  lkInitOpen();
-  const sel = document.getElementById('lkExpandLevel');
-  if (sel){
-    const md = Math.max(lkMaxDepth, 1);
-    for (let d=1; d<=md; d++){
-      const o = document.createElement('option');
-      o.value = d; o.textContent = lkLevelName(d-1) + '까지';
-      sel.appendChild(o);
-    }
-  }
-})();
-
-lkGo(2);   // 진입 시 접이식 연계 트리
+lkGo(2);   // 진입 시 정합성 제안(캔버스)
 </script>
 {% endblock %}
