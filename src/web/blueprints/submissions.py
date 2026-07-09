@@ -22,6 +22,32 @@ from config import ALLOWED_EXTENSIONS
 bp = Blueprint("submissions", __name__)
 
 
+# [B.ii] classify_workbook 결과 캐시 — {fpath: (sig, {sheet: role})}.
+#  시그니처(크기:mtime)가 같으면 재계산 없이 재사용해 시트 전환 지연을 없앤다.
+_CLASSIFY_CACHE = {}
+
+
+def _file_sig(path):
+    try:
+        st = os.stat(path)
+        return f"{st.st_size}:{int(st.st_mtime)}"
+    except OSError:
+        return None
+
+
+def _classify_workbook_cached(fpath):
+    """워크북 시트별 역할 판정을 파일 시그니처로 캐시(프로세스 메모리)."""
+    sig = _file_sig(fpath)
+    cached = _CLASSIFY_CACHE.get(fpath)
+    if cached and cached[0] == sig:
+        return cached[1]
+    from extractors.stitch import classify_workbook
+    roles = {}
+    for _s in classify_workbook(fpath).get("sheets", []):
+        roles[_s["name"]] = _s["role"]
+    _CLASSIFY_CACHE[fpath] = (sig, roles)
+    return roles
+
 
 def _db_connect():
     """직접 DB 연결 — busy_timeout 포함 (worker와의 쓰기 경합 시 5초 대기)."""
@@ -791,8 +817,10 @@ def column_map(submission_id):
         saved_config = _json.loads(subd.get("map_config") or "null")
     except Exception:
         saved_config = None
-    # 저장된 시트가 있으면 그 시트로 (쿼리파라미터 우선)
-    if saved_config and not request.args.get("sheet") and saved_config.get("sheet"):
+    # 저장된 시트가 있으면 그 시트로 (쿼리파라미터 우선).
+    # [B.ii 성능] 실제로 시트가 바뀔 때만 재오픈(같은 시트 중복 load_workbook 방지).
+    if (saved_config and not request.args.get("sheet")
+            and saved_config.get("sheet") and saved_config["sheet"] != sheet):
         sheet = saved_config["sheet"]
         try:
             grid_data = read_grid(fpath, sheet)
@@ -836,14 +864,17 @@ def column_map(submission_id):
     }
 
     # 시트별 역할 자동 판정(갑지·설명 시트 사전 해제용). 데이터 없는 시트는 'unknown'.
+    # [B.ii 성능] classify_workbook 은 워크북을 시트당 ~2회 재오픈해 매우 비싸므로,
+    #  파일 시그니처(크기+mtime)로 프로세스 메모리에 캐시해 시트 전환마다 재실행하지 않는다.
     sheet_roles = {}
     try:
         if len(sheets) > 1:
-            from extractors.stitch import classify_workbook
-            for _s in classify_workbook(fpath).get("sheets", []):
-                sheet_roles[_s["name"]] = _s["role"]
+            sheet_roles = _classify_workbook_cached(fpath)
     except Exception:
         sheet_roles = {}
+
+    # [B.i] 사용자가 명시 선택한 통합추출 시트 목록(정본). 없으면 프런트가 역할로 기본 판정.
+    saved_selection = (saved_config or {}).get("sheet_selection")
 
     return render_template("submissions/column_map.html",
                            sub=subd, sheets=sheets, current_sheet=sheet,
@@ -853,7 +884,8 @@ def column_map(submission_id):
                            saved_config_json=_json.dumps(saved_config, ensure_ascii=False),
                            cur_saved_json=_json.dumps(cur_saved, ensure_ascii=False),
                            total_suggestion_json=_json.dumps(total_suggestion, ensure_ascii=False),
-                           domain_binding_json=_json.dumps(domain_binding, ensure_ascii=False))
+                           domain_binding_json=_json.dumps(domain_binding, ensure_ascii=False),
+                           sheet_selection_json=_json.dumps(saved_selection, ensure_ascii=False))
 
 
 @bp.route("/<submission_id>/category-binding", methods=["GET"])
@@ -912,16 +944,17 @@ def _build_residual_view(subd, items):
     except Exception:
         stitch_meta = {}
     view = []
+    seen_ids = set()
+    item_paths = {dict(it).get("path") for it in items if dict(it).get("path")}
+    skel = set(stitch_meta.get("candidates") or [])
+    all_paths = sorted(skel | item_paths)
     if stitch_meta and stitch_meta.get("residuals"):
         ln_map = {dict(it).get("line_no"): dict(it) for it in items}
-        item_paths = {dict(it).get("path") for it in items if dict(it).get("path")}
-        # 후보 = 스티칭이 복원한 정상 분류경로(스켈레톤) ∪ 항목 경로. 스켈레톤이 우선.
-        skel = set(stitch_meta.get("candidates") or [])
-        all_paths = sorted(skel | item_paths)
         for rs in stitch_meta["residuals"]:
             it = ln_map.get(f"R{rs.get('row')}")
             if not it:
                 continue
+            seen_ids.add(it.get("item_id"))
             view.append({
                 "item_id": it.get("item_id"),
                 "name": rs.get("name") or it.get("name_normalized"),
@@ -930,6 +963,27 @@ def _build_residual_view(subd, items):
                 "current_path": it.get("path"),
                 "amount": it.get("amount"),
                 # 현재 경로도 포함(모호 조인은 현재값이 정답일 수 있음 → '확인' 선택지)
+                "candidates": all_paths,
+            })
+    # [연계 E] 수기로 '미연계(빨강)'로 되돌린 항목(link_overrides)도 residual에 포함.
+    try:
+        overrides = mc.get("link_overrides") or {}
+    except Exception:
+        overrides = {}
+    if overrides:
+        by_id = {dict(it).get("item_id"): dict(it) for it in items}
+        for iid, st in overrides.items():
+            if st != "residual" or iid in seen_ids:
+                continue
+            it = by_id.get(iid)
+            if not it:
+                continue
+            seen_ids.add(iid)
+            view.append({
+                "item_id": iid, "name": it.get("name_normalized"),
+                "reason": "manual_residual",
+                "reason_ko": "수기 지정(재확인 필요)",
+                "current_path": it.get("path"), "amount": it.get("amount"),
                 "candidates": all_paths,
             })
     return stitch_meta, view
@@ -1061,6 +1115,66 @@ def map_save_sheet(submission_id):
     mc["draft"] = True   # 아직 추출 전 드래프트임을 표시
     update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
     return jsonify({"ok": True, "saved_sheets": sorted(sheets.keys())})
+
+
+@bp.route("/<submission_id>/map/sheet-preview", methods=["GET"])
+@require_role("manager")
+def map_sheet_preview(submission_id):
+    """[추출화면 C] 이미 조정한 시트의 헤더 + 조정 매핑 + 상위 몇 행 미리보기.
+    다른 시트의 레벨(대/중/소/세/품명) 조정을 참고하도록 on-demand로 제공(경량)."""
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    subd = dict(sub)
+    fpath = subd.get("file_path")
+    sheet = request.args.get("sheet")
+    if not sheet or not fpath:
+        return jsonify({"ok": False, "error": "sheet 필요"}), 200
+    try:
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    sv = (mc.get("sheets") or {}).get(sheet) or {}
+    mapping = {int(k): v for k, v in (sv.get("mapping") or {}).items()}
+    header_row = int(sv.get("header_row") or 1)
+    from extractors.extract_by_mapping import read_grid
+    try:
+        grid = read_grid(fpath, sheet, max_rows=header_row + 5)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 200
+    rows = grid.get("grid") or []
+    header = rows[header_row - 1] if len(rows) >= header_row else []
+    data_rows = rows[header_row:header_row + 5]
+    return jsonify({"ok": True, "sheet": sheet, "header_row": header_row,
+                    "header": header, "rows": data_rows,
+                    "mapping": {str(k): v for k, v in mapping.items()}})
+
+
+@bp.route("/<submission_id>/map/selection", methods=["POST"])
+@require_role("manager")
+def map_save_selection(submission_id):
+    """[B.i] 통합추출 시트 선택(체크박스) 상태를 map_config에 정본으로 저장.
+
+    시트 전환은 전체 페이지 리로드라 체크 상태가 초기화되던 문제 해결의 핵심.
+    체크가 바뀔 때마다 이 경로로 저장 → 재진입·시트이동 후에도 선택이 유지된다.
+    payload: {sheets:[선택된 시트명, ...]}
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    sel = p.get("sheets")
+    if not isinstance(sel, list):
+        return jsonify({"ok": False, "error": "sheets 배열이 필요합니다."}), 200
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    mc["sheet_selection"] = [str(s) for s in sel]
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    return jsonify({"ok": True, "sheet_selection": mc["sheet_selection"]})
 
 
 @bp.route("/<submission_id>/map/auto-stitch", methods=["POST"])
@@ -1456,9 +1570,19 @@ def link_view(submission_id):
     except Exception:
         sheets_view = []
 
+    # [연계 D] 레벨 → 사용자 분류명 매핑(대/중/소/세/품명/부품…). 깊이 순서 기본값.
+    level_names = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
+
+    # [연계 트리] 잎에 item_id·residual 플래그를 실어 나른다(제외/삭제/되돌리기용).
+    residual_ids = sorted(residual_view and {rv["item_id"] for rv in residual_view} or set(),
+                          key=lambda x: str(x))
+
     snap = get_latest_snapshot(submission_id)
     return render_template("submissions/link.html", sub=subd,
                            levels=levels, max_depth=max_depth, flat_tree=flat,
+                           tree_json=_json.dumps(tree.get("tree") or [], ensure_ascii=False),
+                           residual_ids_json=_json.dumps(residual_ids, ensure_ascii=False),
+                           level_names_json=_json.dumps(level_names, ensure_ascii=False),
                            total=tree.get("total") or 0,
                            n_residual=len(residual_view),
                            stitch_meta=stitch_meta or {},
@@ -1488,6 +1612,53 @@ def link_confirm(submission_id):
     return jsonify({"ok": True, "version": version,
                     "total": tree.get("total") or 0,
                     "n_residual": len(residual_view)})
+
+
+@bp.route("/<submission_id>/link/node", methods=["POST"])
+@require_role("manager")
+def link_node_status(submission_id):
+    """[연계 E·F] 트리 노드 상태 조정(비파괴 우선).
+
+    action:
+      · exclude  : 항목을 합계·트리에서 제외(is_header=1, 보존·되돌리기 가능)
+      · restore  : 제외 해제(is_header=0)
+      · residual : 자동연계(녹색)를 '미연계(빨강)'로 되돌림(link_overrides 저장)
+      · unresidual: 미연계 지정 해제
+      · delete   : 항목 영구 삭제
+    """
+    import json as _json
+    from db.queries import (set_item_excluded, delete_single_item,
+                            recompute_subtotal)
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    item_id = (p.get("item_id") or "").strip()
+    action = (p.get("action") or "").strip()
+    if not item_id or action not in ("exclude", "restore", "residual",
+                                     "unresidual", "delete"):
+        return jsonify({"ok": False, "error": "item_id·action 필요"}), 200
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    ov = mc.get("link_overrides") or {}
+    if action == "delete":
+        delete_single_item(item_id)
+        ov.pop(item_id, None)
+    elif action == "exclude":
+        set_item_excluded(item_id, True)
+        ov.pop(item_id, None)
+    elif action == "restore":
+        set_item_excluded(item_id, False)
+    elif action == "residual":
+        ov[item_id] = "residual"
+    elif action == "unresidual":
+        ov.pop(item_id, None)
+    mc["link_overrides"] = ov
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    recompute_subtotal(submission_id)
+    return jsonify({"ok": True})
 
 
 @bp.route("/<submission_id>/tree/delete-branch", methods=["POST"])
@@ -1528,6 +1699,19 @@ def delete_item(submission_id, item_id):
           "success" if n else "warning")
     tok = getattr(g, "auth_token", "") or ""
     return redirect(url_for("submissions.detail", submission_id=submission_id, _t=tok))
+
+
+@bp.route("/<submission_id>/unit-count", methods=["POST"])
+@require_role("manager")
+def set_unit_count(submission_id):
+    """[추출 기준정보] 장비 대수 설정. 대당 단가 표시에 사용(총액/대수)."""
+    from db.queries import set_submission_unit_count
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    n = set_submission_unit_count(submission_id, p.get("unit_count"))
+    return jsonify({"ok": True, "unit_count": n})
 
 
 @bp.route("/<submission_id>/nego/add", methods=["POST"])
