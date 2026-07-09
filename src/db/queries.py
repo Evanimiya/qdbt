@@ -1787,13 +1787,22 @@ def compare_bid_submissions(bid_id):
         categories = {cat: {} for cat in cat_order}
         cat_totals = {v: {cat: 0 for cat in cat_order} for v in vendors}
 
+        # 클러스터 포함 판정: 항목 자신의 id가 멤버이거나,
+        # 비교단위 묶음이 품은 잎 중 하나라도 멤버이면 '클러스터에 포함'으로 본다.
+        # (클러스터 렌더 매칭과 동일 기준 → 클러스터/미분류 중복 표시 방지)
+        def _clustered(it):
+            if it["item_id"] in clustered_item_ids:
+                return True
+            _lf = it.get("member_item_ids") if hasattr(it, "get") else None
+            return bool(_lf and (_lf & clustered_item_ids))
+
         # ── 1-pass: 같은 이름 충돌 검사 ──
         # 같은 카테고리 안에서 한 이름이 서로 다른 path의 항목들에 쓰이면 "충돌".
         # 충돌하는 이름은 전체 path로 구분 표시한다.
         from collections import defaultdict as _dd
         name_paths = _dd(lambda: _dd(set))  # cat -> name -> {path...}
         for it in all_items:
-            if it["item_id"] in clustered_item_ids:
+            if _clustered(it):
                 continue
             cat = it["category"] or "기타"
             nm = (it["name_normalized"] or it["name_raw"] or "").strip()
@@ -1805,7 +1814,7 @@ def compare_bid_submissions(bid_id):
                       for nm, paths in nmap.items() if len(paths) > 1}
 
         for it in all_items:
-            if it["item_id"] in clustered_item_ids:
+            if _clustered(it):
                 continue  # 클러스터에 포함된 항목은 제외
             cat = it["category"] or "기타"
             vendor = it["vendor_name"]
