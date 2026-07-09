@@ -238,7 +238,9 @@ def _band_join(bands):
             seen = set()
             for m in merged:
                 for t in tuples:
-                    if all(m.get(s) == t.get(s) for s in shared):
+                    # [동일명 인식] 시트 간 공유 레벨 조인키는 정규화 비교
+                    # (공백·대소문자·후행공백 차이로 같은 분류를 놓치지 않도록).
+                    if all(_norm(m.get(s)) == _norm(t.get(s)) for s in shared):
                         nm = dict(m)
                         nm.update(t)
                         key = tuple(sorted(nm.items()))
@@ -279,9 +281,10 @@ def _stitch_band(sheets):
             matched = True
             ambiguous = False
             if skeleton and leaf_top is not None and r.get(leaf_top):
-                cand = [s for s in skeleton if s.get(leaf_top) == r.get(leaf_top)]
+                # [동일명 인식] 잎→스켈레톤 조인키도 정규화 비교(공백·대소문자 차이 흡수)
+                cand = [s for s in skeleton if _norm(s.get(leaf_top)) == _norm(r.get(leaf_top))]
                 # 모호 조인 검출: 같은 조인키가 서로 다른 상위 경로로 이어지면 추측 금지→residual
-                distinct = {tuple(s.get(lv) for lv in sorted(skel_levels)) for s in cand}
+                distinct = {tuple(_norm(s.get(lv)) for lv in sorted(skel_levels)) for s in cand}
                 if len(distinct) > 1:
                     ambiguous = True
                     matched = False
