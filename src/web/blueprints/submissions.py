@@ -1067,23 +1067,34 @@ def residuals_suggest(submission_id):
         try:
             from extractors.providers import get_provider
             prov = get_provider(llm["provider"])
-            payload = [{"id": v["item_id"], "name": v["name"],
-                        "current_path": v["current_path"],
-                        "candidates": v["candidates"]} for v in view]
+            # [클러스터링과 동일 로직] 긴 UUID echo 대신 짧은 id(r1, r2…) 사용 →
+            # LLM 오타로 인한 제안 누락 방지. 응답을 실제 item_id로 복원.
+            _idmap = {}
+            payload = []
+            for _k, v in enumerate(view, 1):
+                _sid = f"r{_k}"
+                _idmap[_sid] = v["item_id"]
+                payload.append({"id": _sid, "name": v["name"],
+                                "current_path": v["current_path"],
+                                "candidates": v["candidates"]})
             sys_prompt = (
                 "너는 조달 견적서 분류 보조자다. 각 품목(name)을 의미적으로 가장 알맞은 "
                 "상위 분류 경로에 매칭하라. 반드시 그 품목의 candidates 목록 중에서 하나를 "
                 "고르고, 애매하면 빈 문자열을 반환하라. 영어·한국어 동의어(GPU서버=GPU Server, "
-                "방화벽=Firewall 등)를 고려하라. 오직 JSON만 출력: "
+                "방화벽=Firewall 등)를 고려하라. id는 입력의 id를 그대로 반환하라. "
+                "오직 JSON만 출력: "
                 '{"assignments":[{"id":"...","path":"..."}]}')
             raw = prov.extract(_json.dumps(payload, ensure_ascii=False), sys_prompt,
                                api_key=llm["api_key"], model=llm.get("model"),
                                base_url=llm.get("base_url"),
-                               verify_ssl=llm.get("verify_ssl", True))
+                               verify_ssl=llm.get("verify_ssl", True),
+                               temperature=0)   # 결정성 확보(클러스터링과 동일)
             data = _json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
             valid = {v["item_id"]: set(v["candidates"]) for v in view}
             for a in data.get("assignments", []):
-                iid, p = a.get("id"), (a.get("path") or "").strip()
+                _rid = str(a.get("id", "")).strip()
+                iid = _idmap.get(_rid) or (_rid if _rid in valid else None)
+                p = (a.get("path") or "").strip()
                 if iid in valid and p in valid[iid]:
                     suggestions[iid] = {"path": p, "method": "llm"}
             method = "llm"
