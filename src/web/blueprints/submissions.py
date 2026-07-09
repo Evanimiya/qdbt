@@ -1283,7 +1283,11 @@ def map_auto_stitch(submission_id):
                       extracted_sheets=_json.dumps([s["name"] for s in sheets_meta], ensure_ascii=False),
                       map_config=_json.dumps(map_config, ensure_ascii=False))
     n_kept = sum(1 for it in items if not it.get("merge_status"))
+    # [품명 경고·비차단] 어느 시트에도 품목명(name) 역할이 없으면 경고만 — 추출은 진행.
+    #  (중/소분류까지만 기입된 입찰서도 있으므로 막지 않는다.)
+    _has_name = any(r == "name" for sp in specs for r in (sp.get("mapping") or {}).values())
     return jsonify({"ok": True, "n_items": n_kept,
+                    "warn_no_name": (not _has_name),
                     "stitch": map_config["stitch"],
                     "redirect": url_for("submissions.detail", submission_id=submission_id)})
 

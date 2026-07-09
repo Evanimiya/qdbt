@@ -196,7 +196,10 @@ def _classify_sheet(recs, meta):
     # 품목(단가/수량) 보유 = 잎. 정수 seq('No')가 섞여 있어도 잎 우선.
     if has_item:
         return "leaf"
-    if meta["has_seq"] and meta["has_name"]:      # 정수 seq + 이름(금액만) = 목록
+    # 정수 seq + (품목명 또는 분류열) = 목록/트리 시트.
+    #  [버그수정] 목록/트리 시트의 레벨 이름을 사용자가 대분류/중분류(cat)로 매핑해도
+    #  seq로 계층을 잇는 '이름 제공' 시트로 인식(band 오분류 방지).
+    if meta["has_seq"] and (meta["has_name"] or meta["levels"]):
         return "seq_list"
     if meta["levels"]:
         return "band"
@@ -325,13 +328,24 @@ def _stitch_band(sheets):
 
 
 # ── SEQ 아키타입: 번호계층 → 이름 해석 ──
+def _rec_name(r):
+    """seq 행의 '레벨 이름'을 얻는다. 품목명(name)이 있으면 그것, 없으면 가장 깊은
+    분류(cat) 값을 이름으로 사용. (목록/트리 시트의 이름이 대분류/중분류로 매핑된 경우 대응)"""
+    if r.get("name"):
+        return r.get("name")
+    for lv in (5, 4, 3, 2, 1):
+        if r.get(lv):
+            return r.get(lv)
+    return None
+
+
 def _stitch_seq(sheets):
     seqmap = {}       # 번호 prefix -> 이름
     for recs, m, role in sheets:
         if role in ("seq_list", "seq_tree", "seq_leaf"):
             for r in recs:
                 sq = str(r.get("seq") or "").strip()
-                nm = r.get("name")
+                nm = _rec_name(r)
                 if sq and re.match(r"^\d+(\.\d+)*$", sq) and nm and not _is_total_row(r, []):
                     seqmap.setdefault(sq, nm)
     items, residuals = [], []
@@ -386,8 +400,15 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
     items, residuals = [], []
     last_cat = {}
     for r in recs:
-        if _is_total_row(r, levels) or not r.get("name"):
-            # 분류만 있고 이름 없는 소계행 등은 상속 소스로도 쓰지 않음
+        # [품명 없는 입찰서] 품목명(name) 열이 없으면 '가장 깊은 분류값'을 잎으로 삼는다.
+        #  (중/소분류까지만 기입된 견적서도 그 분류가 곧 항목이 되도록 — 추출 0 방지)
+        _leafnm = r.get("name")
+        if not _leafnm and not meta.get("has_name") and r.get("amount"):
+            _pres = [lv for lv in levels if r.get(lv)]
+            if _pres:
+                _leafnm = r.get(max(_pres))
+        if _is_total_row(r, levels) or not _leafnm:
+            # 분류만 있고 이름/금액 없는 소계행 등은 상속 소스로도 쓰지 않음
             continue
         # 병합복원 후 실제 존재하는 레벨
         present = [lv for lv in levels if r.get(lv)]
@@ -403,7 +424,7 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
             if v:
                 parts.append(v)
         matched = complete
-        _pp, _ln = _part_promote(r, PATH_SEP.join(parts), r.get("name"))
+        _pp, _ln = _part_promote(r, PATH_SEP.join(parts), _leafnm)
         item = {
             "path": _pp, "depth": len([x for x in _pp.split(PATH_SEP) if x]),
             "name_normalized": _ln, "spec": r.get("spec"), "maker": r.get("maker"),

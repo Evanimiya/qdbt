@@ -720,7 +720,8 @@ function autoStitch(){
   }).then(r=>r.json()).then(d=>{
     if(d.ok){
       var st = d.stitch || {};
-      alert(`통합 추출 완료: ${d.n_items}개 항목\n모드: ${st.mode} · 사람 확인 필요: ${st.n_residuals||0}건`);
+      var warn = d.warn_no_name ? '\n\n⚠ 품목명(품명) 열이 지정되지 않아 분류만으로 추출됐습니다. 필요하면 품명 열을 지정해 다시 추출하세요.' : '';
+      alert(`통합 추출 완료: ${d.n_items}개 항목\n모드: ${st.mode} · 사람 확인 필요: ${st.n_residuals||0}건` + warn);
       location.href = d.redirect;
     } else alert('추출 실패: ' + d.error);
   }).catch(e=> alert('오류: '+e));

@@ -346,7 +346,7 @@
     {% if residual_view %}<span style="color:#b45309;">미연계 {{ residual_view|length }}건</span>{% else %}<span style="color:#256b45;">미연계 없음 · 재검토·확정 가능</span>{% endif %}
   </div>
   <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}"
-     class="text-sm bg-sky-700 text-white font-semibold rounded-lg px-4 py-1.5 hover:bg-sky-800 break-ko" style="text-decoration:none">🧩 연계 화면 열기 →</a>
+     class="text-sm font-semibold rounded-lg px-4 py-1.5 break-ko" style="background:#0369a1;color:#fff;text-decoration:none">🧩 연계 화면 열기 →</a>
 </div>
 {% endif %}
 
@@ -364,7 +364,7 @@
       <button onclick="applyAllResiduals()" id="applyAllBtn"
               class="text-xs bg-emerald-700 text-white rounded-lg px-3 py-1.5 hover:bg-emerald-800 break-ko">✅ 제안 일괄 적용</button>
       <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}"
-         class="text-xs bg-sky-700 text-white rounded-lg px-3 py-1.5 hover:bg-sky-800 break-ko" style="text-decoration:none">🧩 연계 화면(드래그)</a>
+         class="text-xs rounded-lg px-3 py-1.5 break-ko" style="background:#0369a1;color:#fff;text-decoration:none">🧩 연계 화면(드래그)</a>
     </div>
   </div>
   <div class="space-y-2">
