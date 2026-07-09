@@ -437,14 +437,25 @@
 </div>
 {% endif %}
 
-<!-- ══ 다중시트 연계 보기 (재사용 캔버스, /link와 동일 컴포넌트) ══ -->
+<!-- ══ 비교 단위 보기 전환 (트리 ↔ 레벨별 캔버스) ══ -->
 {% if items %}
-<details class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5" {% if residual_view %}open{% endif %}>
-  <summary class="cursor-pointer flex items-center justify-between flex-wrap gap-2">
-    <span class="text-base font-bold text-gray-900 break-ko">🧩 다중시트 연계 보기
+<div class="flex items-center gap-2 flex-wrap mb-3">
+  <span class="text-xs text-gray-500 break-ko">보기 방식:</span>
+  <div class="inline-flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+    <button type="button" id="cmpViewTreeBtn" onclick="setCmpView('tree')"
+            class="px-3 py-1.5 font-semibold break-ko">🌳 비교단위 트리</button>
+    <button type="button" id="cmpViewCanvasBtn" onclick="setCmpView('canvas')"
+            class="px-3 py-1.5 font-semibold break-ko border-l border-gray-300">🧩 레벨별 캔버스</button>
+  </div>
+  <span class="text-[11px] text-gray-400 break-ko">— 트리: 비교단위 선택 · 캔버스: 레벨별 연계 보기</span>
+</div>
+<!-- ══ 다중시트 연계 보기 (재사용 캔버스, /link와 동일 컴포넌트) ══ -->
+<div id="viewCanvas" class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5" style="display:none">
+  <div class="flex items-center justify-between flex-wrap gap-2">
+    <span class="text-base font-bold text-gray-900 break-ko">🧩 레벨별 캔버스
       <span class="text-xs font-normal text-gray-500">— 레벨별 열 · 보기 전용(편집은 <a href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}" class="text-sky-700 underline">연계 화면</a>)</span></span>
     {% if residual_view %}<span class="text-xs font-bold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5">미연계 {{ residual_view|length }}건</span>{% endif %}
-  </summary>
+  </div>
   <div class="lkc-tools mt-3">
     <button class="lkc-tbtn" onclick="LKC.expandAll()">＋ 모두 펼치기</button>
     <button class="lkc-tbtn" onclick="LKC.collapseAll()">－ 모두 접기</button>
@@ -466,12 +477,12 @@
     </span>
   </div>
   <div id="dtlCanvas"></div>
-</details>
+</div>
 {% include "submissions/_link_canvas.html" %}
 {% endif %}
 
 <!-- ══ 비교 단위 트리 (그룹별 깊이) ══ -->
-<div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5">
+<div id="viewTree" class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 mb-5">
   <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
     <div>
       <h2 class="text-base font-bold text-gray-900 break-ko">🌳 비교 단위 트리</h2>
@@ -1037,6 +1048,30 @@ const SUB_ID = "{{ sub.submission_id }}";
 let treeOpen = {};
 let treeSort = '';   // '', 'amt_desc', 'amt_asc', 'name' — 형제 노드 정렬(엑셀식)
 function treeSetSort(v){ treeSort = v || ''; renderTree(); }
+
+// ── [보기 전환] 비교단위 트리 ↔ 레벨별 캔버스 (같은 위치, 하나만 표시) ──
+function setCmpView(mode){
+  var tree = document.getElementById('viewTree');
+  var canvas = document.getElementById('viewCanvas');
+  var tb = document.getElementById('cmpViewTreeBtn');
+  var cb = document.getElementById('cmpViewCanvasBtn');
+  if(!tree) return;
+  var showCanvas = (mode === 'canvas') && !!canvas;
+  if(canvas) canvas.style.display = showCanvas ? '' : 'none';
+  tree.style.display = showCanvas ? 'none' : '';
+  // 세그먼트 활성 표시
+  var on = 'background:#0369a1;color:#fff;', off = 'background:#fff;color:#334155;';
+  if(tb) tb.setAttribute('style', showCanvas ? off : on);
+  if(cb) cb.setAttribute('style', showCanvas ? on : off);
+  try{ localStorage.setItem('qdbtCmpView_'+SUB_ID, showCanvas ? 'canvas' : 'tree'); }catch(e){}
+  // 캔버스는 숨김 상태에서 렌더되면 SVG 연결선 좌표가 틀어지므로, 표시 시 재계산.
+  if(showCanvas && window.LKC && LKC.refresh){ requestAnimationFrame(function(){ LKC.refresh(); }); }
+}
+function initCmpView(){
+  var saved = 'tree';
+  try{ saved = localStorage.getItem('qdbtCmpView_'+SUB_ID) || 'tree'; }catch(e){}
+  setCmpView(saved);
+}
 function sortSiblings(nodes){
   if(!treeSort) return nodes;
   const a = nodes.slice();
@@ -1276,9 +1311,8 @@ loadNego();
       sel.appendChild(o);
     }
   }
-  // <details> 열릴 때 SVG 연결선 재계산(닫힌 상태에선 크기 0이라 재렌더 필요)
-  var det = mount.closest('details');
-  if (det) det.addEventListener('toggle', function(){ if(det.open) LKC.refresh(); });
 })();
+// [보기 전환] LKC 초기화 이후 저장된 보기(트리/캔버스) 복원. 캔버스 표시 시 LKC.refresh로 좌표 재계산.
+initCmpView();
 </script>
 {% endblock %}
