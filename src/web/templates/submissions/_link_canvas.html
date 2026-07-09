@@ -87,10 +87,22 @@ window.LKC = (function(){
   function fmt(v){ return Math.round(v||0).toLocaleString('ko-KR'); }
   function levelName(d){ return S.levels[d] || ('레벨' + (d+1)); }
 
+  function sortSib(list){
+    // 형제 노드(같은 상위분류의 하위)를 금액/이름으로 정렬. 기본('')은 원래 순서.
+    if(!S.sortBy) return list||[];
+    var a=(list||[]).slice();
+    a.sort(function(x,y){
+      if(S.sortBy==='amt_desc') return (y.amount||0)-(x.amount||0);
+      if(S.sortBy==='amt_asc')  return (x.amount||0)-(y.amount||0);
+      if(S.sortBy==='name')     return String(x.name||'').localeCompare(String(y.name||''),'ko');
+      return 0;
+    });
+    return a;
+  }
   function flatten(){
     var out=[], byPath={};
     (function walk(list, depth, parent){
-      (list||[]).forEach(function(n){
+      sortSib(list).forEach(function(n){
         var ld=n.leaf_data||{}; var iid=ld.item_id||null;
         var status = !n.is_leaf ? 'branch'
           : (iid && S.residual.has(iid) ? 'residual'
@@ -138,18 +150,9 @@ window.LKC = (function(){
       if(S.onlyRed && !subtreeHasResidual(n)) return false;
       return true;
     });
+    // [정렬] 형제(같은 상위분류) 단위 정렬은 flatten에서 이미 반영됨.
+    // 여기서는 flatten 순서를 그대로 열에 담아 상위-하위 그룹 묶음을 유지한다.
     var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
-    // [정렬] 엑셀식 열 정렬(금액/이름). 기본('')은 트리 순서 유지.
-    if(S.sortBy){
-      Object.keys(cols).forEach(function(d){
-        cols[d].sort(function(a,b){
-          if(S.sortBy==='amt_desc') return (b.amount||0)-(a.amount||0);
-          if(S.sortBy==='amt_asc')  return (a.amount||0)-(b.amount||0);
-          if(S.sortBy==='name')     return String(a.name||'').localeCompare(String(b.name||''),'ko');
-          return 0;
-        });
-      });
-    }
     // [고정 그리드] 전체 트리 최대 깊이까지 열을 항상 렌더 → 접기/이동에도 그리드 안정.
     var maxD = S.maxDepth;
     // 깊이별 전체 노드 수(접힘 무관) — 헤더에 (현재 표시/총계) 표기용.
@@ -432,7 +435,7 @@ window.LKC = (function(){
     collapseAll: function(){ S.nodes.forEach(function(n){ if(!n.is_leaf && n.nChildren) S.collapsed[n.path]=true; }); render(); },
     toLevel: function(lv){ S.collapsed={}; S.nodes.forEach(function(n){ if(!n.is_leaf && n.depth>=lv-1) S.collapsed[n.path]=true; }); render(); },
     setOnlyRed: function(v){ S.onlyRed=!!v; render(); },
-    setSort: function(mode){ S.sortBy=mode||''; render(); },
+    setSort: function(mode){ S.sortBy=mode||''; flatten(); render(); },
     maxDepth: function(){ return S.maxDepth; }
   };
 })();
