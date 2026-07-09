@@ -853,9 +853,13 @@ def move_items_to_cluster(bid_id):
             name = cl["representative_name"] if cl else cluster_id
             flash(f"✅ '{name}'에 {n}개 항목 추가됨", "success")
 
-        # ① 카테고리 변경 — submission_items.category 업데이트
-        #    (cl_cat은 멤버 다수결로 결정되므로 실제 category 컬럼을 바꿔야 반영됨)
-        if category:
+        # ① 카테고리 변경 — 신규 클러스터 생성 시에만 적용.
+        #    [버그 수정] 기존 클러스터로 이동(드래그·수동)할 때는 절대 category를 덮지 않는다.
+        #    이동 폼의 숨은 catSelect(name="category")가 기본값('자재' 등)을 항상 전송하는데,
+        #    기존 클러스터 이동에서 이를 적용하면 항목 분류가 '자재'로 오염되고(리셋해도
+        #    submission_items.category는 유지되어) 잘못된 분류가 남았다. 클러스터 표시 분류는
+        #    멤버 다수결 파생값이므로, 기존 클러스터 이동에는 원본 분류를 보존한다.
+        if category and cluster_id == "new":
             conn.execute(
                 f"UPDATE submission_items SET category = ? WHERE item_id IN ({placeholders})",
                 [category] + item_ids

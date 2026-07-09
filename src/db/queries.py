@@ -815,6 +815,19 @@ def set_bid_base_currency(bid_id: str, currency: str):
     return cur
 
 
+def set_submission_unit_count(submission_id: str, n: int):
+    """[추출 기준정보] 장비 대수 설정(≥1). 대당 단가 = 총액/대수."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, n)
+    with get_conn() as c:
+        c.execute("UPDATE submissions SET unit_count = ? WHERE submission_id = ?",
+                  (n, submission_id))
+    return n
+
+
 def add_nego_item(submission_id, label, amount, category="조정"):
     """special nego 항목 추가 (사람 수기 입력).
 
@@ -887,6 +900,23 @@ def delete_single_item(item_id: str):
         except Exception:
             pass
         cur = c.execute("DELETE FROM submission_items WHERE item_id = ?", (item_id,))
+        return cur.rowcount
+
+
+def set_item_excluded(item_id: str, excluded: bool):
+    """[연계 F] 항목을 비파괴로 제외/복원. is_header 플래그로 합계·트리에서 빼되
+    행은 보존(되돌리기 가능). merge_status='manual_excluded'로 사유 표시."""
+    with get_conn() as c:
+        if excluded:
+            cur = c.execute(
+                "UPDATE submission_items SET is_header = 1, "
+                "merge_status = COALESCE(merge_status, 'manual_excluded') "
+                "WHERE item_id = ?", (item_id,))
+        else:
+            cur = c.execute(
+                "UPDATE submission_items SET is_header = 0, "
+                "merge_status = CASE WHEN merge_status='manual_excluded' THEN NULL "
+                "ELSE merge_status END WHERE item_id = ?", (item_id,))
         return cur.rowcount
 
 

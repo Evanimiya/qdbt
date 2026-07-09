@@ -587,6 +587,10 @@ def migrate_db(db_path=None):
         migrations.append("ALTER TABLE submissions ADD COLUMN extracted_sheets TEXT")
     if "map_config" not in sub_cols:
         migrations.append("ALTER TABLE submissions ADD COLUMN map_config TEXT")
+    # [추출 기준정보] 장비 대수 — 이 견적이 몇 대 기준인지. 대당 단가 = 총액/대수.
+    #  special nego 등 총계 반영 항목도 대당 표기 시 /대수. 기본 1.
+    if "unit_count" not in sub_cols:
+        migrations.append("ALTER TABLE submissions ADD COLUMN unit_count INTEGER NOT NULL DEFAULT 1")
 
     # submission_items 컬럼 추가
     si_cols = [c[1] for c in conn.execute("PRAGMA table_info(submission_items)").fetchall()]
