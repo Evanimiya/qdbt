@@ -25,6 +25,7 @@ INFO_ROLES = {
     "currency": "currency_raw",  # 통화 열 (USD/CNY/KRW 등)
     "price_krw": "unit_price_krw",  # 원화 단가 (있으면 확정 원화)
     "amount_krw": "amount_krw",     # 원화 금액 (있으면 확정 원화)
+    "maker": "maker",               # 메이커(제조사/브랜드)
     "remark": "remark",
 }
 
@@ -61,6 +62,38 @@ def _to_number(v):
         return float(s) if ("." in s) else int(s)
     except ValueError:
         return None
+
+
+import re as _re
+
+# [C.i] 합계/소계 '행' 판정 — 부분문자열 오탐 방지(정밀 경계 매칭).
+#  · 강한 마커(합계·소계·총계·총액·누계)는 텍스트가 그것으로 '끝날' 때만(예: "재료비 합계").
+#    → 품명에 우연히 포함된 경우("소계장치","합계금액표")는 제외되지 않음.
+#  · 단독 '계'는 라벨 전체가 '계'/'합 계'/'…  계'일 때만(기존 규칙 유지).
+#  · 영문 total/subtotal/grand/sum 은 단어 경계로만 매칭("Summary","consumables"는 불매칭).
+_TOTAL_STRONG = ("합계", "소계", "총계", "총액", "누계", "합 계", "소 계", "총 계")
+_TOTAL_EN_RE = _re.compile(r"(?<![a-z])(sub[\s-]*total|grand[\s-]*total|total|subtotal|grand|sum)(?![a-z])")
+
+
+def is_total_label(text):
+    """한 행의 텍스트(품명+분류 등)를 받아 '합계/소계/총계 행'이면 True."""
+    if not text:
+        return False
+    t = str(text).strip().lower()
+    if not t:
+        return False
+    nospace = t.replace(" ", "")
+    # 강한 한글 마커로 '끝나는' 라벨 (예: "재료비 합계","소계","총 계")
+    for kw in _TOTAL_STRONG:
+        if nospace.endswith(kw.replace(" ", "")):
+            return True
+    # 단독 '계'만(예: "계","합 계","… 계"). '설계·통계·회계' 등은 불매칭.
+    if t == "계" or t.endswith(" 계"):
+        return True
+    # 영문 total 계열(단어 경계) — "Summary","consumables"는 불매칭.
+    if _TOTAL_EN_RE.search(t):
+        return True
+    return False
 
 
 def read_grid(path, sheet_name, max_rows=None, max_cols=None):
@@ -161,6 +194,25 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
 
     # 번호(seq) 열: "1", "1.1", "1.1.2" 패턴으로 계층 구성 (분류명 = 그 행 품목명)
     seq_col = next((c for c, r in column_mapping.items() if r == "seq"), None)
+    # [BUG A 수정] seq 모드는 seq 열에 '점 계층'(예: 1.1)이 실제로 존재할 때만 발동.
+    #  단순 행번호("No" 1,2,3…)가 seq로 매핑돼도, 분류(cat) 열이 있으면 계층을 버리지 않도록.
+    #  '추측 말고 실제 데이터를 보라' — 데이터를 미리 스캔해 결정.
+    if seq_col is not None:
+        import re as _re_seq
+        _has_dotted = False
+        for _r in range(header_row + 1, sheet.max_row + 1):
+            _v = cell_val(_r, seq_col)
+            if _v is not None and _re_seq.match(r"^\d+\.\d+", str(_v).strip()):
+                _has_dotted = True
+                break
+        _has_cat = any(role in column_mapping.values() for role in CAT_ROLES)
+        # 점 계층이 없고 분류 열이 따로 있으면 → seq는 단순 행번호. seq 모드 비활성.
+        if not _has_dotted and _has_cat:
+            seq_col = None
+
+    # [부품] '부품' 열이 지정되면: 품목(name)을 분류 경로의 한 단계로 내리고, 부품을 잎으로.
+    #  → 한 품목에 부품 0..N. 부품 없으면 품목이 잎(기존과 동일). 스키마 무변경(path만 깊어짐).
+    part_col = next((c for c, r in column_mapping.items() if r == "part"), None)
 
     items = []
     warnings = []
@@ -219,9 +271,8 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 amt_col2 = info_cols.get("amount")
                 amt2 = _to_number(cell_val(r, amt_col2)) if amt_col2 else None
                 # seq 셀에 텍스트가 있으면(병합 총계행 등) 그것도 이름 후보로
-                _check = ((row_name or "") + " " + (seq or "")).lower()
-                _total_kw = ("total", "subtotal", "합계", "소계", "총계", "grand")
-                is_total = any(k in _check for k in _total_kw)
+                _check = ((row_name or "") + " " + (seq or "")).strip()
+                is_total = is_total_label(_check)   # [C.i] 정밀 경계 매칭
                 if amt2 and (is_total or (not seq and not row_name)):
                     continue  # 총계/소계거나 번호·이름 없이 금액만 → 스킵
                 parts = [row_name] if row_name else []
@@ -325,6 +376,22 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 if item.get(f) is not None:
                     item[f] = -abs(item[f])
 
+        # [부품] 승격: 부품 값이 있으면 품목(name)을 분류 경로로 내리고 부품을 잎으로.
+        if part_col is not None:
+            _pv = cell_val(r, part_col)
+            _pv = str(_pv).strip() if _pv is not None else ""
+            if _pv:
+                _poem = item.get("name_normalized")   # 품목
+                if _poem:
+                    _last = item["path"].split(PATH_SEP)[-1] if item.get("path") else None
+                    if _poem != _last:   # 세분류와 품목이 동일하면 중복 방지
+                        item["path"] = (item["path"] + PATH_SEP + _poem) if item.get("path") else _poem
+                        item["depth"] = (item.get("depth") or 0) + 1
+                    if not item.get("category"):
+                        item["category"] = (item["path"].split(PATH_SEP)[0]) if item.get("path") else _poem
+                item["name_normalized"] = _pv
+                item["name_raw"] = _pv
+
         # 품목명이 없으면 — 분류 헤더 행이거나 빈 행일 수 있음
         name = item.get("name_normalized")
         if not name:
@@ -372,8 +439,11 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
         "seq": ["no.", "no", "번호", "순번", "항번", "item no"],
         "cat1": ["대분류"], "cat2": ["중분류"], "cat3": ["소분류"],
         "cat4": ["세분류", "세세분류"],
-        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item"],
+        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item",
+                 "공종명", "항목명", "내역명", "공사명"],
         "spec": ["규격", "사양", "spec", "remark주요"],
+        "maker": ["메이커", "제조사", "제조원", "브랜드", "maker", "manufacturer", "mfr", "make", "brand"],
+        "part": ["부품", "부속품", "부속", "구성품", "구성부품", "세부품목", "part", "component"],
         "qty": ["수량", "q'ty", "qty", "수 량"],
         "unit": ["단위", "unit"],
         "currency": ["ccy", "통화", "currency", "화폐"],
@@ -386,7 +456,7 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
     }
 
     ROLE_PRIORITY = ["seq", "amount_krw", "price_krw", "currency",
-                     "cat1", "cat2", "cat3", "cat4", "name", "spec",
+                     "cat1", "cat2", "cat3", "cat4", "name", "part", "spec", "maker",
                      "qty", "unit", "price", "amount", "remark"]
 
     best_row, best_map, best_hits = None, {}, 0
@@ -468,21 +538,18 @@ def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
             continue
 
         reason = None
-        # ① 합계 키워드 매칭 ('계'는 단독일 때만 — '설계','계측' 등 오탐 방지)
-        kw_hit = None
-        for kw in TOTAL_KW:
-            if kw == "계":
-                # 단독 '계' 또는 '합 계'류만
-                if joined.strip() in ("계", "합 계", "총 계") or joined.strip().endswith(" 계"):
-                    kw_hit = kw; break
-            elif kw in joined:
-                kw_hit = kw; break
-        if kw_hit:
-            reason = f"'{kw_hit}' 키워드"
+        # ① 합계 키워드 — 정밀 경계 매칭(부분문자열 오탐 방지). [C.i]
+        if is_total_label(joined):
+            reason = "합계·소계 키워드"
         # ② 품명·번호 비었는데 금액만 있는 행(요약행 성격)
         elif amt_num is not None and not name_val and not (
                 seq_col and _norm(sheet.cell(row=r, column=seq_col).value)):
             reason = "품명·번호 없이 금액만"
+        # ③ [C.ii] 분류/품명은 있으나 금액과 단가가 모두 비어 있는 행 → 비교 대상 제외 후보
+        elif name_val and amt_num is None and (
+                _to_number(_norm(sheet.cell(row=r, column=price_col).value)) is None
+                if price_col else True):
+            reason = "금액·단가 없음"
 
         if reason:
             detected.append({
@@ -507,8 +574,11 @@ def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
         "seq": ["no.", "no", "번호", "순번", "항번", "item no"],
         "cat1": ["대분류"], "cat2": ["중분류"], "cat3": ["소분류"],
         "cat4": ["세분류", "세세분류"],
-        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item"],
+        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item",
+                 "공종명", "항목명", "내역명", "공사명"],
         "spec": ["규격", "사양", "spec", "remark주요"],
+        "maker": ["메이커", "제조사", "제조원", "브랜드", "maker", "manufacturer", "mfr", "make", "brand"],
+        "part": ["부품", "부속품", "부속", "구성품", "구성부품", "세부품목", "part", "component"],
         "qty": ["수량", "q'ty", "qty", "수 량"],
         "unit": ["단위", "unit"],
         "price": ["단가", "unit price", "unitprice"],

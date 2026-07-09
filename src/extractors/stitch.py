@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from openpyxl import load_workbook
 from extractors.extract_by_mapping import (
     suggest_column_mapping, extract_by_mapping, _build_merge_fill, _to_number,
-    CAT_ROLES, PATH_SEP,
+    is_total_label, CAT_ROLES, PATH_SEP,
 )
 import re
 
@@ -171,11 +171,9 @@ def _read_records(path, sheet, mapping, header_row):
 
 
 def _is_total_row(rec, levels):
-    """총계/소계 행 판정: 이름/최상위 분류에 합계 키워드가 있거나, 분류·이름 전무."""
-    txt = " ".join(str(rec.get(k) or "") for k in (["name"] + levels)).lower()
-    if any(k in txt for k in ("합계", "소계", "총계", "total", "subtotal", "grand")):
-        return True
-    return False
+    """총계/소계 행 판정 — 정밀 경계 매칭(부분문자열 오탐 방지). [C.i]"""
+    txt = " ".join(str(rec.get(k) or "") for k in (["name"] + levels)).strip()
+    return is_total_label(txt)
 
 
 def _classify_sheet(recs, meta):
@@ -427,6 +425,62 @@ def _part_promote(rec, path_str, leaf_name):
     return path_str, leaf_name
 
 
+def _cross_sheet_reparent(items):
+    """[D.ii] 서로 다른 시트가 '공유 분류명'으로 이어질 때, 얕은 시트의 루트 서브트리를
+    다른 시트에서 같은 이름의 상위 분류 노드 아래로 이어붙여 하나의 트리로 연결한다.
+
+    예) 견적서 [대>중>소>품명], 주요부품 [소>품명>부품]:
+        주요부품의 루트 '소분류'가 견적서에서 [대>중] 아래에 있으면, 주요부품 서브트리를
+        그 [대>중] 아래로 접합 → [대>중>소>품명>부품]으로 하나의 트리에 묶인다.
+
+    안전 원칙(총액 불변):
+      · **경로(트리 위치)만 이동**하고 금액·잎 수는 절대 바꾸지 않는다 → Δ=0 보장.
+      · 대상 상위 경로가 **유일**할 때만 접합(모호하면 보존). 완전중복/roll-up으로
+        제외된(merge_status) 행은 접합 대상·기준에서 제외.
+      · dedup·roll-up **이후**에 실행 → 기존 병합/총액 로직에 영향 없음.
+    """
+    live = [it for it in items if not it.get("merge_status")]
+    by_sheet = {}
+    for it in live:
+        by_sheet.setdefault(it.get("_sheet"), []).append(it)
+    if len([s for s in by_sheet if s is not None]) < 2:
+        return items
+
+    # 각 시트의 '비루트 분류 노드' 이름 → 그 노드까지의 조상경로. (stitch path엔 품명이
+    #  별도이므로 path의 모든 세그먼트가 분류 노드다. i=0[루트] 제외, i>=1만 대상.)
+    interior = {}   # norm(name) -> set of (sheet, ancestor_prefix_str)
+    for sh, its in by_sheet.items():
+        for it in its:
+            parts = _path_parts(it.get("path"))
+            for i in range(1, len(parts)):
+                nm = _norm(parts[i])
+                if nm:
+                    interior.setdefault(nm, set()).add((sh, PATH_SEP.join(parts[:i])))
+    if not interior:
+        return items
+
+    for sh, its in by_sheet.items():
+        # 이 시트의 루트 값들(norm→표시값)
+        roots = {}
+        for it in its:
+            parts = _path_parts(it.get("path"))
+            if parts:
+                roots.setdefault(_norm(parts[0]), parts[0])
+        for rnorm in roots:
+            # 다른 시트에서 같은 이름의 '내부 분류 노드' 조상경로 후보
+            prefixes = {pre for (s, pre) in interior.get(rnorm, set()) if s != sh and pre}
+            if len(prefixes) != 1:
+                continue   # 없음 또는 모호 → 접합하지 않음(보존)
+            prefix = next(iter(prefixes))
+            for it in its:
+                parts = _path_parts(it.get("path"))
+                if parts and _norm(parts[0]) == rnorm:
+                    it["path"] = prefix + PATH_SEP + it["path"]
+                    it["depth"] = len(_path_parts(it["path"]))
+                    it["category"] = _path_parts(it["path"])[0]   # 최상위 분류 갱신
+    return items
+
+
 def _finalize_items(items):
     """insert_items_bulk 호환 필드 보강: category, name_raw."""
     for it in items:
@@ -502,6 +556,10 @@ def _run_stitch(path, sheet_infos, sheet_names):
             row = int(ln[1:]) if isinstance(ln, str) and ln[1:].isdigit() else None
             residuals.append({"reason": "summary_item", "name": nm,
                               "assigned_path": it.get("path"), "row": row})
+
+    # [D.ii] 교차시트 공유 분류명 접합 — 경로만 이동(총액 불변). dedup·roll-up 이후 실행.
+    items = _cross_sheet_reparent(items)
+
     # 총액·건수는 병합 제외행(merge_status)을 뺀 정본 잎 기준.
     leaf_total = sum(it["amount"] for it in items
                      if it.get("amount") and not it.get("merge_status"))
