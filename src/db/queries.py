@@ -1190,6 +1190,41 @@ def get_items(submission_id, headers=False):
         return c.execute(sql, (submission_id,)).fetchall()
 
 
+# ─── [T7 연계] 확정 데이터 버전 스냅샷 ───────────
+
+def create_submission_snapshot(submission_id, tree_json, total,
+                               n_residual=0, note=None):
+    """연계 캔버스 '확정' 시 통합 트리를 스냅샷으로 동결. 버전 자동 증가."""
+    with get_conn() as c:
+        row = c.execute("SELECT COALESCE(MAX(version), 0) AS v FROM "
+                        "submission_snapshots WHERE submission_id=?",
+                        (submission_id,)).fetchone()
+        version = (dict(row)["v"] if row else 0) + 1
+        sid = new_id()
+        c.execute("""
+            INSERT INTO submission_snapshots
+                (snapshot_id, submission_id, version, total, n_residual, tree_json, note)
+            VALUES (?,?,?,?,?,?,?)
+        """, (sid, submission_id, version, total, n_residual, tree_json, note))
+    return version
+
+
+def list_submission_snapshots(submission_id):
+    with get_conn() as c:
+        return c.execute(
+            "SELECT snapshot_id, version, total, n_residual, note, created_at "
+            "FROM submission_snapshots WHERE submission_id=? ORDER BY version DESC",
+            (submission_id,)).fetchall()
+
+
+def get_latest_snapshot(submission_id):
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT * FROM submission_snapshots WHERE submission_id=? "
+            "ORDER BY version DESC LIMIT 1", (submission_id,)).fetchone()
+        return dict(row) if row else None
+
+
 # ─── 입찰 내 비교 (Phase 1+3 핵심) ────────────
 
 def compare_bid_by_units(bid_id):

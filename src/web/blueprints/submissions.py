@@ -1134,6 +1134,8 @@ def map_auto_stitch(submission_id):
             "candidates": sres.get("candidates", [])[:300],
             "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
             "n_dropped": sres.get("n_dropped", 0),
+            "sheet_roles": [{"name": s["name"], "role": s["role"]}
+                            for s in sres.get("sheets", [])],
         },
     }
     update_submission(submission_id, extraction_status="done",
@@ -1247,6 +1249,8 @@ def column_map_extract(submission_id):
             "candidates": sres.get("candidates", [])[:300],  # 정상 분류경로(재지정 후보)
             "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
             "n_dropped": sres.get("n_dropped", 0),
+            "sheet_roles": [{"name": s["name"], "role": s["role"]}
+                            for s in sres.get("sheets", [])],
         }
     else:
         # ── 기존 T6 경로: 시트별 추출 후 mount_path 누적 ──
@@ -1383,28 +1387,37 @@ def reassign_item_path(submission_id, item_id):
 @bp.route("/<submission_id>/link", methods=["GET"])
 @login_required
 def link_view(submission_id):
-    """[개선 9] 다중시트 연계 캔버스 — 레벨별 열에 노드를 놓고, 미연계(잘못 분류된)
-    잎을 올바른 상위 분류로 드래그해 이어붙인다. 목업(QDBT_다중시트연계_목업.html) 기반.
-    드래그 연결 = reassign-path 호출. 확정 = 상세로 복귀."""
+    """[T7] 다중시트 연계 캔버스 (목업 4단계: 추출→정합성 제안→수기 조정→확정).
+    목업(QDBT_다중시트연계_목업.html) 기반. 드래그 연결 = reassign-path 호출,
+    확정 = 통합 트리 스냅샷(버전) 저장."""
     import json as _json
+    from db.queries import build_items_tree, get_latest_snapshot
     sub = get_submission(submission_id)
     if not sub:
         abort(404)
+    subd = dict(sub)
     items = get_items(submission_id)
-    from db.queries import build_items_tree
     tree = build_items_tree(submission_id)
-    _stitch_meta, residual_view = _build_residual_view(dict(sub), items)
+    stitch_meta, residual_view = _build_residual_view(subd, items)
     residual_ids = {rv["item_id"] for rv in residual_view}
 
     levels = {}   # depth -> [nodes]
+    flat = []     # 확정 트리(STEP4)용 선행순회 목록
+    def _parent_path(p):
+        parts = [x for x in (p or "").split(" > ") if x.strip()]
+        return " > ".join(parts[:-1]) if len(parts) > 1 else ""
     def _walk(n, depth):
         ld = n.get("leaf_data") or {}
+        path = n.get("path") or ""
         levels.setdefault(depth, []).append({
-            "name": n.get("name"), "path": n.get("path"),
+            "name": n.get("name"), "path": path,
+            "parent": _parent_path(path),   # SVG 연결선·부모 매칭용
             "amount": n.get("amount") or 0, "is_leaf": n.get("is_leaf"),
             "item_id": ld.get("item_id"),
             "residual": ld.get("item_id") in residual_ids if ld.get("item_id") else False,
         })
+        flat.append({"name": n.get("name"), "depth": depth,
+                     "amount": n.get("amount") or 0, "is_leaf": n.get("is_leaf")})
         for ch in (n.get("children") or []):
             _walk(ch, depth + 1)
     roots = tree.get("tree")
@@ -1413,9 +1426,68 @@ def link_view(submission_id):
         if r:
             _walk(r, 0)
     max_depth = max(levels) if levels else 0
-    return render_template("submissions/link.html", sub=dict(sub),
-                           levels=levels, max_depth=max_depth,
-                           n_residual=len(residual_view))
+
+    # STEP 2(정합성 자동제안): 미연계 잎의 추천 상위 경로(휴리스틱).
+    #  후보 = 트리의 분류(가지) 경로 ∪ 스티칭 스켈레톤 후보. 파선 제안 + 원클릭 수락용.
+    branch_paths = [n["path"] for d in levels for n in levels[d]
+                    if not n["is_leaf"] and n["path"]]
+    cand_parents = sorted(set(branch_paths) | set(stitch_meta.get("candidates") or []))
+    for d in levels:
+        for n in levels[d]:
+            n["suggest"] = ""
+            if n["residual"] and n["is_leaf"] and n.get("name"):
+                pick, score = _heuristic_pick(n["name"], cand_parents)
+                # 현재(잘못된) 부모와 다른 경로만 제안
+                if pick and score > 0 and pick != n.get("parent"):
+                    n["suggest"] = pick
+
+    # STEP 1(추출) 표시용: 시트별 인식 결과(역할). map_config에서 복원.
+    _role_ko = {"leaf": "세부(품목·단가)", "band": "밴드(분류)",
+                "seq_leaf": "세부(번호계층)", "seq_tree": "트리(번호계층)",
+                "seq_list": "목록", "unknown": "미상"}
+    sheets_view = []
+    try:
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+        roles = {s.get("name"): s.get("role") for s in (stitch_meta.get("sheet_roles") or [])}
+        order = mc.get("sheet_order") or list((mc.get("sheets") or {}).keys())
+        for nm in order:
+            rl = roles.get(nm, "")
+            sheets_view.append({"name": nm, "role": rl, "role_ko": _role_ko.get(rl, rl or "—")})
+    except Exception:
+        sheets_view = []
+
+    snap = get_latest_snapshot(submission_id)
+    return render_template("submissions/link.html", sub=subd,
+                           levels=levels, max_depth=max_depth, flat_tree=flat,
+                           total=tree.get("total") or 0,
+                           n_residual=len(residual_view),
+                           stitch_meta=stitch_meta or {},
+                           sheets_view=sheets_view,
+                           snapshot_version=(snap or {}).get("version") or 0)
+
+
+@bp.route("/<submission_id>/link/confirm", methods=["POST"])
+@require_role("manager")
+def link_confirm(submission_id):
+    """[T7] 연계 확정 — 현재 통합 트리를 버전 스냅샷으로 동결 보존.
+    금액 불변(스냅샷은 표시/이력용, submission_items는 그대로)."""
+    import json as _json
+    from db.queries import build_items_tree, create_submission_snapshot
+    sub = get_submission(submission_id)
+    if not sub:
+        abort(404)
+    items = get_items(submission_id)
+    _sm, residual_view = _build_residual_view(dict(sub), items)
+    tree = build_items_tree(submission_id)
+    version = create_submission_snapshot(
+        submission_id,
+        tree_json=_json.dumps(tree.get("tree"), ensure_ascii=False),
+        total=tree.get("total") or 0,
+        n_residual=len(residual_view),
+        note=(request.get_json(silent=True) or {}).get("note"))
+    return jsonify({"ok": True, "version": version,
+                    "total": tree.get("total") or 0,
+                    "n_residual": len(residual_view)})
 
 
 @bp.route("/<submission_id>/tree/delete-branch", methods=["POST"])

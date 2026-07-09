@@ -638,6 +638,26 @@ def migrate_db(db_path=None):
         conn.commit()
         migrations.append("-- item_match 테이블 생성 완료 (견적 원본/비교 결과 분리)")
 
+    # submission_snapshots: [T7 연계] 확정 데이터 스냅샷 (버전 v1/v2…).
+    #   연계 캔버스 4단계 '확정' 시 통합 트리를 동결 보존. 수정 후 재확정 → 다음 버전.
+    if "submission_snapshots" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS submission_snapshots (
+                snapshot_id  TEXT PRIMARY KEY,
+                submission_id TEXT NOT NULL REFERENCES submissions(submission_id),
+                version      INTEGER NOT NULL,
+                total        REAL,
+                n_residual   INTEGER NOT NULL DEFAULT 0,
+                tree_json    TEXT,
+                note         TEXT,
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_sub "
+                     "ON submission_snapshots(submission_id, version)")
+        conn.commit()
+        migrations.append("-- submission_snapshots 테이블 생성 완료 (연계 확정 버전 스냅샷)")
+
     # schema_meta: 1회성 보정 추적 (매 기동 반복 방지)
     if "schema_meta" not in tables:
         conn.execute("""

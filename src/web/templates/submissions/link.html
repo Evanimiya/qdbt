@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block title %}다중시트 연계 · {{ sub.vendor_name }}{% endblock %}
+{% block content %}
+<style>
+  :root{ --navy:#0F2A43; --teal:#1C7293; --deep:#0B3C5D; --aqua:#21A0A0; --ice:#E8F1F5;
+         --cloud:#F5F9FB; --line:#D8E3EA; --green:#3FA372; --coral:#D96C5F; --slate:#64748B; }
+  /* stepper */
+  .lk-steps{display:flex;gap:0;margin-bottom:16px;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .lk-step{flex:1;padding:11px 12px;display:flex;align-items:center;gap:9px;cursor:pointer;border-right:1px solid var(--line);transition:.15s}
+  .lk-step:last-child{border-right:0}
+  .lk-step:hover{background:var(--cloud)}
+  .lk-step.on{background:var(--navy);color:#fff}
+  .lk-step .n{width:22px;height:22px;border-radius:50%;background:var(--ice);color:var(--slate);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0}
+  .lk-step.on .n{background:var(--aqua);color:#fff}
+  .lk-step.done .n{background:var(--green);color:#fff}
+  .lk-step .t{font-size:12.5px;font-weight:700}
+  .lk-step .d{font-size:10px;opacity:.7;display:block}
+  .lk-panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;min-height:340px}
+  .lk-hidden{display:none}
+
+  /* step1 sheets */
+  .lk-sheets{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+  .lk-sheet{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .lk-sheet-h{padding:9px 12px;font-size:12.5px;font-weight:800;color:#fff;background:var(--teal);display:flex;justify-content:space-between;align-items:center}
+  .lk-sheet-b{padding:10px 12px;font-size:12px;color:var(--slate)}
+  .lk-role{font-size:9px;font-weight:700;background:rgba(255,255,255,.25);border-radius:10px;padding:1px 7px}
+
+  /* validation bar */
+  .lk-valbar{margin:0 0 12px;padding:11px 14px;border-radius:9px;font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .lk-val-ok{background:#EAF6EF;color:#256b45;border:1px solid #b5ddc5}
+  .lk-val-warn{background:#FBF1E3;color:#8a5a1c;border:1px solid #e6c99a}
+  .lk-val-total{margin-left:auto;font-weight:700}
+
+  /* canvas + SVG */
+  .lk-canvas{position:relative}
+  #lk-svg{position:absolute;inset:0;pointer-events:none;z-index:1;overflow:visible}
+  #lk-svg path{fill:none;stroke:var(--aqua);stroke-width:2;opacity:.5}
+  #lk-svg path.auto{stroke:var(--teal);stroke-dasharray:4 3;opacity:.6}
+  #lk-svg path.manual{stroke:var(--green);opacity:.75}
+  #lk-svg path.residual{stroke:var(--coral);stroke-dasharray:4 3;opacity:.85}
+  .lk-cols{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;position:relative;z-index:2}
+  .lk-col{flex:1;min-width:210px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px}
+  .lk-col-h{font-size:11px;font-weight:700;color:#475569;padding:4px 6px;margin-bottom:8px;border-bottom:1px solid #e2e8f0;text-transform:uppercase;letter-spacing:.06em;text-align:center}
+  .lk-node{background:#fff;border:1px solid #e2e8f0;border-left:3px solid #22c55e;border-radius:8px;padding:7px 9px;margin-bottom:8px;font-size:12.5px;transition:.12s;position:relative}
+  .lk-node .amt{color:#64748b;font-size:11px;float:right;font-weight:600}
+  .lk-node .pnm{display:block;font-size:10px;color:#94a3b8;margin-top:2px}
+  .lk-node.leaf{border-left-color:#94a3b8}
+  .lk-node.residual{border-left-color:#f87171;background:#fff7f7}
+  .lk-adjust .lk-node.leaf[data-item]{cursor:grab}
+  .lk-adjust .lk-node.leaf[data-item]:active{cursor:grabbing}
+  .lk-node.dragging{opacity:.4}
+  .lk-node.branch.drop-ok{outline:2px dashed #0ea5e9;outline-offset:1px;background:#eff6ff}
+  .lk-badge{font-size:9px;font-weight:700;border-radius:9px;padding:1px 6px;margin-right:5px}
+  .lk-badge.no{background:#fee2e2;color:#dc2626}
+  .lk-suggest{margin-top:5px;font-size:10.5px;color:#0369a1;background:#eff6ff;border:1px dashed #7dd3fc;border-radius:6px;padding:3px 6px}
+  .lk-accept-btn{font-size:10px;font-weight:700;color:#fff;background:var(--teal);border:0;border-radius:6px;padding:1px 8px;margin-left:4px;cursor:pointer}
+  .lk-accept-btn:hover{background:var(--deep)}
+
+  /* 소계 검증: 분류별 칩 + 요약↔상세 정합 */
+  .lk-subs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .lk-sub-chip{font-size:11px;border-radius:8px;padding:3px 9px;border:1px solid var(--line);background:#fff;color:var(--slate)}
+  .lk-sub-chip b{color:var(--navy)}
+  .lk-sub-chip.ok{border-color:#b5ddc5;background:#f0faf4}
+  .lk-sub-chip.warn{border-color:#e6c99a;background:#fdf6ea;color:#8a5a1c}
+  .lk-recon{margin-bottom:10px;padding:8px 11px;background:var(--cloud);border:1px solid var(--line);border-radius:8px}
+  .lk-recon-h{font-size:11px;font-weight:700;color:var(--navy);margin-bottom:3px}
+  .lk-recon-row{font-size:11px;color:#256b45}
+  .lk-recon-row.bad{color:#b45309}
+
+  /* step4 final tree */
+  .lk-ft{font-size:12.5px}
+  .lk-ft-node{padding:5px 10px;border-radius:6px;margin-bottom:2px;display:flex;align-items:center;justify-content:space-between}
+  .lk-ft-amt{font-weight:700;color:var(--teal)}
+  .lk-verbar{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:9px 13px;background:var(--ice);border-radius:9px;font-size:12px;flex-wrap:wrap}
+  .lk-verbadge{font-size:10px;font-weight:800;background:var(--navy);color:#fff;padding:2px 9px;border-radius:10px}
+  .lk-btn{font-size:12px;font-weight:700;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .lk-btn-primary{background:var(--teal);color:#fff} .lk-btn-primary:hover{background:var(--deep)}
+  .lk-btn-ghost{background:var(--ice);color:var(--navy)}
+</style>
+
+<div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+  <div>
+    <a href="{{ url_for('submissions.detail', submission_id=sub.submission_id) }}" class="text-xs text-blue-600 break-ko">← 제출서 상세로</a>
+    <h1 class="text-xl font-bold text-gray-900 break-ko mt-1">🧩 다중시트 연계 — {{ sub.vendor_name }}</h1>
+    <div class="text-sm text-gray-500 break-ko">서식이 제각각인 시트를 하나의 검증된 데이터셋으로 연계·확정합니다.</div>
+  </div>
+</div>
+
+<!-- stepper -->
+<div class="lk-steps" id="lkStepper">
+  <div class="lk-step" data-s="1" onclick="lkGo(1)"><span class="n">1</span><span><span class="t">추출</span><span class="d">시트별 레벨 인식</span></span></div>
+  <div class="lk-step" data-s="2" onclick="lkGo(2)"><span class="n">2</span><span><span class="t">정합성 제안</span><span class="d">자동 연계(파선)</span></span></div>
+  <div class="lk-step" data-s="3" onclick="lkGo(3)"><span class="n">3</span><span><span class="t">수기 조정</span><span class="d">드래그로 보정</span></span></div>
+  <div class="lk-step" data-s="4" onclick="lkGo(4)"><span class="n">4</span><span><span class="t">확정 데이터</span><span class="d">통합·버전</span></span></div>
+</div>
+
+<!-- STEP 1: 추출 -->
+<div class="lk-panel lk-hidden" id="lkStep1">
+  <div class="flex items-center justify-between mb-3">
+    <div class="font-bold break-ko" style="color:var(--navy)">1단계 — 추출: 시트별 데이터 레벨 인식</div>
+    <button class="lk-btn lk-btn-primary" onclick="lkGo(2)">정합성 제안 →</button>
+  </div>
+  {% if sheets_view %}
+  <div class="lk-sheets">
+    {% for s in sheets_view %}
+    <div class="lk-sheet">
+      <div class="lk-sheet-h break-ko"><span>{{ s.name }}</span><span class="lk-role">{{ s.role_ko }}</span></div>
+      <div class="lk-sheet-b break-ko">인식 역할: <b>{{ s.role_ko }}</b></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-sm text-gray-500 break-ko">단일 시트 또는 시트 정보 없음 — 아래 단계에서 트리를 확인하세요.</div>
+  {% endif %}
+  <div class="mt-3 text-[12px] break-ko" style="color:var(--slate)">
+    스티칭 모드: <b>{{ stitch_meta.mode or '—' }}</b>
+    {% if stitch_meta.reconciliation and (stitch_meta.reconciliation.rollups or stitch_meta.reconciliation.duplicates) %}
+    · 중복 병합: 요약행 {{ stitch_meta.reconciliation.rollups|length }}건 / 중복 잎 {{ stitch_meta.reconciliation.duplicates }}건 제외(총액 불변)
+    {% endif %}
+  </div>
+</div>
+
+<!-- STEP 2·3: 캔버스 -->
+<div class="lk-panel lk-hidden" id="lkStep23">
+  <div class="lk-valbar {{ 'lk-val-warn' if n_residual else 'lk-val-ok' }}" id="lkValbar">
+    {% if n_residual %}
+    <span>⚠</span><span class="break-ko" id="lkValMsg"><b>{{ n_residual }}건</b> 미연계 — 3단계에서 빨강 잎을 상위 분류로 드래그하세요.</span>
+    {% else %}
+    <span>✓</span><span class="break-ko" id="lkValMsg">전 노드 연계 완료 · 소계 정합(하위 잎 → 상위 합산) 일치.</span>
+    {% endif %}
+    <span class="lk-val-total break-ko">총액 {{ "{:,.0f}".format(total) }}</span>
+  </div>
+
+  <!-- 소계 검증: 상위 분류별 하위 잎 합(실시간) + 요약↔상세 정합(체크섬) -->
+  <div class="lk-subs" id="lkSubtotals"></div>
+  {% set rec = stitch_meta.reconciliation %}
+  {% if rec and rec.rollups %}
+  <div class="lk-recon">
+    <div class="lk-recon-h break-ko">소계 정합 (견적서 요약 = 상세 잎 합):</div>
+    {% for r in rec.rollups %}
+    <div class="lk-recon-row break-ko">✓ 「{{ r.matched_category }}」 요약 {{ "{:,.0f}".format(r.amount or 0) }} = 상세 합 {{ "{:,.0f}".format(r.detail_sum or 0) }}</div>
+    {% endfor %}
+    {% if rec.unmatched_summary %}<div class="lk-recon-row bad break-ko">✗ 요약 {{ rec.unmatched_summary }}건 상세와 불일치 — 수기 확인 필요</div>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="text-[11px] break-ko mb-2" style="color:var(--slate)" id="lkModeHint"></div>
+  <div class="lk-canvas" id="lkCanvas">
+    <svg id="lk-svg"></svg>
+    <div class="lk-cols" id="lkCols">
+      {% for d in range(0, max_depth + 1) %}
+      <div class="lk-col">
+        <div class="lk-col-h break-ko">레벨 {{ d + 1 }}</div>
+        {% for n in levels.get(d, []) %}
+        <div class="lk-node {{ 'leaf' if n.is_leaf else 'branch' }} {{ 'residual' if n.residual else '' }}"
+             data-path="{{ n.path|e }}" data-parent="{{ n.parent|e }}"
+             data-suggest="{{ n.suggest|e }}"
+             {% if n.is_leaf and n.item_id %}data-item="{{ n.item_id }}"{% endif %}>
+          {% if n.residual %}<span class="lk-badge no">미연계</span>{% endif %}
+          <span class="break-ko">{{ n.name }}</span>
+          <span class="amt">{{ "{:,.0f}".format(n.amount) }}</span>
+          {% if n.parent %}<span class="pnm break-ko">↳ {{ n.parent }}</span>{% endif %}
+          {% if n.suggest %}<div class="lk-suggest break-ko">💡 제안: <b>{{ n.suggest }}</b>
+            <button type="button" class="lk-accept-btn">수락</button></div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
+    <div class="text-[12px] break-ko" style="color:var(--slate)">레벨이 높은(왼쪽) 노드가 부모입니다. 시트 순서 ≠ 레벨.</div>
+    <div class="flex gap-2">
+      <button class="lk-btn lk-btn-ghost lk-hidden" id="lkToAdjust" onclick="lkGo(3)">수기 조정 →</button>
+      <button class="lk-btn lk-btn-primary" id="lkToConfirm" onclick="lkGo(4)">확정 단계 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 4: 확정 -->
+<div class="lk-panel lk-hidden" id="lkStep4">
+  <div class="lk-verbar">
+    <span class="lk-verbadge" id="lkVerBadge">{% if snapshot_version %}확정 v{{ snapshot_version }}{% else %}미확정{% endif %}</span>
+    <span class="break-ko" id="lkVerMsg">통합 트리 · 총액 <b>{{ "{:,.0f}".format(total) }}</b>{% if n_residual %} · <span style="color:var(--coral)">미연계 {{ n_residual }}건</span>{% else %} · 전 항목 정합 ✓{% endif %}</span>
+    <span style="margin-left:auto" class="flex gap-2">
+      <button class="lk-btn lk-btn-ghost" onclick="lkGo(3)">✎ 수정</button>
+      <button class="lk-btn lk-btn-primary" id="lkConfirmBtn" onclick="lkConfirm()">확정 (스냅샷 저장)</button>
+    </span>
+  </div>
+  <div class="lk-ft" id="lkFinalTree">
+    {% for n in flat_tree %}
+    <div class="lk-ft-node" style="padding-left:{{ 10 + n.depth * 18 }}px;
+         {% if n.depth == 0 %}background:#E6F0F5;font-weight:800;color:var(--navy){% elif not n.is_leaf %}background:var(--cloud);font-weight:600;color:var(--deep){% endif %}">
+      <span class="break-ko">{{ n.name }}</span>
+      <span class="lk-ft-amt">{{ "{:,.0f}".format(n.amount) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mt-3 text-[12px] break-ko" style="color:var(--slate)">확정 시 통합 트리가 <b>스냅샷</b>으로 보존됩니다(금액 불변). 수정 후 재확정하면 다음 버전으로 승격됩니다.</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SUB_ID = "{{ sub.submission_id }}";
+let lkCur = 1;
+const lkNResidual = {{ n_residual }};
+
+function lkRoleKo(r){
+  return ({leaf:'세부(품목·단가)', band:'밴드(분류)', seq_leaf:'세부(번호계층)',
+           seq_tree:'트리(번호계층)', seq_list:'목록', unknown:'미상'})[r] || (r||'—');
+}
+
+function lkGo(s){
+  lkCur = s;
+  document.querySelectorAll('.lk-step').forEach(function(st){
+    const n = +st.dataset.s;
+    st.classList.toggle('on', n===s);
+    st.classList.toggle('done', n<s);
+  });
+  document.getElementById('lkStep1').classList.toggle('lk-hidden', s!==1);
+  document.getElementById('lkStep23').classList.toggle('lk-hidden', !(s===2||s===3));
+  document.getElementById('lkStep4').classList.toggle('lk-hidden', s!==4);
+  const canvas = document.getElementById('lkCanvas');
+  const cols = document.getElementById('lkCols');
+  const hint = document.getElementById('lkModeHint');
+  const toAdjust = document.getElementById('lkToAdjust');
+  const toConfirm = document.getElementById('lkToConfirm');
+  if(s===2){
+    cols.classList.remove('lk-adjust');
+    hint.innerHTML = '시스템이 번호·이름·소계로 자동 연계했습니다. <b>파선</b> = 자동 제안.';
+    toAdjust.classList.toggle('lk-hidden', lkNResidual===0);
+    toConfirm.classList.toggle('lk-hidden', lkNResidual!==0);
+  }
+  if(s===3){
+    cols.classList.add('lk-adjust');
+    hint.innerHTML = '미연계(빨강) 잎을 상위 분류 카드로 <b>드래그</b>하세요. 드래그 = 수기 확정.';
+    toAdjust.classList.add('lk-hidden');
+    toConfirm.classList.remove('lk-hidden');
+  }
+  if(s===2||s===3){ lkRenderSubtotals(); requestAnimationFrame(lkDrawLinks); }
+}
+
+/* ── SVG 부모-자식 연결선 ── */
+function lkDrawLinks(){
+  const canvas = document.getElementById('lkCanvas');
+  const svg = document.getElementById('lk-svg');
+  if(!canvas || !svg || canvas.closest('.lk-hidden')) return;
+  const cr = canvas.getBoundingClientRect();
+  svg.setAttribute('width', cr.width); svg.setAttribute('height', cr.height);
+  const byPath = {};
+  document.querySelectorAll('#lkCols .lk-node').forEach(function(n){ byPath[n.dataset.path] = n; });
+  function curve(a, b, cls){
+    const x1 = a.left - cr.left, y1 = a.top - cr.top + a.height/2;
+    const x2 = b.right - cr.left, y2 = b.top - cr.top + b.height/2;
+    const mx = (x1 + x2) / 2;
+    return '<path class="'+cls+'" d="M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2+'"/>';
+  }
+  let paths = '';
+  document.querySelectorAll('#lkCols .lk-node').forEach(function(n){
+    // 확정된 부모-자식 선
+    const pp = n.dataset.parent, parent = pp ? byPath[pp] : null;
+    if(parent){
+      let cls = (lkCur===2) ? 'auto' : 'manual';
+      if(n.classList.contains('residual')) cls = 'residual';
+      paths += curve(n.getBoundingClientRect(), parent.getBoundingClientRect(), cls);
+    }
+    // 자동제안(파선): 미연계 잎 → 추천 상위 분류
+    const sg = n.dataset.suggest, sgNode = sg ? byPath[sg] : null;
+    if(sgNode) paths += curve(n.getBoundingClientRect(), sgNode.getBoundingClientRect(), 'auto');
+  });
+  svg.innerHTML = paths;
+}
+
+/* ── 소계 검증: 상위 분류별 하위 잎 합(실시간) ── */
+function lkRenderSubtotals(){
+  const box = document.getElementById('lkSubtotals');
+  if(!box) return;
+  const firstCol = document.querySelector('#lkCols .lk-col');
+  if(!firstCol){ box.innerHTML=''; return; }
+  const residPaths = [...document.querySelectorAll('#lkCols .lk-node.residual')].map(function(n){ return n.dataset.path; });
+  let html = '';
+  firstCol.querySelectorAll('.lk-node.branch').forEach(function(n){
+    const top = n.dataset.path;
+    const amt = (n.querySelector('.amt')||{}).textContent || '';
+    const nm = (n.querySelector('.break-ko')||{}).textContent || top;
+    const under = residPaths.filter(function(p){ return p===top || (p && p.indexOf(top + ' > ')===0); }).length;
+    const cls = under ? 'warn' : 'ok';
+    const mark = under ? ('⚠ 미연계 '+under) : '✓';
+    html += '<span class="lk-sub-chip '+cls+'"><b>'+nm+'</b> '+amt+' '+mark+'</span>';
+  });
+  box.innerHTML = html;
+}
+window.addEventListener('resize', function(){ if(lkCur===2||lkCur===3) lkDrawLinks(); });
+document.getElementById('lkCols').addEventListener('scroll', function(){ if(lkCur===2||lkCur===3) lkDrawLinks(); });
+
+/* ── 드래그: 미연계 잎 → 상위 분류 (STEP3) ── */
+let lkDrag = null;
+document.querySelectorAll('#lkCols .lk-node.leaf[data-item]').forEach(function(el){
+  el.setAttribute('draggable','true');
+  el.addEventListener('dragstart', function(e){
+    if(lkCur!==3){ e.preventDefault(); return; }
+    lkDrag = el.dataset.item; el.classList.add('dragging'); e.dataTransfer.effectAllowed='move';
+  });
+  el.addEventListener('dragend', function(){ el.classList.remove('dragging'); });
+});
+document.querySelectorAll('#lkCols .lk-node.branch').forEach(function(el){
+  el.addEventListener('dragover', function(e){ if(lkDrag && lkCur===3){ e.preventDefault(); el.classList.add('drop-ok'); } });
+  el.addEventListener('dragleave', function(){ el.classList.remove('drop-ok'); });
+  el.addEventListener('drop', function(e){
+    e.preventDefault(); el.classList.remove('drop-ok');
+    if(!lkDrag) return;
+    const targetPath = el.dataset.path;
+    if(!confirm('이 항목을 다음 분류로 이어붙일까요?\n\n' + targetPath)){ lkDrag=null; return; }
+    fetch('/submissions/' + SUB_ID + '/item/' + lkDrag + '/reassign-path', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path: targetPath })
+    }).then(function(r){return r.json();}).then(function(d){
+      if(d.ok){ location.reload(); } else { alert('연결 실패: ' + (d.error||'')); }
+    }).catch(function(err){ alert('오류: ' + err); });
+    lkDrag = null;
+  });
+});
+
+/* ── 자동제안 원클릭 수락 → reassign-path ── */
+function lkReassign(itemId, path){
+  fetch('/submissions/' + SUB_ID + '/item/' + itemId + '/reassign-path', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ path: path })
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok){ location.reload(); } else { alert('연결 실패: ' + (d.error||'')); }
+  }).catch(function(err){ alert('오류: ' + err); });
+}
+document.querySelectorAll('.lk-accept-btn').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    const node = btn.closest('.lk-node'); if(!node) return;
+    const item = node.dataset.item, path = node.dataset.suggest;
+    if(!item || !path) return;
+    if(confirm('제안된 분류로 이어붙일까요?\n\n' + path)) lkReassign(item, path);
+  });
+});
+
+/* ── 확정: 스냅샷 저장 ── */
+function lkConfirm(){
+  const btn = document.getElementById('lkConfirmBtn');
+  btn.disabled = true; btn.textContent = '저장 중…';
+  fetch('/submissions/' + SUB_ID + '/link/confirm', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+    .then(function(r){return r.json();}).then(function(d){
+      btn.disabled = false; btn.textContent = '확정 (스냅샷 저장)';
+      if(d.ok){
+        document.getElementById('lkVerBadge').textContent = '확정 v' + d.version;
+        alert('확정되었습니다 (버전 v' + d.version + ')\n총액 ' + (d.total||0).toLocaleString() +
+              (d.n_residual ? '\n※ 미연계 ' + d.n_residual + '건 포함' : ''));
+      } else { alert('확정 실패: ' + (d.error||'')); }
+    }).catch(function(err){ btn.disabled=false; btn.textContent='확정 (스냅샷 저장)'; alert('오류: '+err); });
+}
+
+lkGo(2);   // 진입 시 정합성 제안부터
+</script>
+{% endblock %}
