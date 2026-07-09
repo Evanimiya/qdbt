@@ -42,7 +42,7 @@
             class="flex items-center gap-2 flex-wrap">
         {{ model_selector('ext') }}
         {% if sheet_list and sheet_list|length > 1 %}
-        <details class="w-full">
+        <details class="w-full order-last">
           <summary class="text-xs text-blue-700 cursor-pointer hover:underline break-ko">
             📑 추출할 시트 선택 ({{ sheet_list|length }}개) — 지난번 읽은 시트 자동 선택
           </summary>
@@ -80,9 +80,9 @@
       {% if has_role('manager') and sub.extraction_status == 'done' %}
       <!-- 통화·환율 패널: 시작→기준(KRW) 쌍 명기, 역산확인/수동/미확인 구분 -->
       {% set _known_cur = ['USD','EUR','JPY','CNY','KRW'] %}
-      <div class="w-full mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
-        <div class="text-sm font-semibold text-blue-900 mb-2 break-ko">💱 통화·환율
-          <span class="text-xs font-normal text-blue-600">— 타겟(비교) 통화: KRW · 환율 = 원화 환산율(1 외화 = ? 원)</span>
+      <div class="w-full mb-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+        <div class="text-xs font-semibold text-blue-900 mb-1.5 break-ko">💱 통화·환율
+          <span class="text-[10px] font-normal text-blue-600">— 타겟(비교) 통화: KRW · 환율 = 원화 환산율(1 외화 = ? 원)</span>
         </div>
         <div class="flex flex-wrap gap-2">
           {% for cur, info in fx_rates.items() %}
@@ -154,7 +154,7 @@
             class="flex items-center gap-2 flex-wrap">
         {{ model_selector('reext') }}
         {% if sheet_list and sheet_list|length > 1 %}
-        <details class="w-full">
+        <details class="w-full order-last">
           <summary class="text-xs text-blue-700 cursor-pointer hover:underline break-ko">
             📑 추출할 시트 선택 ({{ sheet_list|length }}개) — 지난번 읽은 시트 자동 선택
           </summary>
@@ -206,8 +206,6 @@
       </form>
       {% endif %}
       {% if has_role('manager') and sub.extraction_status == 'done' %}
-      <!-- [추출화면 A] 추출/매칭 방식은 다음 줄로 분리(데이터 관리 버튼과 구분) -->
-      <div class="basis-full h-0 m-0 p-0"></div>
       {% if sub.file_format == 'xlsx' %}
       <a href="{{ url_for('submissions.column_map', submission_id=sub.submission_id) }}"
          class="text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
