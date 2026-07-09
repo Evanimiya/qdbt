@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#1A3A5C">
   <title>{% block title %}입찰 데이터 관리{% endblock %} · QDBT</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.css') }}?v={{ asset_v }}">
   <style>
     body { font-family:'Pretendard',system-ui,sans-serif; }
     .break-ko { word-break:keep-all; overflow-wrap:break-word; }

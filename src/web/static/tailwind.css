@@ -11,3 +11,13 @@
 .border-sky-300{border-color:#7dd3fc}
 .bg-sky-700{background-color:#0369a1}
 .bg-sky-800{background-color:#075985}
+
+/* [보완2] 부분 빌드 누락 '임의값(arbitrary)' 유틸리티 — 폰트/최소폭이 무효화되던 문제 해소 (QDBT 리뷰 2026-07-10) */
+.text-\[10px\]{font-size:10px;line-height:1.3}
+.text-\[11px\]{font-size:11px;line-height:1.35}
+.text-\[12px\]{font-size:12px;line-height:1.4}
+.text-\[13px\]{font-size:13px;line-height:1.4}
+.min-w-\[150px\]{min-width:150px}
+.min-w-\[160px\]{min-width:160px}
+.min-w-\[180px\]{min-width:180px}
+.min-w-\[200px\]{min-width:200px}

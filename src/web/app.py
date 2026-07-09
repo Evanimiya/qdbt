@@ -29,6 +29,20 @@ def create_app():
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
     app.permanent_session_lifetime = timedelta(hours=8)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+    # [템플릿 즉시 반영] 프로덕션(debug off)에서도 .html 수정이 새로고침만으로
+    # 반영되도록 자동 리로드 켜기. (파이썬 코드 변경은 여전히 서버 재시작 필요)
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
+
+    # [정적 캐시버스터] tailwind.css 수정 시 브라우저가 옛 CSS를 계속 쓰지 않도록
+    # 파일 수정시각을 asset_v로 노출 → base.html에서 ?v=로 부착.
+    @app.context_processor
+    def _asset_version():
+        try:
+            _p = os.path.join(app.static_folder or "", "tailwind.css")
+            return {"asset_v": int(os.path.getmtime(_p))}
+        except Exception:
+            return {"asset_v": 0}
     # 쿠키 없는 토큰 세션 사용 — Replit iframe third-party 쿠키 차단 우회
     # before_request 에서 ?_t= 파라미터로 세션을 매 요청마다 복원
 
