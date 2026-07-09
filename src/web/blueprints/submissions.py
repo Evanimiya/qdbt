@@ -945,6 +945,7 @@ _RESIDUAL_REASON_KO = {
     "seq_parent_missing": "번호계층 상위 이름 없음",
     "summary_item": "요약 항목(‘외 N종’) — 세부 시트로 대체 필요",
     "summary_unmatched": "요약행이나 상세와 금액 정합 안 됨 — 확인 필요",
+    "cross_level_unmatched": "다른 시트 상위 분류 미매칭 — 올바른 대분류로 드래그해 연결",
 }
 
 
@@ -963,10 +964,21 @@ def _build_residual_view(subd, items):
     skel = set(stitch_meta.get("candidates") or [])
     all_paths = sorted(skel | item_paths)
     if stitch_meta and stitch_meta.get("residuals"):
-        ln_map = {dict(it).get("line_no"): dict(it) for it in items}
+        # line_no(R{row})는 시트마다 재시작해 다중시트에서 충돌할 수 있으므로
+        # 리스트로 모으고, 충돌 시 assigned_path 로 정확한 항목을 고른다.
+        ln_map = {}
+        for it in items:
+            d = dict(it)
+            ln_map.setdefault(d.get("line_no"), []).append(d)
         for rs in stitch_meta["residuals"]:
-            it = ln_map.get(f"R{rs.get('row')}")
-            if not it:
+            cands = ln_map.get(f"R{rs.get('row')}") or []
+            if not cands:
+                continue
+            it = cands[0]
+            ap = rs.get("assigned_path")
+            if len(cands) > 1 and ap:
+                it = next((c for c in cands if c.get("path") == ap), cands[0])
+            if it.get("item_id") in seen_ids:
                 continue
             seen_ids.add(it.get("item_id"))
             view.append({
@@ -1740,10 +1752,13 @@ def reparent_branch(submission_id):
     moved_ids = []
     with get_conn() as c:
         rows = c.execute(
-            "SELECT item_id, path FROM submission_items "
+            "SELECT item_id, path, line_no FROM submission_items "
             "WHERE submission_id=? AND (path=? OR path LIKE ?)",
             (submission_id, branch, branch + SEP + "%")).fetchall()
         moved_ids = [dict(r)["item_id"] for r in rows]
+        moved_rows = {int(str(dict(r).get("line_no"))[1:])
+                      for r in rows
+                      if str(dict(r).get("line_no") or "")[1:].isdigit()}
         if not moved_ids:
             return jsonify({"ok": False, "error": "이동할 항목을 찾을 수 없습니다."}), 200
 
@@ -1773,7 +1788,7 @@ def reparent_branch(submission_id):
                 (newp, len(parts), parts[0] if parts else "기타", d["item_id"]))
             n += 1
 
-    # 수기 이동 표시(초록) + map_config 갱신
+    # 수기 이동 표시(초록) + 이동 행의 residual 해제 + map_config 갱신
     try:
         subd = dict(get_submission(submission_id))
         mc = _json.loads(subd.get("map_config") or "{}") or {}
@@ -1781,6 +1796,13 @@ def reparent_branch(submission_id):
         for iid in moved_ids:
             ov[iid] = "manual"
         mc["link_overrides"] = ov
+        # 재부모화로 올바른 상위에 붙었으므로 미연계(residual)에서 제거 → 초록 확정.
+        st = mc.get("stitch") or {}
+        resids = st.get("residuals") or []
+        if resids and moved_rows:
+            st["residuals"] = [r for r in resids if r.get("row") not in moved_rows]
+            st["n_residuals"] = len(st["residuals"])
+            mc["stitch"] = st
         update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
     except Exception:
         pass
