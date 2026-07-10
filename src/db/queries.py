@@ -1042,6 +1042,15 @@ def _split_path(path, sep_candidates=None):
     return [p.strip() for p in parts if p.strip()]
 
 
+def _path_under(path, unit):
+    """[코드리뷰 M1] path가 unit(분류경로 접두)과 같거나 그 하위인지 — 구분자 무관 판정.
+    리터럴 ' > ' startswith 대신 _split_path로 세그먼트 리스트 접두 비교."""
+    if not path or not unit:
+        return False
+    pp, up = _split_path(path), _split_path(unit)
+    return pp[:len(up)] == up if up else False
+
+
 def build_items_tree(submission_id):
     """제출서 항목을 path 기반 계층 트리로 구성.
 
@@ -1349,7 +1358,7 @@ def _group_by_unit_paths(submission_id, unit_paths):
         # 이 항목이 속한 비교 단위 찾기 (path가 unit으로 시작)
         matched = None
         for unit in sorted_units:
-            if path == unit or path.startswith(unit + " > ") or path.startswith(unit + ">"):
+            if _path_under(path, unit):   # [M1] 구분자 무관 접두 판정
                 matched = unit
                 break
         if matched is None:
@@ -2034,82 +2043,6 @@ def compare_bid_submissions(bid_id):
             "fx_rates":        fx_rates,
             "benchmarks":      benchmarks,
         }
-    with get_conn() as c:
-        # 제출된 업체 목록 (완료된 것만)
-        vendors_rows = c.execute("""
-            SELECT submission_id, vendor_name, subtotal_excl_vat
-            FROM submissions
-            WHERE bid_id = ? AND extraction_status = 'done'
-              AND deleted_at IS NULL
-            ORDER BY subtotal_excl_vat NULLS LAST
-        """, (bid_id,)).fetchall()
-
-        if not vendors_rows:
-            return {"vendors": [], "categories": {}, "subtotals": {}}
-
-        vendors = [r["vendor_name"] for r in vendors_rows]
-        sub_map = {r["vendor_name"]: r["submission_id"] for r in vendors_rows}
-        subtotals = {r["vendor_name"]: r["subtotal_excl_vat"] for r in vendors_rows}
-
-        # 모든 라인 아이템 수집 (삭제된 업체 제외)
-        all_items = c.execute("""
-            SELECT i.*, s.vendor_name
-            FROM submission_items i
-            JOIN submissions s USING (submission_id)
-            WHERE s.bid_id = ? AND i.is_header = 0
-              AND s.deleted_at IS NULL
-            ORDER BY i.category, i.name_normalized, i.sort_order
-        """, (bid_id,)).fetchall()
-
-        # 카테고리별, 품목별 피벗 — 사전(도메인) 순서 + 데이터 존재 분류 보존
-        _present2 = {(it["category"] or "기타") for it in all_items}
-        cat_order = category_order_for_bid(bid_id, present_cats=_present2)
-        categories = {cat: {} for cat in cat_order}  # cat -> {name_key -> row_data}
-        cat_totals = {v: {cat: 0 for cat in cat_order} for v in vendors}
-
-        for it in all_items:
-            cat = it["category"] or "기타"
-            vendor = it["vendor_name"]
-            # 품목 식별 키: name_normalized 우선, 없으면 name_raw
-            name_key = (it["name_normalized"] or it["name_raw"] or "").strip()
-            if not name_key:
-                continue
-
-            if cat not in categories:
-                categories[cat] = {}
-
-            if name_key not in categories[cat]:
-                categories[cat][name_key] = {
-                    "name": name_key,
-                    "spec": it["spec"],
-                    "unit": it["unit"],
-                    "path": it["path"],
-                    "prices": {},
-                    "quantities": {},
-                    "amounts": {},
-                }
-
-            row = categories[cat][name_key]
-            row["prices"][vendor]    = it["unit_price"]
-            row["quantities"][vendor] = it["quantity"]
-            row["amounts"][vendor]   = it["amount"]
-
-            # 카테고리별 합계
-            if cat in cat_totals[vendor]:
-                cat_totals[vendor][cat] += (it["amount"] or 0)
-
-        # dict → list 변환 (정렬 유지)
-        result_cats = {}
-        for cat in cat_order:
-            if categories.get(cat):
-                result_cats[cat] = list(categories[cat].values())
-
-        return {
-            "vendors":         vendors,
-            "categories":      result_cats,
-            "subtotals":       subtotals,
-            "category_totals": cat_totals,
-        }
 
 
 # ─── 입찰 간 단순 비교 (Phase 2 전 임시) ────────
@@ -2491,10 +2424,12 @@ def apply_category_binding(submission_id: str, mapping: dict,
             """, (submission_id, raw_cat)).fetchall()
             for r in rows:
                 d = dict(r)
-                # path 첫 세그먼트를 표준명으로 치환
+                # path 첫 세그먼트를 표준명으로 치환.
+                #  [코드리뷰 M1] 리터럴 " > "만 분리하면 구형 구분자(|,\) path에서 세그먼트
+                #  1개로 오인해 하위경로가 소실됨 → _split_path(다구분자)로 통일 분리.
                 new_path = d.get("path")
                 if new_path:
-                    parts = [p.strip() for p in new_path.split(PATH_SEP)]
+                    parts = _split_path(new_path)
                     if parts:
                         parts[0] = std_cat
                         new_path = PATH_SEP.join(parts)
@@ -2584,16 +2519,6 @@ def delete_catalog_category(category_id):
 DOMAIN_LIST = ['공통', 'IT', '설비', '용역', '기타']
 
 
-def list_domains(active_only: bool = True):
-    """도메인 목록(행) 반환 — domains 테이블 기반."""
-    sql = "SELECT * FROM domains"
-    if active_only:
-        sql += " WHERE is_active = 1"
-    sql += " ORDER BY sort_order, name"
-    with get_conn() as c:
-        return c.execute(sql).fetchall()
-
-
 def list_domain_names(active_only: bool = True) -> list:
     """도메인 이름 목록. 테이블이 비어 있으면 DOMAIN_LIST 폴백.
 
@@ -2605,64 +2530,6 @@ def list_domain_names(active_only: bool = True) -> list:
         return names or list(DOMAIN_LIST)
     except Exception:
         return list(DOMAIN_LIST)
-
-
-def get_domain(domain_id: str):
-    with get_conn() as c:
-        return c.execute("SELECT * FROM domains WHERE domain_id = ?",
-                         (domain_id,)).fetchone()
-
-
-def create_domain(name: str, description: str = None, sort_order: int = None) -> str:
-    """새 도메인 추가. 이름 중복(UNIQUE) 시 예외."""
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("도메인명을 입력하세요.")
-    did = new_id()
-    with get_conn() as c:
-        if sort_order is None:
-            mx = c.execute("SELECT COALESCE(MAX(sort_order),0) FROM domains").fetchone()[0]
-            sort_order = (mx or 0) + 1
-        c.execute("""
-            INSERT INTO domains (domain_id, name, description, sort_order, is_active, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?)
-        """, (did, name, description, sort_order, datetime.now().isoformat()))
-    return did
-
-
-def update_domain(domain_id: str, **kwargs):
-    allowed = {"name", "description", "sort_order", "is_active"}
-    fields = {k: v for k, v in kwargs.items() if k in allowed}
-    if not fields:
-        return
-    fields["updated_at"] = datetime.now().isoformat()
-    sets = ", ".join(f"{k} = ?" for k in fields)
-    with get_conn() as c:
-        c.execute(f"UPDATE domains SET {sets} WHERE domain_id = ?",
-                  list(fields.values()) + [domain_id])
-
-
-def toggle_domain(domain_id: str, is_active: bool):
-    update_domain(domain_id, is_active=1 if is_active else 0)
-
-
-def delete_domain(domain_id: str) -> bool:
-    """도메인 삭제. 사용 중(입찰·카테고리 참조)이면 삭제 불가 → False.
-    안전을 위해 하드 삭제 대신 사용처가 없을 때만 허용."""
-    with get_conn() as c:
-        d = c.execute("SELECT name FROM domains WHERE domain_id = ?",
-                      (domain_id,)).fetchone()
-        if not d:
-            return False
-        dname = dict(d)["name"]
-        # 입찰·카테고리에서 사용 중인지 확인
-        n_bids = c.execute("SELECT COUNT(*) FROM bids WHERE domain = ?", (dname,)).fetchone()[0]
-        n_cats = c.execute("SELECT COUNT(*) FROM catalog_categories WHERE domain = ?",
-                           (dname,)).fetchone()[0]
-        if n_bids or n_cats:
-            return False
-        c.execute("DELETE FROM domains WHERE domain_id = ?", (domain_id,))
-        return True
 
 
 def get_bid_domain(bid_id: str) -> str:
@@ -2701,9 +2568,16 @@ def get_domain_by_name(name: str):
 
 
 def create_domain(name: str, description: str = None, sort_order: int = 0) -> str:
-    """도메인 생성"""
+    """도메인 생성. [코드리뷰 M14] 빈 이름 검증 + sort_order 자동채번(구 중복정의에서
+    유실됐던 로직 복원)."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("도메인명을 입력하세요.")
     did = new_id()
     with get_conn() as c:
+        if not sort_order:   # 0/None → 맨 뒤로 자동 배치
+            mx = c.execute("SELECT COALESCE(MAX(sort_order),0) FROM domains").fetchone()[0]
+            sort_order = (mx or 0) + 1
         c.execute("""
             INSERT INTO domains (domain_id, name, description, sort_order, updated_at)
             VALUES (?, ?, ?, ?, ?)
@@ -3165,8 +3039,7 @@ def list_submission_items_for_clustering(bid_id: str) -> list:
                 full_path = _p or _nm
             matched = None
             for unit in sorted_units:
-                if full_path == unit or full_path.startswith(unit + " > ") \
-                        or full_path.startswith(unit + ">"):
+                if _path_under(full_path, unit):   # [M1] 구분자 무관 접두 판정
                     matched = unit
                     break
             if matched is None:
