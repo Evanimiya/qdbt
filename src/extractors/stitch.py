@@ -342,9 +342,19 @@ def _rec_name(r):
     return None
 
 
-def _stitch_seq(sheets):
-    seqmap = {}       # 번호 prefix -> 이름
-    for recs, m, role in sheets:
+def _stitch_seq(sheets, names=None):
+    """번호계층(seq) 조인. names는 sheets와 평행한 시트명 리스트(있으면 항목에 _sheet 태깅).
+
+    [다중 seq_leaf] 세부(품목) 시트가 여러 개면 '모두' 처리한다. (기존엔 첫 시트만
+    처리해 나머지 세부 시트 항목이 통째로 소실됐음 — 다중시트 통합 시 데이터 유실.)
+    seq 조인은 번호계층(1.1.1)의 '점 자릿수'로만 부모를 잇고, 서로 다른 세부 시트의
+    잎은 각각 독립 항목으로 보존(단순 seq 동일으로 병합하지 않음). 시트 출처는 _sheet로
+    구분되어 뒤의 _dedup_and_rollup이 시트 경계를 고려해 중복만 정리(총액 불변).
+    """
+    if names is None:
+        names = [None] * len(sheets)
+    seqmap = {}       # 번호 prefix -> 이름 (계층 정의: 목록/트리 시트 우선)
+    for (recs, m, role), _sn in zip(sheets, names):
         if role in ("seq_list", "seq_tree", "seq_leaf"):
             for r in recs:
                 sq = str(r.get("seq") or "").strip()
@@ -352,36 +362,41 @@ def _stitch_seq(sheets):
                 if sq and re.match(r"^\d+(\.\d+)*$", sq) and nm and not _is_total_row(r, []):
                     seqmap.setdefault(sq, nm)
     items, residuals = [], []
-    leaf = next((recs for recs, m, role in sheets if role == "seq_leaf"), None)
-    if leaf is None:
+    leaf_sheets = [(recs, sn) for (recs, m, role), sn in zip(sheets, names)
+                   if role == "seq_leaf"]
+    if not leaf_sheets:
         return items, residuals, "seq(no-leaf)", []
-    for r in leaf:
-        sq = str(r.get("seq") or "").strip()
-        nm = r.get("name")
-        if not nm or _is_total_row(r, []):
-            continue
-        parts = []
-        if re.match(r"^\d+(\.\d+)*$", sq):
-            p = sq.split(".")
-            for d in range(1, len(p)):
-                prefix = ".".join(p[:d])
-                if prefix in seqmap:
-                    parts.append(seqmap[prefix])
-            parts.append(nm)
-        else:
-            parts = [nm]
-        # 부모 이름을 하나도 못 찾았으면(잎만) residual
-        matched = len(parts) > 1 or not re.match(r"^\d+\.\d+", sq)
-        _leaf = r.get("part") or nm   # [부품] 부품 있으면 잎=부품(경로 끝은 이미 품목)
-        items.append({
-            "path": PATH_SEP.join(parts), "depth": len(parts),
-            "name_normalized": _leaf, "spec": r.get("spec"), "maker": r.get("maker"),
-            "quantity": r.get("qty"), "unit": r.get("unit"),
-            "unit_price": r.get("price"), "amount": r.get("amount"),
-            "line_no": f"R{r['row']}", "_matched": matched,
-        })
-        if not matched:
-            residuals.append({"reason": "seq_parent_missing", "seq": sq, "name": nm, "row": r["row"]})
+    for leaf, sname in leaf_sheets:
+        for r in leaf:
+            sq = str(r.get("seq") or "").strip()
+            nm = r.get("name")
+            if not nm or _is_total_row(r, []):
+                continue
+            parts = []
+            if re.match(r"^\d+(\.\d+)*$", sq):
+                p = sq.split(".")
+                for d in range(1, len(p)):
+                    prefix = ".".join(p[:d])
+                    if prefix in seqmap:
+                        parts.append(seqmap[prefix])
+                parts.append(nm)
+            else:
+                parts = [nm]
+            # 부모 이름을 하나도 못 찾았으면(잎만) residual
+            matched = len(parts) > 1 or not re.match(r"^\d+\.\d+", sq)
+            _leaf = r.get("part") or nm   # [부품] 부품 있으면 잎=부품(경로 끝은 이미 품목)
+            item = {
+                "path": PATH_SEP.join(parts), "depth": len(parts),
+                "name_normalized": _leaf, "spec": r.get("spec"), "maker": r.get("maker"),
+                "quantity": r.get("qty"), "unit": r.get("unit"),
+                "unit_price": r.get("price"), "amount": r.get("amount"),
+                "line_no": f"R{r['row']}", "_matched": matched,
+            }
+            if sname is not None:
+                item["_sheet"] = sname   # [다중 seq_leaf] 시트 출처 태깅(중복정리 경계)
+            items.append(item)
+            if not matched:
+                residuals.append({"reason": "seq_parent_missing", "seq": sq, "name": nm, "row": r["row"]})
     cand = sorted({it["path"] for it in items if it.get("_matched") and it.get("path")})
     return items, residuals, "seq", cand
 
@@ -559,11 +574,13 @@ def _run_stitch(path, sheet_infos, sheet_names):
     roles = [role for _, _, role in sheets]
     candidates = []
     if "seq_leaf" in roles:
-        items, residuals, mode, candidates = _stitch_seq(sheets)
+        # [다중 seq_leaf] 시트명을 넘겨 각 항목에 _sheet 태깅 → 세부 시트가 여럿이어도
+        #  모두 처리(첫 시트만 처리해 나머지 소실되던 문제 해결).
+        items, residuals, mode, candidates = _stitch_seq(sheets, [i["name"] for i in infos])
         _leafname = next((info["name"] for (_, _, r), info in zip(sheets, infos)
                           if r == "seq_leaf"), None)
         for x in items:
-            x.setdefault("_sheet", _leafname)
+            x.setdefault("_sheet", _leafname)   # 안전망(태깅 누락 시 첫 leaf명)
     elif len([r for r in roles if r == "band"]) >= 1 and "leaf" in roles:
         items, residuals, mode, candidates = _stitch_band(sheets)
         _leafname = next((info["name"] for (_, _, r), info in zip(sheets, infos)
