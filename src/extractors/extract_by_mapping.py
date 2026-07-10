@@ -174,27 +174,44 @@ def seq_tuple(v):
 #    → 품명에 우연히 포함된 경우("소계장치","합계금액표")는 제외되지 않음.
 #  · 단독 '계'는 라벨 전체가 '계'/'합 계'/'…  계'일 때만(기존 규칙 유지).
 #  · 영문 total/subtotal/grand/sum 은 단어 경계로만 매칭("Summary","consumables"는 불매칭).
-_TOTAL_STRONG = ("합계", "소계", "총계", "총액", "누계", "합 계", "소 계", "총 계")
-_TOTAL_EN_RE = _re.compile(r"(?<![a-z])(sub[\s-]*total|grand[\s-]*total|total|subtotal|grand|sum)(?![a-z])")
+# 강한 합계 마커: 한글 + CJK(일/중). [코드리뷰 L1] 合計/合计/小計 등 CJK 대응.
+_TOTAL_STRONG = ("합계", "소계", "총계", "총액", "누계",
+                 "合計", "合计", "小計", "小计", "総計", "总计", "累計", "累计", "総合計")
+# 라벨 뒤쪽의 '값'(숫자·통화·콜론·괄호·구두점·공백)을 벗겨 라벨 코어만 남기는 정규식.
+#  [코드리뷰 M18] "합계 : 1,000,000" 처럼 마커 뒤 값이 붙어도 코어가 마커로 끝나게.
+_TRAIL_VALUE_RE = _re.compile(r"[\s:：·\-–—=~()\[\]{}<>＝원₩￦$€¥£,.\d]+$")
+# 영문 합계: 모호한 단독 grand/sum 은 제외(제품명 오탐). total/subtotal/grand total 만,
+#  그것도 '라벨 전체'가 그 단어일 때만(예 "Total Station"·"Grandstand" 불매칭). [코드리뷰 H9]
+_TOTAL_EN_WHOLE_RE = _re.compile(r"^(sub\s*-?\s*total|grand\s*total|totals?|subtotals?)$")
 
 
 def is_total_label(text):
-    """한 행의 텍스트(품명+분류 등)를 받아 '합계/소계/총계 행'이면 True."""
+    """한 행의 텍스트(품명+분류 등)를 받아 '합계/소계/총계 행'이면 True.
+
+    [H9·M18·L1] 라벨 코어(뒤쪽 값 제거) 기준으로 판정:
+      · 한/CJK 강한 마커로 '끝나는' 코어(예 "재료비 합계", "합계 : 1,200,000", "合計").
+      · 단독 '계'('설계/통계/회계' 오탐 방지: 코어가 '계'이거나 '… 계'로 끝날 때만).
+      · 영문은 라벨 전체가 total/subtotal/grand total 일 때만(단독 grand/sum·구내 부분 불매칭).
+    """
     if not text:
         return False
     t = str(text).strip().lower()
     if not t:
         return False
-    nospace = t.replace(" ", "")
-    # 강한 한글 마커로 '끝나는' 라벨 (예: "재료비 합계","소계","총 계")
+    # 뒤쪽 괄호 주석(예 "합계 (VAT 별도)")을 먼저 제거한 뒤, 뒤쪽 값/구두점을 벗긴 라벨 코어.
+    core = _re.sub(r"\s*\([^()]*\)\s*$", "", t)
+    core = _TRAIL_VALUE_RE.sub("", core).strip()
+    nospace = core.replace(" ", "")
+    if not nospace:
+        return False
     for kw in _TOTAL_STRONG:
-        if nospace.endswith(kw.replace(" ", "")):
+        if nospace.endswith(kw.replace(" ", "").lower()):
             return True
-    # 단독 '계'만(예: "계","합 계","… 계"). '설계·통계·회계' 등은 불매칭.
-    if t == "계" or t.endswith(" 계"):
+    # 단독 '계' (코어 기준). '설계/통계/회계'는 코어가 그 단어라 endswith(" 계") 불매칭.
+    if nospace == "계" or core.endswith(" 계"):
         return True
-    # 영문 total 계열(단어 경계) — "Summary","consumables"는 불매칭.
-    if _TOTAL_EN_RE.search(t):
+    # 영문: 라벨 코어 전체 일치 (단독 grand/sum·구내 부분 불매칭)
+    if _TOTAL_EN_WHOLE_RE.match(core):
         return True
     return False
 
@@ -535,7 +552,7 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
         "spec": ["규격", "사양", "spec", "remark주요"],
         "maker": ["메이커", "제조사", "제조원", "브랜드", "maker", "manufacturer", "mfr", "make", "brand"],
         "part": ["부품", "부속품", "부속", "구성품", "구성부품", "세부품목", "part", "component"],
-        "qty": ["수량", "q'ty", "qty", "수 량"],
+        "qty": ["수량", "q'ty", "qty", "quantity", "수 량"],
         "unit": ["단위", "unit"],
         "currency": ["ccy", "통화", "currency", "화폐"],
         "price_krw": ["원화단가", "krw단가", "단가(krw)", "단가(원)"],
@@ -550,6 +567,18 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
                      "cat1", "cat2", "cat3", "cat4", "name", "part", "spec", "maker",
                      "qty", "unit", "price", "amount", "remark"]
 
+    # [코드리뷰 M16] 짧은 ASCII 토큰(no/item/make/unit/sum 등)은 부분일치 오탐(Notes→seq)
+    #  방지를 위해 단어경계로 매칭. 긴/한글 키워드만 substring 허용.
+    def _kw_hit(vs, kws):
+        for kw in kws:
+            k = kw.lower()
+            if k.isascii() and len(k.strip(".'")) <= 4:
+                if _re.search(r"(?<![a-z0-9])" + _re.escape(k) + r"(?![a-z0-9])", vs):
+                    return True
+            elif k in vs:
+                return True
+        return False
+
     best_row, best_map, best_hits = None, {}, 0
     for hr in range(1, min(sheet.max_row, max_scan_rows) + 1):
         mapping = {}
@@ -560,14 +589,17 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
             vs = str(v).strip().lower()
             for role in ROLE_PRIORITY:
                 kws = KW.get(role, [])
-                if any(kw.lower() in vs for kw in kws):
+                if _kw_hit(vs, kws):
                     if role == "unit" and "price" in vs:
                         continue
                     # currency는 순수 통화 열만. "amount(ccy)"·"금액"이 섞이면 금액으로.
                     if role == "currency" and ("amount" in vs or "금액" in vs
                                                or "price" in vs or "단가" in vs):
                         continue
-                    if role == "amount" and ("krw" in vs or "원" in vs):
+                    # [코드리뷰 M16] amount 가드의 '원'은 통화표기(원/(원)/원화/krw)만.
+                    #  '원자재금액'처럼 '원'이 단어 일부인 경우는 amount로 인정.
+                    if role == "amount" and ("krw" in vs or "원화" in vs
+                                             or "(원)" in vs or vs.endswith("원")):
                         continue
                     if role == "price" and ("krw" in vs or "원화" in vs):
                         continue
@@ -652,51 +684,3 @@ def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
 
     wb.close()
     return detected
-    """헤더 행을 코드로 1차 탐지해 열 매핑 후보를 제안한다.
-
-    (LLM 헤더 인식의 코드 폴백 / 초기값. 키워드 매칭 기반.)
-    반환: {"header_row": int, "mapping": {col: role}, "confidence": str}
-    """
-    wb = load_workbook(path, data_only=True)
-    sheet = wb[sheet_name] if sheet_name in wb.sheetnames else wb[wb.sheetnames[0]]
-
-    # 역할별 헤더 키워드
-    KW = {
-        "seq": ["no.", "no", "번호", "순번", "항번", "item no"],
-        "cat1": ["대분류"], "cat2": ["중분류"], "cat3": ["소분류"],
-        "cat4": ["세분류", "세세분류"],
-        "name": ["품명", "품목", "주요구성품", "주요부품", "name", "item",
-                 "공종명", "항목명", "내역명", "공사명"],
-        "spec": ["규격", "사양", "spec", "remark주요"],
-        "maker": ["메이커", "제조사", "제조원", "브랜드", "maker", "manufacturer", "mfr", "make", "brand"],
-        "part": ["부품", "부속품", "부속", "구성품", "구성부품", "세부품목", "part", "component"],
-        "qty": ["수량", "q'ty", "qty", "수 량"],
-        "unit": ["단위", "unit"],
-        "price": ["단가", "unit price", "unitprice"],
-        "amount": ["금액", "amount", "total", "공급가", "합계금액"],
-        "remark": ["비고", "remark", "remarks"],
-    }
-
-    best_row, best_map, best_hits = None, {}, 0
-    for hr in range(1, min(sheet.max_row, max_scan_rows) + 1):
-        mapping = {}
-        for c in range(1, sheet.max_column + 1):
-            v = sheet.cell(row=hr, column=c).value
-            if not v:
-                continue
-            vs = str(v).strip().lower()
-            for role, kws in KW.items():
-                if any(kw.lower() in vs for kw in kws):
-                    # "unit price"는 unit이 아니라 price로 (price 우선)
-                    if role == "unit" and "price" in vs:
-                        continue
-                    mapping[c] = role
-                    break
-        if len(mapping) > best_hits:
-            best_hits = len(mapping)
-            best_row = hr
-            best_map = mapping
-
-    wb.close()
-    conf = "high" if best_hits >= 4 else ("low" if best_hits >= 2 else "none")
-    return {"header_row": best_row or 1, "mapping": best_map, "confidence": conf}
