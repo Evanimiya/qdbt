@@ -31,6 +31,20 @@ EXACT_MATCH_PREPASS = os.environ.get("QDBT_EXACT_MATCH", "0") == "1"
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.llm_json import extract_json as _extract_json   # [M6] 견고 JSON 추출
+
+
+def _safe_score(v, default=0.8):
+    """유사도 점수 안전 파싱. [코드리뷰 H6] '0.9~1.0'/'high'/None 등 비숫자면 기본값.
+    (한 클러스터의 잘못된 score가 float() 예외로 배치 전체를 죽이지 않게)"""
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    import re as _re_s
+    m = _re_s.search(r"-?\d+(?:\.\d+)?", str(v))
+    return float(m.group()) if m else default
+
 
 CLUSTER_PROMPT = """당신은 입찰 견적서에서 서로 다른 업체의 '같은 품목'을 묶는 분류 엔진입니다.
 각 항목의 핵심 판단 기준은 **"비교단위=" 뒤의 이름**입니다. 이 이름을 보고 묶으세요.
@@ -387,14 +401,7 @@ def _cluster_single(
                 base_url=base_url, verify_ssl=verify_ssl,
                 temperature=0,  # 분류 결정성 확보(비결정적 누락 방지)
             )
-            cleaned = response_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")[1:]
-                if lines and lines[-1].strip().startswith("```"):
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines)
-
-            result     = json.loads(cleaned)
+            result     = _extract_json(response_text)   # [M6] 견고 JSON 추출
             raw_clusters = result.get("clusters", [])
 
             # 디버그: LLM 응답을 파일로 남김
@@ -411,6 +418,8 @@ def _cluster_single(
             clusters = []
 
             for rc in raw_clusters:
+              # [코드리뷰 H6] 클러스터 1건의 형식 오류가 배치 전체를 폐기하지 않도록 격리.
+              try:
                 rep_name    = (rc.get("representative_name") or "").strip()
                 raw_ids     = rc.get("all_item_ids", [])
 
@@ -461,12 +470,15 @@ def _cluster_single(
                     "representative_item_id": rep_id,
                     "representative_name":    rep_name,
                     "duplicate_item_ids":     dup_ids,
-                    "similarity_score":       float(rc.get("similarity_score", 0.8)),
+                    "similarity_score":       _safe_score(rc.get("similarity_score")),
                     "similarity_summary":     rc.get("similarity_summary", ""),
                 })
+              except Exception:
+                # [H6] 이 클러스터만 건너뛰고 나머지는 보존(배치 전멸 방지).
+                continue
 
             return clusters
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             # 응답이 JSON이 아니면 재시도 (최대 3회)
             last_error = f"JSON 파싱 실패: {e}"
             continue
@@ -704,14 +716,7 @@ def run_unmatched_verification(
                 base_url=base_url, verify_ssl=verify_ssl,
                 temperature=0,
             )
-            cleaned = response_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")[1:]
-                if lines and lines[-1].strip().startswith("```"):
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines)
-
-            result   = json.loads(cleaned)
+            result   = _extract_json(response_text)   # [M6] 견고 JSON 추출
             additions = result.get("additions", [])
 
             # short→실제 id 변환 + 유효성 검증(존재 id만, 중복 item 제거)
@@ -727,7 +732,7 @@ def run_unmatched_verification(
                     seen_items.add(iid)
             return valid
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             last_error = f"JSON 파싱 실패: {e}"
             continue
         except Exception as e:
@@ -853,14 +858,7 @@ def run_cluster_validation(
                 base_url=base_url, verify_ssl=verify_ssl,
                 temperature=0,
             )
-            cleaned = response_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")[1:]
-                if lines and lines[-1].strip().startswith("```"):
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines)
-
-            result      = json.loads(cleaned)
+            result      = _extract_json(response_text)   # [M6] 견고 JSON 추출
             validations = result.get("validations", [])
 
             valid_results = []
@@ -880,7 +878,7 @@ def run_cluster_validation(
                 })
             return valid_results
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             last_error = f"JSON 파싱 실패: {e}"
             continue
         except Exception as e:
