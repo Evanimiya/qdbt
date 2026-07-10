@@ -16,6 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.llm_json import extract_json as _extract_json   # [코드리뷰 M6] 견고 JSON 추출
+
 
 MATCH_PROMPT = """당신은 입찰 견적서의 라인 아이템을 표준 품목 카탈로그와 매칭하는 전문 시스템입니다.
 
@@ -70,7 +72,7 @@ def build_match_input(items: list, catalog_items: list) -> str:
             f" | name={ci['name_canonical']}"
             f" | category={ci.get('category_name','')}"
             f" | unit={ci.get('unit_std','')}"
-            f" | aliases={', '.join(aliases[:3])}"
+            f" | aliases={', '.join(aliases[:8])}"   # [코드리뷰 M8] 별칭 절단 상향(3→8)
         )
 
     return (
@@ -119,21 +121,13 @@ def run_llm_matching(items: list, catalog_items: list,
                 system_prompt=MATCH_PROMPT,
                 api_key=api_key,
                 model=model,
+                temperature=0,   # [코드리뷰 M8] 매칭 결정성 확보(비결정 누락 방지)
             )
 
-            # 마크다운 펜스 제거
-            cleaned = response_text.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines)
-
-            result = json.loads(cleaned)
+            result = _extract_json(response_text)   # [M6] 견고 JSON 추출
             return result.get("matches", [])
 
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ValueError) as e:
             last_error = f"JSON 파싱 실패: {e}"
             continue
         except Exception as e:
