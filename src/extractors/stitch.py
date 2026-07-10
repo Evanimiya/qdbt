@@ -581,6 +581,23 @@ def _run_stitch(path, sheet_infos, sheet_names):
                           if r == "seq_leaf"), None)
         for x in items:
             x.setdefault("_sheet", _leafname)   # 안전망(태깅 누락 시 첫 leaf명)
+        # [버그2] _stitch_seq는 seq_leaf 시트만 항목으로 방출한다. 자체 금액을 지닌
+        #  seq_list/seq_tree 시트(요약이든 breakdown이든)는 이름사전으로만 쓰이고 통째로
+        #  누락됨 → 그 시트가 breakdown(별도 금액)이면 데이터·연계 준비 모두 소실.
+        #  보강: 그런 시트를 passthrough로 추가 방출해 residual(미연계)로 보존(캔버스 수기
+        #  연결 대기). 요약(총액이 leaf와 중복)인 경우는 뒤의 _dedup_and_rollup이 시트경계·
+        #  카테고리 합 일치로 roll-up 처리 → 총액 불변(Δ=0). 즉 breakdown은 보존, 요약은 정리.
+        for (recs, meta, role), info in zip(sheets, infos):
+            if role in ("seq_list", "seq_tree") and any(r.get("amount") for r in recs):
+                _it, _rs, _, _cd = _stitch_passthrough(
+                    path, info["name"], info["mapping"], info["header_row"])
+                for x in _it:
+                    x["_sheet"] = info["name"]
+                    x["_matched"] = False           # 미연계(residual) 후보
+                    x["_seq_list_unlinked"] = True  # residual은 dedup/rollup 이후 확정
+                items += _it
+                # residuals는 아래 _dedup_and_rollup 이후에 '살아남은'(roll-up 안 된)
+                #  항목만 올린다 — 요약이 정리되면 미연계 목록에서 자동 제외.
     elif len([r for r in roles if r == "band"]) >= 1 and "leaf" in roles:
         items, residuals, mode, candidates = _stitch_band(sheets)
         _leafname = next((info["name"] for (_, _, r), info in zip(sheets, infos)
@@ -614,6 +631,15 @@ def _run_stitch(path, sheet_infos, sheet_names):
 
     # [중복 병합] 견적서(요약)+상세 중복 계상 정리 (총액 불변, 행 보존·플래그).
     items, reconciliation = _dedup_and_rollup(items)
+    # [버그2] seq 모드에서 추가 방출한 seq_list/seq_tree 항목 중 roll-up으로 정리되지
+    #  '않은'(breakdown 성격) 것만 residual(미연계)로 표기 → 요약행은 자동 제외(잡음 방지).
+    for it in items:
+        if it.get("_seq_list_unlinked") and not it.get("merge_status"):
+            ln = it.get("line_no", "")
+            row = int(ln[1:]) if isinstance(ln, str) and ln[1:].isdigit() else None
+            residuals.append({"reason": "seq_list_unlinked",
+                              "name": it.get("name_normalized"),
+                              "assigned_path": it.get("path"), "row": row})
     for it in items:   # 미매칭 요약행 → residual(사람 확인)
         if it.get("_summary_unmatched"):
             ln = it.get("line_no", "")
