@@ -74,6 +74,26 @@ def _to_number(v):
 
 import re as _re
 
+# [하이픈 계층] seq(번호) 열의 계층 구분자로 점(.)뿐 아니라 하이픈(-)도 인식.
+#  "1-1"→"1.1", "1-1-2"→"1.1.2". 숫자(구분자)숫자… 계층 패턴일 때만 변환 →
+#  단일 정수("1","No")·비계층 텍스트는 그대로(단순 행번호 유지). seq 역할 열에만 적용.
+_SEQ_HIER_RE = _re.compile(r"^\d+(?:[.\-]\d+)+$")
+
+
+def normalize_seq(v):
+    """seq 문자열의 하이픈 계층을 점으로 통일해 반환(계층 패턴이 아니면 원문 유지).
+
+    · "1-1"/"1-1-2"/"1.1-2" → "1.1"/"1.1.2"/"1.1.2"  (구분자를 '.'로 통일)
+    · "1"/"2"/"No"/텍스트 → 그대로 (단일 정수·비계층은 계층으로 보지 않음)
+    반환: 정규화·strip된 문자열. v가 None이면 None.
+    """
+    if v is None:
+        return None
+    t = str(v).strip()
+    if _SEQ_HIER_RE.match(t):
+        return t.replace("-", ".")
+    return t
+
 # [C.i] 합계/소계 '행' 판정 — 부분문자열 오탐 방지(정밀 경계 매칭).
 #  · 강한 마커(합계·소계·총계·총액·누계)는 텍스트가 그것으로 '끝날' 때만(예: "재료비 합계").
 #    → 품명에 우연히 포함된 경우("소계장치","합계금액표")는 제외되지 않음.
@@ -221,8 +241,9 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         import re as _re_seq
         _has_dotted = False
         for _r in range(header_row + 1, sheet.max_row + 1):
-            _v = cell_val(_r, seq_col)
-            if _v is not None and _re_seq.match(r"^\d+\.\d+", str(_v).strip()):
+            # [하이픈 계층] 하이픈 번호(1-1)도 정규화하면 점 계층으로 인식됨.
+            _v = normalize_seq(cell_val(_r, seq_col))
+            if _v and _re_seq.match(r"^\d+\.\d+", _v):
                 _has_dotted = True
                 break
         _has_cat = any(role in column_mapping.values() for role in CAT_ROLES)
@@ -256,7 +277,8 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         # ── 번호(seq) 모드: 번호 패턴으로 계층 구성 ──
         if seq_col is not None:
             seq_raw = cell_val(r, seq_col)
-            seq = str(seq_raw).strip() if seq_raw is not None else ""
+            # [하이픈 계층] '1-1'→'1.1' 정규화 후 아래 점(.) 기반 계층 로직 그대로 사용.
+            seq = normalize_seq(seq_raw) or ""
             # 품목명/설명 (이 행의 이름)
             name_col = info_cols.get("name_normalized")
             row_name = ""

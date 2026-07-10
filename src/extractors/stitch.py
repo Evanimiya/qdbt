@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from openpyxl import load_workbook
 from extractors.extract_by_mapping import (
     suggest_column_mapping, extract_by_mapping, _build_merge_fill, _to_number,
-    is_total_label, CAT_ROLES, PATH_SEP,
+    is_total_label, normalize_seq, CAT_ROLES, PATH_SEP,
 )
 import re
 
@@ -165,7 +165,8 @@ def _read_records(path, sheet, mapping, header_row):
             rec["name"] = str(v).strip() if v not in (None, "") else None
         if seq_col:
             v = cv(r, seq_col)
-            rec["seq"] = str(v).strip() if v not in (None, "") else None
+            # [하이픈 계층] '1-1'→'1.1' 정규화 → classify/조인의 점(.) 로직 그대로 사용.
+            rec["seq"] = normalize_seq(v) if v not in (None, "") else None
         for role, col in info.items():
             v = cv(r, col)
             rec[role] = _to_number(v) if role in ("qty", "price", "amount") else (
