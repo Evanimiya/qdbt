@@ -21,6 +21,24 @@ from config import ALLOWED_EXTENSIONS
 
 bp = Blueprint("submissions", __name__)
 
+import re as _re_sub
+
+
+def _line_row(ln):
+    """line_no("R123" 등)에서 행 번호(int)를 견고하게 추출. [코드리뷰 L3]
+    접두 문자 유무·자릿수와 무관하게 숫자부만. 파싱 불가면 None."""
+    if ln is None:
+        return None
+    m = _re_sub.match(r"^[A-Za-z]*(\d+)$", str(ln).strip())
+    return int(m.group(1)) if m else None
+
+
+# 스티칭 residual/candidate를 map_config에 저장할 때의 상한(절단 시 사용자 통지용 플래그와 함께).
+#  [코드리뷰 H8] 무통보 절단 방지 — 전체 개수(n_residuals)는 항상 보존하고, 상한 초과 시
+#  *_truncated 플래그를 실어 UI가 "N개 중 M개 표시"를 안내할 수 있게 한다.
+_RESIDUAL_CAP = 200
+_CANDIDATE_CAP = 1000
+
 
 # [B.ii] classify_workbook 결과 캐시 — {fpath: (sig, {sheet: role})}.
 #  시그니처(크기:mtime)가 같으면 재계산 없이 재사용해 시트 전환 지연을 없앤다.
@@ -1281,8 +1299,11 @@ def map_auto_stitch(submission_id):
         "stitch": {
             "mode": sres["mode"], "n_items": sres["n_items"],
             "n_residuals": sres["n_residuals"],
-            "residuals": sres["residuals"][:50],
-            "candidates": sres.get("candidates", [])[:300],
+            "residuals": sres["residuals"][:_RESIDUAL_CAP],
+            "residuals_truncated": len(sres["residuals"]) > _RESIDUAL_CAP,   # [H8]
+            "n_candidates": len(sres.get("candidates", [])),
+            "candidates": sres.get("candidates", [])[:_CANDIDATE_CAP],
+            "candidates_truncated": len(sres.get("candidates", [])) > _CANDIDATE_CAP,  # [H8]
             "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
             "n_dropped": sres.get("n_dropped", 0),
             "sheet_roles": [{"name": s["name"], "role": s["role"]}
@@ -1381,14 +1402,16 @@ def column_map_extract(submission_id):
         except Exception as e:
             return jsonify({"ok": False,
                             "error": f"[stitch] {type(e).__name__}: {e}"}), 200
-        # nego 행 반영(스티칭 잎 중 지정 nego 행은 차감)
-        nego_all = set()
+        # nego 행 반영(스티칭 잎 중 지정 nego 행은 차감).
+        #  [코드리뷰 H7] line_no(R{row})는 시트마다 1부터 재시작하므로 (시트,행) 쌍으로 매칭.
+        #  단순 행번호 집합으로 매칭하면 다른 시트의 같은 행이 오차감된다.
+        nego_pairs = set()
         for sp in sheet_specs:
-            nego_all |= set(sp["nego_rows"])
+            for rn in sp["nego_rows"]:
+                nego_pairs.add((sp["sheet"], rn))
         for it in sres["items"]:
-            ln = it.get("line_no", "")
-            rownum = int(ln[1:]) if isinstance(ln, str) and ln[1:].isdigit() else None
-            if rownum in nego_all:
+            rownum = _line_row(it.get("line_no"))
+            if rownum is not None and (it.get("_sheet"), rownum) in nego_pairs:
                 it["is_nego"] = True
                 for f in ("amount", "unit_price"):
                     if it.get(f) is not None:
@@ -1396,12 +1419,17 @@ def column_map_extract(submission_id):
         all_items = sres["items"]
         for sp in sheet_specs:
             all_compare_units.extend(sp["compare_units"])
+        _resid = sres["residuals"]
+        _cand = sres.get("candidates", [])
         stitch_info = {
             "mode": sres["mode"],
             "n_items": sres["n_items"],
             "n_residuals": sres["n_residuals"],
-            "residuals": sres["residuals"][:50],   # UI 노출용 상한
-            "candidates": sres.get("candidates", [])[:300],  # 정상 분류경로(재지정 후보)
+            "residuals": _resid[:_RESIDUAL_CAP],   # UI 노출용 상한
+            "residuals_truncated": len(_resid) > _RESIDUAL_CAP,   # [H8] 절단 통지
+            "n_candidates": len(_cand),
+            "candidates": _cand[:_CANDIDATE_CAP],  # 정상 분류경로(재지정 후보)
+            "candidates_truncated": len(_cand) > _CANDIDATE_CAP,   # [H8] 절단 통지
             "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
             "n_dropped": sres.get("n_dropped", 0),
             "sheet_roles": [{"name": s["name"], "role": s["role"]}
@@ -1911,9 +1939,9 @@ def bulk_reparent(submission_id):
                               "WHERE item_id=?",
                               (newp, len(parts), parts[0] if parts else "기타", d["item_id"]))
                     moved_ids.append(d["item_id"])
-                    ln = str(d.get("line_no") or "")
-                    if ln[1:].isdigit():
-                        moved_rows.add(int(ln[1:]))
+                    _rn = _line_row(d.get("line_no"))   # [코드리뷰 L3]
+                    if _rn is not None:
+                        moved_rows.add(_rn)
                     total_moved += 1
             else:   # leaf
                 iid = mv.get("item_id")
@@ -1930,9 +1958,9 @@ def bulk_reparent(submission_id):
                           (target, len(parts), parts[0] if parts else "기타",
                            iid, submission_id))
                 moved_ids.append(iid)
-                ln = str(dict(row).get("line_no") or "")
-                if ln[1:].isdigit():
-                    moved_rows.add(int(ln[1:]))
+                _rn = _line_row(dict(row).get("line_no"))   # [코드리뷰 L3]
+                if _rn is not None:
+                    moved_rows.add(_rn)
                 total_moved += 1
     try:
         subd = dict(get_submission(submission_id))
