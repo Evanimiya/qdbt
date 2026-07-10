@@ -39,6 +39,16 @@ def _line_row(ln):
 _RESIDUAL_CAP = 200
 _CANDIDATE_CAP = 1000
 
+# [코드리뷰 M12] 레벨 → 사용자 분류명 기본 배열(단일 정의). 깊이가 이보다 깊으면 f"레벨N" 폴백.
+#  ※ 조달 도메인 관례상의 기본 라벨일 뿐, 특정 산업에 종속되지 않는다.
+LEVEL_NAMES = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
+
+
+def _level_names_for(max_depth):
+    """1..max_depth 각 레벨의 표시명. 배열을 넘는 깊이는 'N레벨'로 폴백(라벨 고갈 방지)."""
+    n = max(len(LEVEL_NAMES), int(max_depth or 0))
+    return [LEVEL_NAMES[i] if i < len(LEVEL_NAMES) else f"{i+1}레벨" for i in range(n)]
+
 
 # [B.ii] classify_workbook 결과 캐시 — {fpath: (sig, {sheet: role})}.
 #  시그니처(크기:mtime)가 같으면 재계산 없이 재사용해 시트 전환 지연을 없앤다.
@@ -250,7 +260,7 @@ def detail(submission_id):
         manual_ids = [k for k, v in (_mc_all.get("link_overrides") or {}).items() if v == "manual"]
     except Exception:
         manual_ids = []
-    level_names = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
+    level_names = _level_names_for(12)
 
     return render_template("submissions/detail.html", sub=sub, items=items,
                            fx_rates=fx_rates,
@@ -1644,7 +1654,7 @@ def link_view(submission_id):
         sheets_view = []
 
     # [연계 D] 레벨 → 사용자 분류명 매핑(대/중/소/세/품명/부품…). 깊이 순서 기본값.
-    level_names = ["대분류", "중분류", "소분류", "세분류", "품명", "부품", "세부"]
+    level_names = _level_names_for(12)
 
     # [연계 캔버스] 잎에 item_id·residual/manual 플래그를 실어 나른다.
     residual_ids = sorted(residual_view and {rv["item_id"] for rv in residual_view} or set(),
