@@ -74,25 +74,31 @@ def _to_number(v):
 
 import re as _re
 
-# [하이픈 계층] seq(번호) 열의 계층 구분자로 점(.)뿐 아니라 하이픈(-)도 인식.
-#  "1-1"→"1.1", "1-1-2"→"1.1.2". 숫자(구분자)숫자… 계층 패턴일 때만 변환 →
-#  단일 정수("1","No")·비계층 텍스트는 그대로(단순 행번호 유지). seq 역할 열에만 적용.
-_SEQ_HIER_RE = _re.compile(r"^\d+(?:[.\-]\d+)+$")
+# [번호 계층 · 구분자 무관] seq(번호) 값을 '숫자 그룹들이 임의의 비숫자 구분자로 나뉜 것'
+#  으로 해석한다. 구분자가 '.','-',' ','·',')','/' 무엇이든 상관없이 숫자 그룹의 튜플로 파싱.
+#  · depth = 숫자 그룹 개수, 부모-자식 = 튜플 prefix 관계.
+#  · 원본 문자열은 절대 변형하지 않고(표시/저장은 원본 유지) 계층·조인 판단에만 튜플 사용.
+#  · 순수 '숫자[구분자]숫자…' 전체일치만 계층으로 인정 → 치수("1-1/2인치") 등 오인 최소화.
+#  · 숫자 그룹이 1개("1","No"→비매치)면 단일 정수/비계층 = 단순 행번호(계층 아님).
+_SEQ_TUPLE_RE = _re.compile(r"^\d+(?:\D+\d+)*$")
 
 
-def normalize_seq(v):
-    """seq 문자열의 하이픈 계층을 점으로 통일해 반환(계층 패턴이 아니면 원문 유지).
+def seq_tuple(v):
+    """seq(번호) 값을 '숫자 그룹 튜플'로 파싱(구분자 무관). 계층 아님이면 None.
 
-    · "1-1"/"1-1-2"/"1.1-2" → "1.1"/"1.1.2"/"1.1.2"  (구분자를 '.'로 통일)
-    · "1"/"2"/"No"/텍스트 → 그대로 (단일 정수·비계층은 계층으로 보지 않음)
-    반환: 정규화·strip된 문자열. v가 None이면 None.
+    · "1.1"/"1-1"/"1 1"/"1·1"/"1)1" → (1, 1)   (구분자 종류 무관)
+    · "1-1-2"/"1.1.2"              → (1, 1, 2)
+    · "1"/"2"                       → (1,)/(2,)  (단일 정수 = 1-튜플)
+    · "No"/"1-1/2인치"/빈값         → None       (순수 숫자[구분자]숫자… 전체일치 아님)
+    반환: tuple[int] | None. 원본 문자열은 변형하지 않음.
+    ※ '계층'은 len(tuple) >= 2 일 때만. 1-튜플은 행번호(비계층).
     """
     if v is None:
         return None
     t = str(v).strip()
-    if _SEQ_HIER_RE.match(t):
-        return t.replace("-", ".")
-    return t
+    if not _SEQ_TUPLE_RE.match(t):
+        return None
+    return tuple(int(g) for g in _re.findall(r"\d+", t))
 
 # [C.i] 합계/소계 '행' 판정 — 부분문자열 오탐 방지(정밀 경계 매칭).
 #  · 강한 마커(합계·소계·총계·총액·누계)는 텍스트가 그것으로 '끝날' 때만(예: "재료비 합계").
@@ -238,16 +244,15 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     #  단순 행번호("No" 1,2,3…)가 seq로 매핑돼도, 분류(cat) 열이 있으면 계층을 버리지 않도록.
     #  '추측 말고 실제 데이터를 보라' — 데이터를 미리 스캔해 결정.
     if seq_col is not None:
-        import re as _re_seq
         _has_dotted = False
         for _r in range(header_row + 1, sheet.max_row + 1):
-            # [하이픈 계층] 하이픈 번호(1-1)도 정규화하면 점 계층으로 인식됨.
-            _v = normalize_seq(cell_val(_r, seq_col))
-            if _v and _re_seq.match(r"^\d+\.\d+", _v):
+            # [구분자 무관] 숫자 그룹이 2개 이상이면(어떤 구분자든) 계층으로 인정.
+            _st = seq_tuple(cell_val(_r, seq_col))
+            if _st is not None and len(_st) >= 2:
                 _has_dotted = True
                 break
         _has_cat = any(role in column_mapping.values() for role in CAT_ROLES)
-        # 점 계층이 없고 분류 열이 따로 있으면 → seq는 단순 행번호. seq 모드 비활성.
+        # 계층 없고 분류 열이 따로 있으면 → seq는 단순 행번호. seq 모드 비활성.
         if not _has_dotted and _has_cat:
             seq_col = None
 
@@ -277,8 +282,9 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         # ── 번호(seq) 모드: 번호 패턴으로 계층 구성 ──
         if seq_col is not None:
             seq_raw = cell_val(r, seq_col)
-            # [하이픈 계층] '1-1'→'1.1' 정규화 후 아래 점(.) 기반 계층 로직 그대로 사용.
-            seq = normalize_seq(seq_raw) or ""
+            seq = str(seq_raw).strip() if seq_raw is not None else ""  # 표시용 원본 보존
+            # [구분자 무관] 번호를 숫자 그룹 튜플로 파싱(계층 판단·조인은 튜플로만).
+            seq_t = seq_tuple(seq_raw)
             # 품목명/설명 (이 행의 이름)
             name_col = info_cols.get("name_normalized")
             row_name = ""
@@ -286,14 +292,11 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 nv = cell_val(r, name_col)
                 row_name = str(nv).strip() if nv is not None else ""
 
-            # 번호가 숫자.숫자 패턴인지 (예: 1, 1.1, 1.1.2)
-            import re as _re2
-            if seq and _re2.match(r"^\d+(\.\d+)*$", seq):
-                seq_parts = seq.split(".")
-                if len(seq_parts) == 1:
+            # 번호가 '숫자[구분자]숫자…' 계층 튜플인지 (예: (1,), (1,1), (1,1,2))
+            if seq_t is not None:
+                if len(seq_t) == 1:
                     # 최상위 번호 (예: "1") → 대분류 행. 이름을 기억하고 항목으론 스킵.
-                    seq_names = {k: v for k, v in seq_names.items()}  # keep
-                    seq_names[seq] = row_name or seq
+                    seq_names[seq_t] = row_name or seq   # 튜플 키로 기억
                     # 대분류 행 자체는 항목 아님 (금액 없으면), 건너뜀
                     amt_col = info_cols.get("amount")
                     amt_val = _to_number(cell_val(r, amt_col)) if amt_col else None
@@ -302,11 +305,11 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                     # 금액이 있으면 그대로 항목 처리 (path = 자기 이름)
                     parts = [row_name or seq]
                 else:
-                    # 하위 번호 (예: "1.1") → 부모들의 이름 + 자기 이름
+                    # 하위 번호 (예: (1,1)) → 부모들의 이름 + 자기 이름 (튜플 prefix 조인)
                     parts = []
-                    for d in range(1, len(seq_parts)):
-                        prefix = ".".join(seq_parts[:d])
-                        pname = seq_names.get(prefix, prefix)
+                    for d in range(1, len(seq_t)):
+                        prefix = seq_t[:d]
+                        pname = seq_names.get(prefix, ".".join(map(str, prefix)))
                         parts.append(pname)
                     parts.append(row_name or seq)
             else:

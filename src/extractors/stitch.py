@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from openpyxl import load_workbook
 from extractors.extract_by_mapping import (
     suggest_column_mapping, extract_by_mapping, _build_merge_fill, _to_number,
-    is_total_label, normalize_seq, CAT_ROLES, PATH_SEP,
+    is_total_label, seq_tuple, CAT_ROLES, PATH_SEP,
 )
 import re
 
@@ -165,8 +165,9 @@ def _read_records(path, sheet, mapping, header_row):
             rec["name"] = str(v).strip() if v not in (None, "") else None
         if seq_col:
             v = cv(r, seq_col)
-            # [하이픈 계층] '1-1'→'1.1' 정규화 → classify/조인의 점(.) 로직 그대로 사용.
-            rec["seq"] = normalize_seq(v) if v not in (None, "") else None
+            # [구분자 무관] 원본 문자열은 보존하고, 계층·조인용 숫자 그룹 튜플을 함께 저장.
+            rec["seq"] = str(v).strip() if v not in (None, "") else None
+            rec["seq_t"] = seq_tuple(v)
         for role, col in info.items():
             v = cv(r, col)
             rec[role] = _to_number(v) if role in ("qty", "price", "amount") else (
@@ -186,8 +187,9 @@ def _is_total_row(rec, levels):
 
 def _classify_sheet(recs, meta):
     """시트 역할: 'leaf'(품목 보유) / 'band'(분류만) / 'seq_tree' / 'seq_list'."""
+    # [구분자 무관] 숫자 그룹이 2개 이상인 번호가 있으면 계층 시트(구분자 종류 무관).
     dotted = meta["has_seq"] and any(
-        re.match(r"^\d+\.\d+", str(r.get("seq") or "")) for r in recs)
+        (r.get("seq_t") is not None and len(r["seq_t"]) >= 2) for r in recs)
     has_item = meta["has_name"] and any(
         (r.get("price") or r.get("qty")) for r in recs)
     if dotted and has_item:
@@ -354,14 +356,14 @@ def _stitch_seq(sheets, names=None):
     """
     if names is None:
         names = [None] * len(sheets)
-    seqmap = {}       # 번호 prefix -> 이름 (계층 정의: 목록/트리 시트 우선)
+    seqmap = {}       # 번호 튜플 prefix -> 이름 (계층 정의: 목록/트리 시트 우선)
     for (recs, m, role), _sn in zip(sheets, names):
         if role in ("seq_list", "seq_tree", "seq_leaf"):
             for r in recs:
-                sq = str(r.get("seq") or "").strip()
+                st = r.get("seq_t")   # [구분자 무관] 숫자 그룹 튜플
                 nm = _rec_name(r)
-                if sq and re.match(r"^\d+(\.\d+)*$", sq) and nm and not _is_total_row(r, []):
-                    seqmap.setdefault(sq, nm)
+                if st and nm and not _is_total_row(r, []):
+                    seqmap.setdefault(st, nm)
     items, residuals = [], []
     leaf_sheets = [(recs, sn) for (recs, m, role), sn in zip(sheets, names)
                    if role == "seq_leaf"]
@@ -369,22 +371,22 @@ def _stitch_seq(sheets, names=None):
         return items, residuals, "seq(no-leaf)", []
     for leaf, sname in leaf_sheets:
         for r in leaf:
-            sq = str(r.get("seq") or "").strip()
+            st = r.get("seq_t")
             nm = r.get("name")
             if not nm or _is_total_row(r, []):
                 continue
             parts = []
-            if re.match(r"^\d+(\.\d+)*$", sq):
-                p = sq.split(".")
-                for d in range(1, len(p)):
-                    prefix = ".".join(p[:d])
+            if st is not None:
+                # 튜플 prefix로 부모 이름 조인 (구분자 종류 무관).
+                for d in range(1, len(st)):
+                    prefix = st[:d]
                     if prefix in seqmap:
                         parts.append(seqmap[prefix])
                 parts.append(nm)
             else:
                 parts = [nm]
-            # 부모 이름을 하나도 못 찾았으면(잎만) residual
-            matched = len(parts) > 1 or not re.match(r"^\d+\.\d+", sq)
+            # 부모 이름을 하나도 못 찾았으면(잎만) residual. 계층(2튜플 이상)인데 부모 없으면 미매칭.
+            matched = len(parts) > 1 or not (st is not None and len(st) >= 2)
             _leaf = r.get("part") or nm   # [부품] 부품 있으면 잎=부품(경로 끝은 이미 품목)
             item = {
                 "path": PATH_SEP.join(parts), "depth": len(parts),
@@ -397,7 +399,8 @@ def _stitch_seq(sheets, names=None):
                 item["_sheet"] = sname   # [다중 seq_leaf] 시트 출처 태깅(중복정리 경계)
             items.append(item)
             if not matched:
-                residuals.append({"reason": "seq_parent_missing", "seq": sq, "name": nm, "row": r["row"]})
+                residuals.append({"reason": "seq_parent_missing",
+                                  "seq": r.get("seq"), "name": nm, "row": r["row"]})
     cand = sorted({it["path"] for it in items if it.get("_matched") and it.get("path")})
     return items, residuals, "seq", cand
 
