@@ -18,9 +18,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.llm_json import extract_json          # [코드리뷰 M6] 견고 JSON 추출
+from core.numparse import parse_amount          # [코드리뷰 L7] 금액 안전 파싱
+
 # 청크당 최대 행 수 (R001~R150 → 150행)
 # 항목 1개당 파싱 텍스트 약 80자 → 150행 ≈ 12,000자 → 출력 약 6,000토큰
 CHUNK_LINE_LIMIT = 150
+
+
+def _num(v):
+    """None/문자 혼입을 흡수해 float. 실패 시 0."""
+    n = parse_amount(v)
+    return n if n is not None else 0
 
 
 def _load_system_prompt() -> str:
@@ -139,8 +148,8 @@ def _call_llm(provider, system_prompt: str, user_message: str,
                 base_url=base_url or None,
                 verify_ssl=verify_ssl,
             )
-            return json.loads(_clean_json(response_text))
-        except json.JSONDecodeError as e:
+            return extract_json(response_text)   # [M6] 코드펜스·서두산문·후행텍스트 허용
+        except (json.JSONDecodeError, ValueError) as e:
             last_error = f"JSON 파싱 실패 — {e}"
             continue
         except Exception as e:
@@ -150,9 +159,14 @@ def _call_llm(provider, system_prompt: str, user_message: str,
 
 
 def _count_lines(parsed_text: str) -> int:
-    """파싱 텍스트의 R행 수 카운트"""
-    return sum(1 for line in parsed_text.splitlines()
-               if line.strip().startswith("R") and line[1:4].isdigit())
+    """파싱 텍스트의 R행 수 카운트. [코드리뷰 M3] strip된 문자열로 일관 판정
+    (선행 공백이 있어도 누락되지 않게 — _split_into_chunks와 동일 기준)."""
+    n = 0
+    for line in parsed_text.splitlines():
+        s = line.strip()
+        if s.startswith("R") and s[1:4].isdigit():
+            n += 1
+    return n
 
 
 def _split_into_chunks(parsed_text: str, chunk_size: int) -> list[str]:
@@ -280,17 +294,19 @@ def extract_with_validation(parsed_text: str, vendor_name: str = "",
     )
 
     items_sum = sum(
-        it.get("amount") or 0
+        _num(it.get("amount"))
         for it in result.get("items", [])
         if not it.get("is_category_header")
     )
-    subtotal = result.get("amount_summary", {}).get("subtotal_excl_vat", 0)
+    subtotal = _num(result.get("amount_summary", {}).get("subtotal_excl_vat", 0))
     discrepancy_pct = (abs(items_sum - subtotal) / subtotal * 100) if subtotal else 0
 
     if "validation" not in result:
         result["validation"] = {}
+    # [코드리뷰 L7] 비교 대상은 subtotal(공급가액)이므로 필드명을 정확히. float 오차는
+    #  허용오차(1원)로 흡수(정확일치 == 는 반올림에 취약).
     result["validation"].update({
-        "items_sum_matches_grand_total": (items_sum == subtotal),
+        "items_sum_matches_subtotal": (abs(items_sum - subtotal) <= 1.0),
         "items_sum_value": items_sum,
         "discrepancy_pct": round(discrepancy_pct, 2),
     })

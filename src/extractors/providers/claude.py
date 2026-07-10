@@ -9,6 +9,7 @@ class ClaudeProvider(LLMProvider):
     provider_name = "Anthropic Claude"
     default_model = "claude-sonnet-4-20250514"
     key_prefix    = "sk-ant-"
+    max_output_tokens = 32000   # [코드리뷰 M5] 대용량 추출/클러스터 응답 절단 완화(Claude ≥32k)
     models = [
         ("claude-opus-4-8",            "Claude Opus 4.8 (최고 성능·분류 권장)"),
         ("claude-opus-4-5",            "Claude Opus 4.5"),
@@ -39,7 +40,7 @@ class ClaudeProvider(LLMProvider):
             client = Anthropic(**kwargs)
             create_kwargs = dict(
                 model=self.get_model(model),
-                max_tokens=16000,
+                max_tokens=self.max_output_tokens,   # [코드리뷰 M5] 상수화·상향(절단 완화)
                 system=system_prompt,
                 messages=[{"role": "user", "content": parsed_text}],
             )
@@ -47,7 +48,15 @@ class ClaudeProvider(LLMProvider):
             if temperature is not None:
                 create_kwargs["temperature"] = temperature
             response = client.messages.create(**create_kwargs)
-            return response.content[0].text
+            # [코드리뷰 H5] 첫 블록이 text라고 가정하지 않는다. 추론형 모델은 thinking/
+            #  tool_use 블록이 먼저 올 수 있어 content[0].text가 깨진다. text 블록만 결합.
+            blocks = response.content or []
+            text = "".join(getattr(b, "text", "") for b in blocks
+                           if getattr(b, "type", None) == "text")
+            if not text.strip():
+                raise LLMProviderError(
+                    "Claude 응답에 text 블록이 없습니다(모델 응답 구조·max_tokens 확인).")
+            return text
         except Exception as e:
             etype = type(e).__name__
             if "timeout" in etype.lower() or "timeout" in str(e).lower():

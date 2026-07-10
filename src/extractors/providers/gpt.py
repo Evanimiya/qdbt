@@ -19,7 +19,7 @@ class GPTProvider(LLMProvider):
         ("gpt-4-turbo",  "GPT-4 Turbo"),
     ]
 
-    _TOKEN_LIMIT = 16000
+    _TOKEN_LIMIT = 32000   # [코드리뷰 M5] 대용량 응답 절단 완화
     # LLM 응답 대기 한도(초). 큰 입력이 무한 대기에 빠지는 것 방지.
     # 이 시간 내 응답이 없으면 타임아웃 에러로 빠져나옴.
     _REQUEST_TIMEOUT = 180.0
@@ -85,7 +85,20 @@ class GPTProvider(LLMProvider):
                     **extra,
                 )
                 _TOKEN_PARAM_CACHE[model] = param
-                return resp.choices[0].message.content
+                # [코드리뷰 M7] content가 None일 수 있음(finish_reason=length/필터/함수호출).
+                #  그대로 반환하면 상위 json.loads(None)에서 불명확한 TypeError.
+                choice = resp.choices[0] if resp.choices else None
+                content = choice.message.content if choice else None
+                if not content:
+                    fr = getattr(choice, "finish_reason", None) if choice else None
+                    if fr == "length":
+                        raise LLMProviderError(
+                            "GPT 응답이 max_tokens에서 잘렸습니다(finish_reason=length). "
+                            "입력을 줄이거나 시트를 나눠서 추출하세요.")
+                    raise LLMProviderError(
+                        f"GPT 응답이 비어 있습니다(finish_reason={fr}). "
+                        "콘텐츠 필터·모델 응답 구조를 확인하세요.")
+                return content
             except Exception as e:
                 msg = str(e).lower()
                 last_err = e
