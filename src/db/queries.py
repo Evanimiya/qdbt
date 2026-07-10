@@ -964,30 +964,14 @@ def _strip_indent_prefix(s: str) -> str:
 
 
 def _to_number(v):
-    """수량/단가/금액을 안전하게 숫자로 변환.
+    """수량/단가/금액을 안전하게 숫자로 변환 — 공용 파서에 위임.
 
-    LLM이 "1,000", "1,000원", "3.5", "" 등 다양한 형태로 줄 수 있어,
-    문자열이면 숫자만 추출해 float로. 변환 불가면 None.
+    통화기호·천단위 콤마 제거, 괄호/△/▲/− 음수 부호 보존(뒤집지 않음),
+    유럽식 소수 표기 안전 처리. extract 경로와 동일 규칙. [코드리뷰 H2 통합]
     (DB의 REAL 컬럼에 문자열이 들어가 INSERT가 멈추는 것 방지)
     """
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return v
-    if isinstance(v, str):
-        import re
-        s = v.strip()
-        if not s:
-            return None
-        # 숫자/마이너스/소수점만 남기기 (천단위 콤마, '원' 등 제거)
-        cleaned = re.sub(r"[^\d.\-]", "", s)
-        if cleaned in ("", "-", ".", "-."):
-            return None
-        try:
-            return float(cleaned)
-        except ValueError:
-            return None
-    return None
+    from core.numparse import parse_amount
+    return parse_amount(v)
 
 
 def insert_items_bulk(submission_id, items: list[dict]):

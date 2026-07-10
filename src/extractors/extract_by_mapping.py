@@ -56,20 +56,19 @@ def _build_merge_fill(sheet):
 
 
 def _to_number(v):
-    """숫자 파싱 (콤마/공백/통화기호 제거). 실패 시 None."""
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return v
-    s = str(v).strip().replace(",", "").replace(" ", "")
-    for sym in ("₩", "원", "$", "USD", "\\"):
-        s = s.replace(sym, "")
-    if not s:
-        return None
+    """숫자 파싱 — 공용 파서(core.numparse.parse_amount)에 위임.
+
+    통화기호(₩$¥€元 등)·천단위 콤마 제거, 괄호/△/▲/− 음수 부호 보존,
+    유럽식 소수 표기 안전 처리. [코드리뷰 H1 통합]
+    """
     try:
-        return float(s) if ("." in s) else int(s)
-    except ValueError:
-        return None
+        from core.numparse import parse_amount
+    except ImportError:  # 경로 폴백(core가 sys.path에 없을 때)
+        import sys as _sys
+        from pathlib import Path as _P
+        _sys.path.insert(0, str(_P(__file__).parent.parent))
+        from core.numparse import parse_amount
+    return parse_amount(v)
 
 
 import re as _re
