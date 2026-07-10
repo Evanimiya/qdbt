@@ -31,6 +31,76 @@ INFO_ROLES = {
 
 PATH_SEP = " > "
 
+# 통화 코드 정규화 (기호·명칭 → ISO). 모듈 상수(추출·스티칭 공유).
+#  ※ [코드리뷰 M17] '¥'는 엔(JPY)·위안(CNY) 공용 기호 — 문맥 판별이 어려워 도메인
+#    관례상 CNY로 둔다(수입 견적 다수). 명시 코드(JPY/CNY/엔/위안)가 있으면 그쪽 우선.
+_CUR_MAP = {
+    "$": "USD", "US$": "USD", "USD": "USD", "달러": "USD",
+    "¥": "CNY", "RMB": "CNY", "CNY": "CNY", "위안": "CNY", "元": "CNY",
+    "€": "EUR", "EUR": "EUR", "유로": "EUR",
+    "£": "GBP", "GBP": "GBP",
+    "￦": "KRW", "₩": "KRW", "KRW": "KRW", "원": "KRW", "WON": "KRW",
+    "JPY": "JPY", "엔": "JPY", "円": "JPY",
+}
+
+
+def normalize_currency_code(cur_raw):
+    """통화 표기(기호/명칭)를 ISO 코드로. 공란이면 KRW(문서 기본), 미상은 원문 대문자 유지."""
+    c = (cur_raw or "").strip().upper()
+    return _CUR_MAP.get(c, c if c else "KRW")
+
+
+def apply_currency_fields(item):
+    """item의 통화 열(currency_raw/amount_krw/unit_price_krw)을 반영해 원화로 정합.
+
+    입력 item: amount/unit_price는 '원통화 표면값', currency_raw/amount_krw/
+      unit_price_krw는 (있으면) 원본. → 처리 후 amount/unit_price는 '원화 확정값'.
+    [코드리뷰 H3] 외화인데 환율 역산도 불가하고 원화열도 없으면 amount/unit_price를
+      None + needs_fx=True 로 두어 KRW 합계에 원통화 표면값이 혼입되지 않게 한다.
+    [코드리뷰 H10] extract·stitch 공용 — 다중시트도 동일 규칙으로 통화 정합.
+    """
+    currency = normalize_currency_code(item.pop("currency_raw", None))
+
+    amt_cur = item.get("amount")
+    amt_krw = item.pop("amount_krw", None)
+    price_cur = item.get("unit_price")
+    price_krw = item.pop("unit_price_krw", None)
+
+    fx = None
+    if amt_krw and amt_cur and amt_cur != 0 and currency != "KRW":
+        fx = round(abs(amt_krw) / abs(amt_cur), 4)
+    elif price_krw and price_cur and price_cur != 0 and currency != "KRW":
+        fx = round(abs(price_krw) / abs(price_cur), 4)
+
+    if currency != "KRW":
+        # [T2] 원통화 값 항상 보존 — 나중 환율 수정 시 역산 복원(누적 오차) 회피.
+        item["unit_price_orig"] = price_cur
+        item["amount_orig"] = amt_cur
+        item["unit_price_currency_in_source"] = currency
+        item["fx_rate_used"] = fx
+        # 원화 확정: 견적서 원화열 우선 → 없으면 통화×환율 → 둘 다 없으면 미확정.
+        if amt_krw is not None:
+            item["amount"] = amt_krw
+        elif fx and amt_cur is not None:
+            item["amount"] = round(amt_cur * fx)
+        else:
+            item["amount"] = None            # [H3] 원통화 표면값을 KRW로 오합산 방지
+        if price_krw is not None:
+            item["unit_price"] = price_krw
+        elif fx and price_cur is not None:
+            item["unit_price"] = round(price_cur * fx)
+        else:
+            item["unit_price"] = None
+        # 환율 미확정 표시(원화 확정 불가) → UI/집계가 구분·경고 가능.
+        item["needs_fx"] = (fx is None and amt_krw is None and price_krw is None)
+    else:
+        item["unit_price_currency_in_source"] = "KRW"
+        if amt_krw is not None:
+            item["amount"] = amt_krw
+        if price_krw is not None:
+            item["unit_price"] = price_krw
+    return item
+
 # [레벨 보존] 분류 매핑이 대분류(cat1)가 아니라 중/소분류부터 시작할 때(예: 시트가
 #  [중분류>품목]만 있음), 누락된 상위 레벨 자리에 끼워 '의미 레벨'을 보존하는 placeholder.
 #  → 중분류가 대분류(최상위)로 승격되지 않고 정확한 depth에 놓임. 캔버스에서 올바른
@@ -381,52 +451,8 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         #       unit_price(원화 단가), amount(원화 금액),
         #       unit_price_orig(원본 통화 단가), unit_price_currency_in_source(통화),
         #       fx_rate_used(역산 환율)
-        cur_raw = (item.pop("currency_raw", None) or "").strip().upper()
-        # 통화 코드 정규화 (기호·명칭 → ISO)
-        _CUR_MAP = {
-            "$": "USD", "US$": "USD", "USD": "USD", "달러": "USD",
-            "¥": "CNY", "RMB": "CNY", "CNY": "CNY", "위안": "CNY", "元": "CNY",
-            "€": "EUR", "EUR": "EUR", "유로": "EUR",
-            "￦": "KRW", "₩": "KRW", "KRW": "KRW", "원": "KRW", "WON": "KRW",
-            "JPY": "JPY", "엔": "JPY",
-        }
-        currency = _CUR_MAP.get(cur_raw, cur_raw if cur_raw else "KRW")
-
-        amt_cur = item.get("amount")            # 통화 기준 금액(또는 원화)
-        amt_krw = item.pop("amount_krw", None)  # 원화 금액(있으면 확정)
-        price_cur = item.get("unit_price")
-        price_krw = item.pop("unit_price_krw", None)
-
-        fx = None
-        # 환율 역산: 원화 ÷ 통화 (금액 우선, 없으면 단가)
-        if amt_krw and amt_cur and amt_cur != 0 and currency != "KRW":
-            fx = round(abs(amt_krw) / abs(amt_cur), 4)
-        elif price_krw and price_cur and price_cur != 0 and currency != "KRW":
-            fx = round(abs(price_krw) / abs(price_cur), 4)
-
-        if currency != "KRW":
-            # 외화 항목: 원본 통화값 보존 + 원화 확정값 산출
-            # [T2] 원통화 값을 항상 보존 — 나중 환율 수정 시 역산 복원(누적 오차) 회피.
-            item["unit_price_orig"] = price_cur          # 원본 통화 단가(없으면 None)
-            item["amount_orig"] = amt_cur                # 원본 통화 금액(단가 없는 행 대비)
-            item["unit_price_currency_in_source"] = currency
-            item["fx_rate_used"] = fx
-            # 원화 확정: 견적서 원화열 우선, 없으면 통화×환율
-            if amt_krw is not None:
-                item["amount"] = amt_krw
-            elif fx and amt_cur is not None:
-                item["amount"] = round(amt_cur * fx)
-            if price_krw is not None:
-                item["unit_price"] = price_krw
-            elif fx and price_cur is not None:
-                item["unit_price"] = round(price_cur * fx)
-        else:
-            # 원화 항목: 원화열이 별도로 있으면 그 값 우선
-            item["unit_price_currency_in_source"] = "KRW"
-            if amt_krw is not None:
-                item["amount"] = amt_krw
-            if price_krw is not None:
-                item["unit_price"] = price_krw
+        # 통화 정합(원화 확정) — 공용 함수. [코드리뷰 H3·H10]
+        apply_currency_fields(item)
 
         # 차감(special nego) 행: 금액·단가를 음수로. 절댓값으로 들어와도 차감 반영.
         is_nego = (r in nego_rows)

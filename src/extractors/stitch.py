@@ -16,8 +16,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from openpyxl import load_workbook
 from extractors.extract_by_mapping import (
     suggest_column_mapping, extract_by_mapping, _build_merge_fill, _to_number,
-    is_total_label, seq_tuple, CAT_ROLES, PATH_SEP,
+    is_total_label, seq_tuple, apply_currency_fields, CAT_ROLES, PATH_SEP,
 )
+
+
+def _apply_currency(item, rec):
+    """[코드리뷰 H10] rec의 통화·원화 열을 item에 실어 원화 정합(extract와 동일 규칙).
+    통화 미매핑(KRW) 시엔 amount/unit_price 무변경 → 회귀 없음."""
+    item["currency_raw"] = rec.get("currency")
+    item["amount_krw"] = rec.get("amount_krw")
+    item["unit_price_krw"] = rec.get("price_krw")
+    return apply_currency_fields(item)
 import re
 
 TOTAL_KW = ("합계", "소계", "총계", "total", "subtotal", "grand", "계")
@@ -149,7 +158,10 @@ def _read_records(path, sheet, mapping, header_row):
     catcols = {_cat_level(role): col for col, role in mapping.items() if role in CAT_ROLES}
     name_col = next((c for c, r in mapping.items() if r == "name"), None)
     seq_col = next((c for c, r in mapping.items() if r == "seq"), None)
-    info = {r: col for col, r in mapping.items() if r in ("qty", "unit", "price", "amount", "spec", "maker", "part")}
+    # [코드리뷰 H10] 통화·원화 열도 읽어 스티칭 item이 통화 정합을 받도록.
+    info = {r: col for col, r in mapping.items()
+            if r in ("qty", "unit", "price", "amount", "spec", "maker", "part",
+                     "currency", "price_krw", "amount_krw")}
 
     recs = []
     for r in range(header_row + 1, ws.max_row + 1):
@@ -170,7 +182,8 @@ def _read_records(path, sheet, mapping, header_row):
             rec["seq_t"] = seq_tuple(v)
         for role, col in info.items():
             v = cv(r, col)
-            rec[role] = _to_number(v) if role in ("qty", "price", "amount") else (
+            rec[role] = _to_number(v) if role in (
+                "qty", "price", "amount", "price_krw", "amount_krw") else (
                 str(v).strip() if v not in (None, "") else None)
         recs.append(rec)
     wb.close()
@@ -324,6 +337,7 @@ def _stitch_band(sheets):
                 "line_no": f"R{r['row']}",
                 "_matched": matched,
             }
+            _apply_currency(item, r)   # [H10] 통화 정합
             items.append(item)
             if not matched:
                 residuals.append({
@@ -395,6 +409,7 @@ def _stitch_seq(sheets, names=None):
                 "unit_price": r.get("price"), "amount": r.get("amount"),
                 "line_no": f"R{r['row']}", "_matched": matched,
             }
+            _apply_currency(item, r)   # [H10] 통화 정합
             if sname is not None:
                 item["_sheet"] = sname   # [다중 seq_leaf] 시트 출처 태깅(중복정리 경계)
             items.append(item)
@@ -464,6 +479,7 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
             "unit_price": r.get("price"), "amount": r.get("amount"),
             "line_no": f"R{r['row']}", "_matched": matched, "_top_level": top_level,
         }
+        _apply_currency(item, r)   # [H10] 통화 정합
         if _row_gap:
             # 중간 레벨 gap placeholder가 낀 항목 → 미연계 표기(수기 연결 대기).
             #  _run_stitch가 _level_residual를 residual(cross_level_unmatched)로 올린다.
