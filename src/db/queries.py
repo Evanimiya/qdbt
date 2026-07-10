@@ -1696,8 +1696,10 @@ def compare_bid_submissions(bid_id):
             groups = []
             for gkey, vcells in group_map.items():
                 gname = group_disp.get(gkey, gkey)
+                # [코드리뷰 L] 단가 0(무상 제공)도 최저가 후보로 포함. None(미입력·환율
+                #  미확정 외화)만 제외 → 진짜 0원 제안이 은폐되지 않게.
                 gprices = [(v, d["unit_price"])
-                           for v, d in vcells.items() if d["unit_price"]]
+                           for v, d in vcells.items() if d["unit_price"] is not None]
                 g_min_v, g_min_p = (
                     min(gprices, key=lambda x: x[1]) if gprices else (None, None)
                 )
