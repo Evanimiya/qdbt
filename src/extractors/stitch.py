@@ -432,15 +432,25 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
         present = [lv for lv in levels if r.get(lv)]
         complete = all(r.get(lv) for lv in levels)  # 1..deepest 모두 존재?
         # 경로: 존재값 + (필요 시) 행간 상속(best-effort, 사용성 위해)
+        # [레벨 gap 보존] 매핑이 비연속(예: cat2+cat4로 소분류 gap)이면 매핑 안 된 중간
+        #  레벨 자리에 placeholder를 끼워 절대 depth 보존 → 세분류가 소분류 자리로 당겨지지
+        #  않음. 상단(cat1..) 미매칭 padding은 기존대로 _cross_sheet_reparent가 담당.
         parts = []
-        for lv in levels:
-            v = r.get(lv)
-            if v:
-                last_cat[lv] = v
+        _row_gap = False
+        _lv_set = set(levels)
+        for lv in (range(min(levels), max(levels) + 1) if levels else ()):
+            if lv in _lv_set:
+                v = r.get(lv)
+                if v:
+                    last_cat[lv] = v
+                else:
+                    v = last_cat.get(lv)
+                if v:
+                    parts.append(v)
             else:
-                v = last_cat.get(lv)
-            if v:
-                parts.append(v)
+                # 매핑 안 된 중간 레벨(gap) → placeholder로 자리 보존(미연계)
+                parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
+                _row_gap = True
         matched = complete
         _pp, _ln = _part_promote(r, PATH_SEP.join(parts), _leafnm)
         item = {
@@ -450,6 +460,10 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
             "unit_price": r.get("price"), "amount": r.get("amount"),
             "line_no": f"R{r['row']}", "_matched": matched, "_top_level": top_level,
         }
+        if _row_gap:
+            # 중간 레벨 gap placeholder가 낀 항목 → 미연계 표기(수기 연결 대기).
+            #  _run_stitch가 _level_residual를 residual(cross_level_unmatched)로 올린다.
+            item["_level_residual"] = True
         items.append(item)
         if not matched:
             missing = [lv for lv in levels if not r.get(lv)]

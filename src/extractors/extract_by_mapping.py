@@ -204,12 +204,13 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     #  ※ 품명 열이 있는데 특정 행만 비어있는 경우(진짜 소계행)와 구분하기 위한 플래그.
     has_name_col = "name_normalized" in info_cols
 
-    # [레벨 보존] 분류 매핑의 '최상위 의미 레벨'(대=1/중=2/소=3…). 매핑이 중분류(cat2)부터
-    #  시작하면 top_level=2 → 대분류(1) 자리에 placeholder를 끼워 depth를 보존한다.
-    #  cat1부터면 top_level=1 → placeholder 없음(기존 정상 케이스 회귀 없음).
-    _cat_top_level = int(cat_cols[0][0][3:]) if cat_cols else 1
-    _level_pad = [_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT)
-                  for lv in range(1, _cat_top_level)]
+    # [레벨 보존 · gap 포함] 분류 매핑을 '절대 의미 레벨'(대=1/중=2/소=3/세=4)에 배치한다.
+    #  매핑이 비연속(예: 중분류+세분류 → cat2,cat4로 소분류 gap)이거나 중분류부터 시작해도,
+    #  누락된 레벨(상단·중간 모두)을 placeholder로 채워 각 분류가 자기 의미 depth에 놓이게 한다.
+    #  → 세분류가 소분류 자리로 당겨지는 오정렬 방지 + 시트 간 같은 레벨끼리 depth 정렬(연계 가능).
+    #  cat1부터 연속 매핑이면 placeholder 없음(기존 정상 케이스 회귀 없음).
+    _cat_level_col = {int(role[3:]): col for role, col in cat_cols}  # 절대레벨 -> 열
+    _cat_max_level = max(_cat_level_col) if _cat_level_col else 0
 
     # 번호(seq) 열: "1", "1.1", "1.1.2" 패턴으로 계층 구성 (분류명 = 그 행 품목명)
     seq_col = next((c for c, r in column_mapping.items() if r == "seq"), None)
@@ -299,26 +300,34 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
 
             path_str = PATH_SEP.join(parts)
         else:
-            # ── 기존 cat 열 모드 ──
-            parts = []
+            # ── cat 열 모드 (절대 레벨 배치 + gap placeholder) ──
+            # 1) 매핑된 각 cat 역할의 값(빈칸 상속 포함)을 '절대 레벨'에 채운다.
+            _lvl_val = {}       # 절대레벨 -> 값
+            _prev_val = None
             for role, col in cat_cols:
+                lv = int(role[3:])
                 v = cell_val(r, col)
                 v = str(v).strip() if v is not None else ""
                 if not v and fill_down_categories:
                     v = last_cat.get(role, "")
-                if not v and parts:
-                    v = parts[-1]
+                if not v and _prev_val:
+                    v = _prev_val   # 매핑된 깊은 분류가 비면 직전 상위값 상속(기존 동작)
                 if v:
                     last_cat[role] = v
-                    parts.append(v)
+                    _lvl_val[lv] = v
+                    _prev_val = v
                 else:
                     if not fill_down_categories:
                         last_cat[role] = ""
-            # [레벨 보존] 매핑이 중/소분류부터 시작하면(top_level>1) 누락된 상위 레벨 자리에
-            #  placeholder를 끼워 depth 보존 → 중분류가 대분류로 승격되지 않음.
-            if parts and _level_pad:
-                parts = _level_pad + parts
-                _row_level_resid = True
+            # 2) 레벨 1..max로 조립. 값 있으면 그 값, 없으면(상단/중간 gap) placeholder.
+            parts = []
+            if _lvl_val:
+                for lv in range(1, _cat_max_level + 1):
+                    if lv in _lvl_val:
+                        parts.append(_lvl_val[lv])
+                    else:
+                        parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
+                        _row_level_resid = True   # 미연계 레벨(상위 수기 연결 대기)
             path_str = PATH_SEP.join(parts)
 
         # 정보 추출
