@@ -31,6 +31,14 @@ INFO_ROLES = {
 
 PATH_SEP = " > "
 
+# [레벨 보존] 분류 매핑이 대분류(cat1)가 아니라 중/소분류부터 시작할 때(예: 시트가
+#  [중분류>품목]만 있음), 누락된 상위 레벨 자리에 끼워 '의미 레벨'을 보존하는 placeholder.
+#  → 중분류가 대분류(최상위)로 승격되지 않고 정확한 depth에 놓임. 캔버스에서 올바른
+#  상위로 드래그(재부모화)하면 placeholder가 벗겨진다. (stitch._LEVEL_PLACEHOLDER와 동일 값)
+_LEVEL_PLACEHOLDER = {1: "⟨미연계·대분류⟩", 2: "⟨미연계·중분류⟩",
+                      3: "⟨미연계·소분류⟩", 4: "⟨미연계·세분류⟩"}
+_LEVEL_PLACEHOLDER_DEFAULT = "⟨미연계⟩"
+
 
 def _build_merge_fill(sheet):
     """병합 영역을 풀어 {(row,col): 채울값} 반환. (parse_xlsx와 동일 로직)"""
@@ -196,6 +204,13 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     #  ※ 품명 열이 있는데 특정 행만 비어있는 경우(진짜 소계행)와 구분하기 위한 플래그.
     has_name_col = "name_normalized" in info_cols
 
+    # [레벨 보존] 분류 매핑의 '최상위 의미 레벨'(대=1/중=2/소=3…). 매핑이 중분류(cat2)부터
+    #  시작하면 top_level=2 → 대분류(1) 자리에 placeholder를 끼워 depth를 보존한다.
+    #  cat1부터면 top_level=1 → placeholder 없음(기존 정상 케이스 회귀 없음).
+    _cat_top_level = int(cat_cols[0][0][3:]) if cat_cols else 1
+    _level_pad = [_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT)
+                  for lv in range(1, _cat_top_level)]
+
     # 번호(seq) 열: "1", "1.1", "1.1.2" 패턴으로 계층 구성 (분류명 = 그 행 품목명)
     seq_col = next((c for c, r in column_mapping.items() if r == "seq"), None)
     # [BUG A 수정] seq 모드는 seq 열에 '점 계층'(예: 1.1)이 실제로 존재할 때만 발동.
@@ -236,6 +251,7 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         if not any(v is not None and str(v).strip() for v in row_vals):
             continue
 
+        _row_level_resid = False   # [레벨 보존] cat 모드에서 placeholder 삽입 시 True
         # ── 번호(seq) 모드: 번호 패턴으로 계층 구성 ──
         if seq_col is not None:
             seq_raw = cell_val(r, seq_col)
@@ -298,6 +314,11 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 else:
                     if not fill_down_categories:
                         last_cat[role] = ""
+            # [레벨 보존] 매핑이 중/소분류부터 시작하면(top_level>1) 누락된 상위 레벨 자리에
+            #  placeholder를 끼워 depth 보존 → 중분류가 대분류로 승격되지 않음.
+            if parts and _level_pad:
+                parts = _level_pad + parts
+                _row_level_resid = True
             path_str = PATH_SEP.join(parts)
 
         # 정보 추출
@@ -308,6 +329,8 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
             "line_no": f"R{r}",
             "is_category_header": False,
         }
+        if _row_level_resid:
+            item["is_level_residual"] = True   # 캔버스 미연계 표기용(상위 수기 연결 대기)
         for field, col in info_cols.items():
             v = cell_val(r, col)
             if field in ("quantity", "unit_price", "amount",
