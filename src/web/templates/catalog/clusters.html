@@ -51,7 +51,7 @@
       <!-- 클러스터 리셋 -->
       {% if selected_bid %}
       <form method="POST" action="{{ url_for('catalog.reset_clusters') }}"
-            onsubmit="return confirm('선택한 입찰의 모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?');">
+            onsubmit="return confirm('선택한 입찰의 모든 클러스터를 초기화합니다.\n채택된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?');">
         <input type="hidden" name="bid_id" value="{{ selected_bid }}">
         <button type="submit"
                 class="text-sm bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
@@ -80,7 +80,7 @@
   <div class="flex gap-2 mb-5 flex-wrap items-center">
     {% for label, count, color, s in [
       ('검토 대기', summary.pending, 'yellow', 'pending'),
-      ('확정됨',   summary.accepted, 'green', 'accepted'),
+      ('채택됨',   summary.accepted, 'green', 'accepted'),
       ('거부됨',   summary.rejected, 'gray',  'rejected'),
     ] %}
     <a href="{{ url_for('catalog.clusters', status=s, bid_id=selected_bid, sort=selected_sort) }}"
@@ -170,7 +170,7 @@
     <div class="text-5xl mb-3">🔀</div>
     <p class="text-gray-500 break-ko mb-2">
       {% if selected_status == 'pending' %}검토 대기 중인 클러스터가 없습니다.
-      {% elif selected_status == 'accepted' %}아직 확정된 클러스터가 없습니다.
+      {% elif selected_status == 'accepted' %}아직 채택된 클러스터가 없습니다.
       {% else %}거부된 클러스터가 없습니다.{% endif %}
     </p>
     {% if selected_status == 'pending' %}
@@ -215,7 +215,7 @@
                   {% elif cl.status == 'held' %}bg-blue-100 text-blue-700
                   {% else %}bg-gray-100 text-gray-500{% endif %}">
                   {% if cl.status == 'pending' %}검토 대기
-                  {% elif cl.status == 'accepted' %}✅ 확정됨
+                  {% elif cl.status == 'accepted' %}✅ 채택됨
                   {% elif cl.status == 'held' %}⏸ 보류
                   {% else %}거부됨{% endif %}
                 </span>
@@ -260,7 +260,7 @@
               {% elif cl.status in ['accepted', 'rejected', 'held'] %}
               <form method="POST"
                     action="{{ url_for('catalog.reopen_cluster_route', cluster_id=cl.cluster_id) }}"
-                    onsubmit="return confirm('검토 대기로 되돌리시겠습니까?{% if cl.status == 'accepted' %} 확정으로 생성된 카탈로그 항목이 삭제됩니다.{% endif %}')">
+                    onsubmit="return confirm('검토 대기로 되돌리시겠습니까?{% if cl.status == 'accepted' %} 채택으로 생성된 카탈로그 항목이 삭제됩니다.{% endif %}')">
                 <button class="text-xs bg-yellow-50 hover:bg-yellow-100 text-yellow-700 font-semibold
                                px-2.5 py-1.5 rounded-lg transition-colors whitespace-nowrap">
                   ↩ 재검토

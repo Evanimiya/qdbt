@@ -123,7 +123,7 @@ body.qdnd-drag .vendor-cell::selection { background:transparent; }#qdndGhost{pos
     </form>
     <form method="POST"
           action="{{ url_for('compare.reset_clusters_from_compare', bid_id=bid.bid_id) }}"
-          onsubmit="return confirm('모든 클러스터를 초기화합니다.\n확정된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')"
+          onsubmit="return confirm('모든 클러스터를 초기화합니다.\n채택된 클러스터의 카탈로그 항목도 삭제됩니다.\n계속하시겠습니까?')"
           class="flex items-center">
       <button type="submit"
               class="text-sm bg-red-50 hover:bg-red-100 text-red-700 border border-red-200
@@ -175,7 +175,7 @@ function qdSyncModel(form){
 {% endif %}
 
 {% if data.clusters %}
-<!-- 클러스터 도구: 접기/펼치기 + 일괄 확정 (③④) -->
+<!-- 클러스터 도구: 접기/펼치기 + 일괄 채택 (③④) -->
 <div class="flex items-center gap-2 flex-wrap mb-3 text-xs">
   <div class="flex items-center gap-1">
     <button type="button" onclick="qdAllCats(false)"
@@ -188,13 +188,13 @@ function qdSyncModel(form){
   <label class="inline-flex items-center gap-1.5 cursor-pointer">
     <input type="checkbox" id="qdAcceptAll" onchange="qdToggleAllAccept(this)"
            style="accent-color:#16A34A;width:14px;height:14px">
-    <span class="text-gray-600 font-medium">확정 대상 전체 선택</span>
+    <span class="text-gray-600 font-medium">채택 대상 전체 선택</span>
   </label>
   <span id="qdAcceptCount" class="text-gray-500"></span>
   <button type="button" id="qdAcceptBtn" onclick="qdBatchAccept()" disabled
           class="bg-green-600 hover:bg-green-700 text-white font-semibold px-3 py-1.5 rounded-lg
                  transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-    ✅ 선택 일괄 확정
+    ✅ 선택 일괄 채택
   </button>
   <form method="POST" id="qdBatchAcceptForm"
         action="{{ url_for('compare.accept_batch_from_compare', bid_id=bid.bid_id) }}" class="hidden">
@@ -508,7 +508,7 @@ function qdSyncModel(form){
   {% set inner_border = '#BBF7D0' if cl.status == 'accepted'
                         else '#E2E8F0' if cl.status == 'held'
                         else '#FDE68A' %}
-  {% set badge_txt = '✅ 확정' if cl.status == 'accepted'
+  {% set badge_txt = '✅ 채택' if cl.status == 'accepted'
                      else '⏸ 보류' if cl.status == 'held'
                      else '검토 대기' %}
   {% set badge_style = 'background:#BBF7D0;color:#15803D' if cl.status == 'accepted'
@@ -616,10 +616,10 @@ function qdSyncModel(form){
       <div style="display:flex;gap:2px;flex-wrap:nowrap;margin-bottom:3px">
         <form method="POST"
               action="{{ url_for('compare.accept_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}"
-              onsubmit="return confirm('확정하시겠습니까?\n카탈로그에 자동 등록됩니다.')" class="inline">
+              onsubmit="return confirm('채택하시겠습니까?\n카탈로그에 자동 등록됩니다.')" class="inline">
           <input type="hidden" name="representative_name" value="{{ cl.representative_name|leaf }}">
           <button style="font-size:9px;padding:1px 5px;border-radius:3px;border:0.5px solid #16A34A;
-                         background:#DCFCE7;color:#15803D;cursor:pointer;font-weight:500;white-space:nowrap">✅ 확정</button>
+                         background:#DCFCE7;color:#15803D;cursor:pointer;font-weight:500;white-space:nowrap">✅ 채택</button>
         </form>
         <form method="POST"
               action="{{ url_for('compare.hold_cluster_from_compare', bid_id=bid.bid_id, cluster_id=cl.cluster_id) }}" class="inline">
@@ -656,7 +656,7 @@ function qdSyncModel(form){
       </div>
       {% endif %}
 
-      {# 병합·확정 선택 (한 줄, 항목 8) #}
+      {# 병합·채택 선택 (한 줄, 항목 8) #}
       <div style="display:flex;align-items:center;gap:6px;margin-top:2px;font-size:8px;flex-wrap:nowrap">
         <label style="color:#7C3AED;cursor:pointer;display:inline-flex;align-items:center;gap:2px" title="병합 대상으로 선택">
           <input type="checkbox" class="cluster-sel-chk"
@@ -666,11 +666,11 @@ function qdSyncModel(form){
         </label>
         {% if has_role('manager') and cl.status in ('pending', 'held') %}
         <span style="color:#CBD5E1">|</span>
-        <label style="color:#15803D;cursor:pointer;display:inline-flex;align-items:center;gap:2px" title="일괄 확정 대상으로 선택">
+        <label style="color:#15803D;cursor:pointer;display:inline-flex;align-items:center;gap:2px" title="일괄 채택 대상으로 선택">
           <input type="checkbox" class="qd-accept-chk"
                  value="{{ cl.cluster_id }}" data-name="{{ cl.representative_name|leaf }}"
                  onchange="qdOnAcceptSel()"
-                 style="accent-color:#16A34A;width:10px;height:10px">확정
+                 style="accent-color:#16A34A;width:10px;height:10px">채택
         </label>
         {% endif %}
       </div>
@@ -762,7 +762,7 @@ function qdSyncModel(form){
           <div>단가 {{ '{:,}'.format(bm.min_p|int) }}</div>
         </div>
       {% elif cl.status != 'accepted' %}
-        <div style="font-size:8px;color:#CBD5E1;margin-top:2px">확정 후 표시</div>
+        <div style="font-size:8px;color:#CBD5E1;margin-top:2px">채택 후 표시</div>
       {% endif %}
     </td>
     {% endif %}
@@ -1757,7 +1757,7 @@ function qdAllCats(expand){
   });
 }
 
-/* ── ④ 일괄 확정 ── */
+/* ── ④ 일괄 채택 ── */
 function qdSelectedAccepts(){
   return Array.prototype.slice.call(document.querySelectorAll('.qd-accept-chk:checked'))
     .map(function(c){ return c.value; });
@@ -1779,7 +1779,7 @@ function qdToggleAllAccept(master){
 function qdBatchAccept(){
   var ids = qdSelectedAccepts();
   if(!ids.length) return;
-  if(!confirm(ids.length + '개 클러스터를 일괄 확정하시겠습니까?\n\n확정된 클러스터는 카탈로그에 자동 등록됩니다.\n(개별적으로 재검토 상태로 되돌릴 수 있습니다)')) return;
+  if(!confirm(ids.length + '개 클러스터를 일괄 채택하시겠습니까?\n\n채택된 클러스터는 카탈로그에 자동 등록됩니다.\n(개별적으로 재검토 상태로 되돌릴 수 있습니다)')) return;
   document.getElementById('qdBatchAcceptIds').value = JSON.stringify(ids);
   document.getElementById('qdBatchAcceptForm').submit();
 }
@@ -1830,7 +1830,7 @@ function qdBatchAccept(){
     if(kind==='items'){
       for(var i=0;i<payload.ids.length;i++){
         if(itemInAccepted(payload.ids[i])){
-          toast('⚠ 확정된 클러스터의 품목은 이동할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');
+          toast('⚠ 채택된 클러스터의 품목은 이동할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');
           return;
         }
       }
@@ -1908,7 +1908,7 @@ function qdBatchAccept(){
 
   function dropMove(ids,td){
     if(td.dataset.clStatus==='accepted'){
-      toast('⚠ 확정된 클러스터에는 편입할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');return;}
+      toast('⚠ 채택된 클러스터에는 편입할 수 없습니다 — 먼저 ↩ 재검토로 되돌리세요');return;}
     var cid=td.dataset.clusterId;
     var opt=document.querySelector('#clusterSelect option[value="'+cid+'"]');
     if(!opt){toast('⚠ 이 클러스터로는 이동할 수 없습니다');return;}
@@ -1941,7 +1941,7 @@ function qdBatchAccept(){
   }
   function dropMerge(payload,td){
     if(td.dataset.clStatus==='accepted'||payload.srcStatus==='accepted'){
-      toast('⚠ 확정 클러스터는 병합 대상이 될 수 없습니다');return;}
+      toast('⚠ 채택 클러스터는 병합 대상이 될 수 없습니다');return;}
     var dst=td.dataset.clusterId;
     var repEl=td.querySelector('.cl-pick .rep')||td;
     var dstName=repEl.textContent.trim();
@@ -1957,7 +1957,7 @@ function qdBatchAccept(){
       if(el.dataset.clType==='cluster'){
         var td=el.closest('td[data-drop="cluster"]');
         if(!td)return;
-        if(td.dataset.clStatus==='accepted')return;  // 확정 ◉: 기존 클릭 선택만
+        if(td.dataset.clStatus==='accepted')return;  // 채택 ◉: 기존 클릭 선택만
         arm(e,'merge',{srcId:td.dataset.clusterId,
                        srcStatus:td.dataset.clStatus,
                        name:(el.dataset.name||'').trim()},el.closest('tr'));

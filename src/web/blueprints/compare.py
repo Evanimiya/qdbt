@@ -482,12 +482,12 @@ def accept_cluster_from_compare(bid_id, cluster_id):
         conn.row_factory = sqlite3.Row
         result = do_accept(conn, cluster_id, uid, rep_name)
         conn.close()
-        msg = f"✅ '{result['representative_name']}' 확정"
+        msg = f"✅ '{result['representative_name']}' 채택"
         if result.get('catalog_item_id'):
             msg += f" — 카탈로그 등록 완료 (가격 이력 {result.get('price_history_count', 0)}건)"
         flash(msg, "success")
     except Exception as e:
-        flash(f"❌ 확정 실패: {e}", "error")
+        flash(f"❌ 채택 실패: {e}", "error")
 
     return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
@@ -730,7 +730,7 @@ def accept_batch_from_compare(bid_id):
         ids = []
     ids = [i for i in ids if i]
     if not ids:
-        flash("확정할 클러스터를 선택하세요.", "warning")
+        flash("채택할 클러스터를 선택하세요.", "warning")
         return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
     ok, fail = 0, 0
@@ -749,12 +749,12 @@ def accept_batch_from_compare(bid_id):
         conn.close()
 
     if ok:
-        msg = f"✅ {ok}개 클러스터를 일괄 확정했습니다."
+        msg = f"✅ {ok}개 클러스터를 일괄 채택했습니다."
         if fail:
             msg += f" ({fail}개 실패)"
         flash(msg, "success" if not fail else "warning")
     else:
-        flash(f"❌ 일괄 확정 실패: {errors[0] if errors else '알 수 없는 오류'}", "error")
+        flash(f"❌ 일괄 채택 실패: {errors[0] if errors else '알 수 없는 오류'}", "error")
     return redirect(url_for("compare.bid_compare", bid_id=bid_id, _t=tok))
 
 
