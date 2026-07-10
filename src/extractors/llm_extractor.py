@@ -36,7 +36,8 @@ def _load_system_prompt() -> str:
     prompt_path = Path(__file__).parent.parent.parent / "docs" / "prompt_extract_v1.md"
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8")
-    return """당신은 한국 IT 입찰 견적서를 분석하여 구조화된 JSON으로 추출하는 시스템입니다.
+    return """당신은 입찰 견적서를 분석하여 구조화된 JSON으로 추출하는 시스템입니다.
+특정 산업에 종속되지 않습니다 — 견적서에 실제로 적힌 분류·통화를 그대로 쓰세요(고정 목록 아님).
 순수 JSON만 응답하세요 (설명, 마크다운 펜스 없이).
 
 필수 필드:
@@ -44,10 +45,10 @@ def _load_system_prompt() -> str:
   "vendor_name": "string",
   "proposal_no": "string|null",
   "proposal_date": "YYYY-MM-DD|null",
-  "currency": "KRW|USD",
-  "currency_unit": "원",
+  "currency": "견적서 표기 통화 코드 (KRW/USD/CNY/EUR/JPY 등)",
+  "currency_unit": "통화 단위 표기 (원/$/¥ 등)",
   "amount_summary": {"subtotal_excl_vat": number, "vat": number, "grand_total": number},
-  "category_totals": {"자재": number, "인건비": number, "출장비": number, "영업이익": number, "관리비": number},
+  "category_totals": {"<실제 대분류명>": number},
   "headers_detected": {},
   "value_normalizations": [],
   "items": [
@@ -55,7 +56,7 @@ def _load_system_prompt() -> str:
       "line_no": "string",
       "depth": 0,
       "is_category_header": false,
-      "category": "자재|인건비|출장비|영업이익|관리비",
+      "category": "<이 항목의 최상위 대분류명 — 견적서 표기 그대로>",
       "parent_path": "string",
       "name_raw": "string",
       "name_normalized": "string",
@@ -64,16 +65,17 @@ def _load_system_prompt() -> str:
       "quantity": number|null,
       "unit": "string|null",
       "unit_price": number|null,
-      "unit_price_currency_in_source": "원|USD",
+      "unit_price_currency_in_source": "이 항목 단가의 통화 코드 (KRW/USD/CNY 등)",
       "amount": number|null,
       "source_location": "string"
     }
   ],
-  "validation": {"items_sum_matches_grand_total": bool, "items_sum_value": number, "discrepancy_pct": number, "warnings": []}
+  "validation": {"items_sum_matches_subtotal": bool, "items_sum_value": number, "discrepancy_pct": number, "warnings": []}
 }"""
 
 
-CHUNK_SYSTEM_PROMPT = """당신은 한국 IT 입찰 견적서의 일부 구간을 분석하여 라인 아이템만 추출하는 시스템입니다.
+CHUNK_SYSTEM_PROMPT = """당신은 입찰 견적서의 일부 구간을 분석하여 라인 아이템만 추출하는 시스템입니다.
+특정 산업에 종속되지 않습니다 — 분류·통화는 견적서 표기 그대로(고정 목록 아님).
 순수 JSON만 응답하세요 (설명, 마크다운 펜스 없이).
 
 ★ parent_path 규칙 (매우 중요):
@@ -87,7 +89,7 @@ CHUNK_SYSTEM_PROMPT = """당신은 한국 IT 입찰 견적서의 일부 구간�
 - 병합으로 비어 있는 상위 분류는 위 행에서 상속해 채우세요.
   (대분류·중분류가 세로 병합으로 빈 칸이면 위에서 이어받기)
 - parent_path에 품명 자체는 넣지 마세요 (품명은 name_normalized).
-- 대분류(재료비/인건비/출장비/영업이익/관리비 등)를 절대 빠뜨리지 마세요.
+- 최상위 대분류(견적서에 적힌 분류명 그대로)를 절대 빠뜨리지 마세요.
 
 출력 형식 (items 배열만):
 {
@@ -96,7 +98,7 @@ CHUNK_SYSTEM_PROMPT = """당신은 한국 IT 입찰 견적서의 일부 구간�
       "line_no": "string",
       "depth": 0,
       "is_category_header": false,
-      "category": "자재|인건비|출장비|영업이익|관리비",
+      "category": "<이 항목의 최상위 대분류명 — 견적서 표기 그대로>",
       "parent_path": "대분류 > 중분류 > 소분류 (전체 경로, 구분자 ' > ')",
       "name_raw": "string",
       "name_normalized": "string",
@@ -105,7 +107,7 @@ CHUNK_SYSTEM_PROMPT = """당신은 한국 IT 입찰 견적서의 일부 구간�
       "quantity": number|null,
       "unit": "string|null",
       "unit_price": number|null,
-      "unit_price_currency_in_source": "원|USD",
+      "unit_price_currency_in_source": "단가 통화 코드 (KRW/USD/CNY 등)",
       "amount": number|null,
       "source_location": "string"
     }
