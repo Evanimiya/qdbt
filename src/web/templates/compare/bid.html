@@ -179,9 +179,9 @@ function qdSyncModel(form){
 <div class="flex items-center gap-2 flex-wrap mb-3 text-xs">
   <div class="flex items-center gap-1">
     <button type="button" onclick="qdAllCats(false)"
-            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg">▸ 전체 접기</button>
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg">▸ 분류 접기</button>
     <button type="button" onclick="qdAllCats(true)"
-            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg">▾ 전체 펼치기</button>
+            class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-2.5 py-1.5 rounded-lg" title="분류(카테고리) 단위 접기/펼치기 — 묶음 내부 잎은 각 묶음의 [잎 펼치기]로">▾ 분류 펼치기</button>
   </div>
   <span class="text-gray-300">|</span>
   {% if has_role('manager') %}
@@ -568,6 +568,19 @@ function qdSyncModel(form){
                          padding:0 5px;margin-left:3px;cursor:help;vertical-align:middle">
               ⚠ 분류혼재
             </span>
+            {% endif %}
+            {% if cl.n_leaves and cl.n_leaves > 0 %}
+            {# [T8 잎펼치기] 묶음 하위 잎을 팝업(접이식 트리+검색)으로. 표시 전용·원본 불변. #}
+            <button type="button" class="qd-leaf-exp"
+                    data-cluster-id="{{ cl.cluster_id }}"
+                    data-cluster-name="{{ cl.representative_name|leaf }}"
+                    onclick="event.stopPropagation();openLeafModal(this)"
+                    title="묶음 하위 잎 펼치기 (표시 전용 · 원본·총액 불변)"
+                    style="display:inline-block;font-size:9px;font-weight:800;color:#1C7293;
+                           background:#fff;border:1px solid #1C7293;border-radius:8px;
+                           padding:0 6px;margin-left:4px;cursor:pointer;vertical-align:middle">
+              ⤢ 잎 {{ cl.n_leaves }}
+            </button>
             {% endif %}
           </div>
           {% set _cl_path = cl.representative_name|treepath %}
@@ -1981,5 +1994,155 @@ function qdBatchAccept(){
 /*QDND-END*/
 
 refresh();
+</script>
+
+{# ───────── [T8] 클러스터 잎 펼치기 팝업 (접이식 트리 + 검색, 표시 전용) ───────── #}
+<style>
+  .lfx-veil{position:fixed;inset:0;background:rgba(15,42,67,.45);z-index:9000;display:flex;
+            align-items:center;justify-content:center;padding:16px}
+  .lfx-modal{width:100%;max-width:720px;max-height:86vh;display:flex;flex-direction:column;
+             background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden;
+             font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif;color:#0F2A43}
+  .lfx-head{background:#1C7293;color:#fff;padding:12px 16px;display:flex;align-items:center;
+            justify-content:space-between;flex:0 0 auto}
+  .lfx-head .t{font-size:14px;font-weight:800}
+  .lfx-head .x{font-size:16px;font-weight:800;cursor:pointer;opacity:.9;background:none;border:0;color:#fff}
+  .lfx-tools{display:flex;gap:8px;align-items:center;padding:9px 16px;border-bottom:1px solid #D8E3EA;
+             background:#f7fafc;flex:0 0 auto}
+  .lfx-tools input{flex:1;font-size:12.5px;border:1px solid #D8E3EA;border-radius:7px;padding:7px 10px;outline:none}
+  .lfx-tools button{font-size:11px;font-weight:700;border:1px solid #D8E3EA;background:#fff;color:#0F2A43;
+                    border-radius:6px;padding:6px 9px;cursor:pointer}
+  .lfx-body{overflow:auto;padding:6px 8px}
+  .lfx-grp{margin:3px 4px}
+  .lfx-grph{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#eef3f6;border-radius:8px;
+            cursor:pointer;font-size:12.5px;font-weight:800;color:#0F2A43}
+  .lfx-grph .car{color:#1C7293;width:12px}
+  .lfx-grph .cnt{font-size:10.5px;font-weight:700;color:#64748B;margin-left:auto}
+  .lfx-colhead,.lfx-leaf{display:grid;padding:6px 10px 6px 30px;font-size:11.5px}
+  .lfx-colhead{font-weight:800;color:#64748B;font-size:10.5px}
+  .lfx-colhead span,.lfx-leaf .lv{text-align:right;font-variant-numeric:tabular-nums}
+  .lfx-colhead span:first-child,.lfx-leaf .nm{text-align:left}
+  .lfx-leaf{border-bottom:1px solid #f1f5f9;color:#334155}
+  .lfx-leaf .lo{color:#2f8f5b;font-weight:800}
+  .lfx-foot{flex:0 0 auto;border-top:1px solid #D8E3EA;padding:9px 16px;font-size:11.5px;
+            background:#f0f7f2;color:#0F2A43;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .lfx-foot .chk{color:#2f8f5b;font-weight:800}
+  .lfx-foot .warn{color:#B45309;font-weight:800}
+</style>
+<script>
+(function(){
+  function urlFor(cid){
+    return "{{ url_for('compare.cluster_leaves', bid_id=bid.bid_id, cluster_id='__CID__') }}"
+             .replace('__CID__', encodeURIComponent(cid))
+             + "?_t={{ request.args.get('_t','') }}";
+  }
+  function won(n){ return (n==null)? '—' : Number(n).toLocaleString('en-US'); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  window.openLeafModal = function(btn){
+    var cid = btn.getAttribute('data-cluster-id');
+    var cname = btn.getAttribute('data-cluster-name') || '묶음';
+    var veil = document.createElement('div'); veil.className='lfx-veil';
+    veil.innerHTML = '<div class="lfx-modal"><div class="lfx-head">'
+      + '<span class="t">'+esc(cname)+' — 하위 잎</span>'
+      + '<button class="x" aria-label="닫기">✕</button></div>'
+      + '<div class="lfx-body" style="padding:24px;text-align:center;color:#64748B">불러오는 중…</div></div>';
+    document.body.appendChild(veil);
+    function close(){ if(veil.parentNode) veil.parentNode.removeChild(veil); document.removeEventListener('keydown',onKey); }
+    function onKey(e){ if(e.key==='Escape') close(); }
+    veil.querySelector('.x').onclick=close;
+    veil.onclick=function(e){ if(e.target===veil) close(); };
+    document.addEventListener('keydown',onKey);
+
+    fetch(urlFor(cid),{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){
+      render(veil, d, cname);
+    }).catch(function(e){
+      veil.querySelector('.lfx-modal').innerHTML =
+        '<div class="lfx-head"><span class="t">'+esc(cname)+'</span><button class="x">✕</button></div>'
+        + '<div class="lfx-body" style="padding:24px;color:#dc2626">불러오기 실패: '+esc(e)+'</div>';
+      veil.querySelector('.x').onclick=close;
+    });
+  };
+
+  function render(veil, d, cname){
+    var vendors = d.vendors||[];
+    var groups = d.groups||[];
+    var cols = '1fr repeat('+vendors.length+', minmax(74px,96px))';
+    // 헤더 열
+    var colhead = '<div class="lfx-colhead" style="grid-template-columns:'+cols+'"><span>잎 항목</span>'
+      + vendors.map(function(v){return '<span>'+esc(v)+'</span>';}).join('') + '</div>';
+    var body = groups.map(function(gr,gi){
+      var leaves = gr.rows.map(function(rw){
+        var cells = vendors.map(function(v){
+          var c = rw.cells[v];
+          var isLo = rw.min_vendor && v===rw.min_vendor;
+          return '<span class="lv '+(isLo?'lo':'')+'">'+won(c?c.amount:null)+'</span>';
+        }).join('');
+        return '<div class="lfx-leaf" data-nm="'+esc((rw.name||'').toLowerCase())+'" '
+             + 'style="grid-template-columns:'+cols+'"><span class="nm">'+esc(rw.name)+'</span>'+cells+'</div>';
+      }).join('');
+      return '<div class="lfx-grp" data-gi="'+gi+'"><div class="lfx-grph"><span class="car">▸</span>'
+           + '<span>'+esc(gr.group)+'</span><span class="cnt">'+gr.n+'개</span></div>'
+           + '<div class="lfx-ch" style="display:none">'+colhead+'</div>'
+           + '<div class="lfx-leaves" style="display:none">'+leaves+'</div></div>';
+    }).join('') || '<div style="padding:20px;text-align:center;color:#64748B">펼칠 하위 잎이 없습니다.</div>';
+
+    // 푸터: 소계 정합 + 업체별 잎 합
+    var vt = d.vendor_totals||{};
+    var totals = vendors.map(function(v){return esc(v)+' '+won(vt[v]||0);}).join('  ·  ');
+    var chk = d.subtotal_ok
+      ? '<span class="chk">✓ 소계 정합 — 잎 합 = 묶음 금액 (총액 불변)</span>'
+      : '<span class="warn">⚠ 소계 불일치 — 데이터 확인 필요</span>';
+
+    var m = veil.querySelector('.lfx-modal');
+    m.innerHTML =
+      '<div class="lfx-head"><span class="t">'+esc(cname)+' — 하위 잎 ('+(d.n_leaves||0)+'개)</span>'
+      + '<button class="x" aria-label="닫기">✕</button></div>'
+      + '<div class="lfx-tools"><input placeholder="잎 이름 검색…">'
+      + '<button class="allbtn">모두 펼치기</button></div>'
+      + '<div class="lfx-body">'+body+'</div>'
+      + '<div class="lfx-foot">'+chk+'<span>'+totals+'</span></div>';
+
+    function close(){ if(veil.parentNode) veil.parentNode.removeChild(veil); }
+    m.querySelector('.x').onclick=close;
+    var bodyEl = m.querySelector('.lfx-body');
+    // 그룹 토글
+    bodyEl.querySelectorAll('.lfx-grph').forEach(function(h){
+      h.onclick=function(){
+        var grp=h.parentNode, lv=grp.querySelector('.lfx-leaves'), ch=grp.querySelector('.lfx-ch');
+        var on = lv.style.display!=='none';
+        lv.style.display=on?'none':'block'; ch.style.display=on?'none':'block';
+        h.querySelector('.car').textContent=on?'▸':'▾';
+      };
+    });
+    // 모두 펼치기/접기
+    m.querySelector('.allbtn').onclick=function(){
+      var anyClosed=[].some.call(bodyEl.querySelectorAll('.lfx-leaves'),function(l){return l.style.display==='none';});
+      bodyEl.querySelectorAll('.lfx-grp').forEach(function(grp){
+        grp.querySelector('.lfx-leaves').style.display=anyClosed?'block':'none';
+        grp.querySelector('.lfx-ch').style.display=anyClosed?'block':'none';
+        grp.querySelector('.car').textContent=anyClosed?'▾':'▸';
+      });
+      this.textContent=anyClosed?'모두 접기':'모두 펼치기';
+    };
+    // 검색
+    m.querySelector('input').oninput=function(){
+      var q=this.value.trim().toLowerCase();
+      bodyEl.querySelectorAll('.lfx-grp').forEach(function(grp){
+        var shown=0;
+        grp.querySelectorAll('.lfx-leaf').forEach(function(lf){
+          var hit=!q || lf.dataset.nm.indexOf(q)>=0;
+          lf.style.display=hit?'grid':'none'; if(hit)shown++;
+        });
+        var open=q!=='';
+        grp.querySelector('.lfx-leaves').style.display=(open&&shown)?'block':(q?'none':grp.querySelector('.lfx-leaves').style.display);
+        grp.querySelector('.lfx-ch').style.display=(open&&shown)?'block':(q?'none':grp.querySelector('.lfx-ch').style.display);
+        grp.querySelector('.car').textContent=(open&&shown)?'▾':'▸';
+        grp.style.display=(q&&!shown)?'none':'block';
+      });
+    };
+  }
+})();
 </script>
 {% endblock %}

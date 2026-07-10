@@ -1637,6 +1637,8 @@ def compare_bid_submissions(bid_id):
                         _path = it["path"]
                     except (KeyError, IndexError):
                         _path = it.get("path") if hasattr(it, "get") else None
+                    # [T8 잎펼치기] 묶음이면 품은 잎 id 보존(읽기 전용 조회용). 단일 잎은 자기 id.
+                    _lf = it.get("member_item_ids") if hasattr(it, "get") else None
                     cluster_items.append({
                         "item_id":         it["item_id"],
                         "vendor_name":     it["vendor_name"],
@@ -1649,6 +1651,7 @@ def compare_bid_submissions(bid_id):
                         "amount":          it["amount"],
                         "category":        it["category"],
                         "path":            _path,
+                        "_leaf_ids":       sorted(_lf) if _lf else [],
                     })
 
             if not cluster_items:
@@ -1750,6 +1753,13 @@ def compare_bid_submissions(bid_id):
                 default=None
             ) if min_vendor else None
 
+            # [T8 잎펼치기] 이 클러스터가 품은 '묶음 하위 잎' 총수(단일 잎만 있으면 0 → 펼침 없음).
+            _clu_leaf_ids = set()
+            for ci in cluster_items:
+                lf = ci.get("_leaf_ids") or []
+                if len(lf) > 1:                      # 실제 묶음(잎 2개 이상)만 펼침 대상
+                    _clu_leaf_ids.update(lf)
+
             clusters_data.append({
                 "cluster_id":          cl["cluster_id"],
                 "representative_name": cl["representative_name"],
@@ -1759,6 +1769,7 @@ def compare_bid_submissions(bid_id):
                 "cat_distribution":    cat_distribution,  # 분류별 개수 {자재:1, 인건비:2}
                 "members":             cluster_items,
                 "groups":              groups,
+                "n_leaves":            len(_clu_leaf_ids),   # >0 이면 '잎 펼치기' 버튼
                 "min_vendor":          min_vendor,
                 "min_price":           min_price,       # amount 합계
                 "min_unit_price":      min_unit_price,  # 대표 단가 (벤치마크 비교용)
@@ -2045,6 +2056,94 @@ def compare_bid_submissions(bid_id):
             "fx_rates":        fx_rates,
             "benchmarks":      benchmarks,
         }
+
+
+def get_cluster_leaves(bid_id, cluster_id):
+    """[T8 잎펼치기] 한 클러스터의 묶음 하위 잎을 그룹(상위 분류)별로 정리해 반환.
+
+    표시 전용·읽기 전용(submission_items 불변). 잎 매칭은 '같은 이름'끼리만(결정 ④).
+    Σ잎 == 묶음 amount(업체별) 정합 검증. 클러스터 조작·재매칭 없음.
+
+    반환: {
+      cluster_id, name, n_leaves, vendors,
+      groups: [{group, n, rows: [{name, cells: {vendor: {amount,unit_price,quantity,unit,spec}},
+                                   min_vendor, min_amount}]}],
+      vendor_totals, bundle_totals, subtotal_ok
+    }
+    """
+    from collections import defaultdict as _dd
+    data = compare_bid_submissions(bid_id)
+    vendors = data.get("vendors", [])
+    cl = next((c for c in data.get("clusters", []) if c["cluster_id"] == cluster_id), None)
+    empty = {"cluster_id": cluster_id, "name": "", "n_leaves": 0,
+             "vendors": vendors, "groups": [], "vendor_totals": {},
+             "bundle_totals": {}, "subtotal_ok": True}
+    if not cl:
+        return empty
+
+    # 이 클러스터의 '묶음'(잎 2개 이상) 셀에서 잎 id + 업체별 묶음 금액 수집
+    leaf_ids = set()
+    bundle_totals = _dd(float)
+    for m in cl.get("members", []):
+        lf = m.get("_leaf_ids") or []
+        if len(lf) > 1:
+            leaf_ids.update(lf)
+            bundle_totals[m["vendor_name"]] += (m.get("amount") or 0)
+    if not leaf_ids:
+        return {**empty, "name": cl.get("representative_name") or ""}
+
+    # 잎 원본 조회 (읽기 전용) + 업체
+    with get_conn() as c:
+        ph = ",".join("?" * len(leaf_ids))
+        rows = [dict(r) for r in c.execute(f"""
+            SELECT si.item_id, si.name_raw, si.name_normalized, si.spec, si.unit,
+                   si.quantity, si.unit_price, si.amount, si.path, si.category,
+                   s.vendor_name
+            FROM submission_items si JOIN submissions s USING (submission_id)
+            WHERE si.item_id IN ({ph}) AND si.is_header = 0
+        """, tuple(sorted(leaf_ids))).fetchall()]
+
+    # 그룹(상위 분류) → 잎 이름 → 업체 셀
+    grouped = _dd(lambda: _dd(dict))    # group -> name -> vendor -> cell
+    vendor_totals = _dd(float)
+    for d in rows:
+        parts = _split_path(d.get("path") or "")
+        name = (d.get("name_normalized") or d.get("name_raw") or "").strip() or "미명명"
+        if parts and parts[-1] != name:
+            grp = parts[-1]                       # 잎의 최말단 분류
+        elif len(parts) >= 2:
+            grp = parts[-2]
+        else:
+            grp = d.get("category") or "기타"
+        grouped[grp][name][d["vendor_name"]] = {
+            "amount": d.get("amount"), "unit_price": d.get("unit_price"),
+            "quantity": d.get("quantity"), "unit": d.get("unit"), "spec": d.get("spec"),
+        }
+        vendor_totals[d["vendor_name"]] += (d.get("amount") or 0)
+
+    out_groups = []
+    for grp in sorted(grouped):
+        rows_out = []
+        for name in sorted(grouped[grp]):
+            cells = grouped[grp][name]
+            # 잎 단위 최저가 — 같은 이름끼리만(결정 ④). amount 기준.
+            amts = [(v, cc["amount"]) for v, cc in cells.items() if cc.get("amount") is not None]
+            mv, ma = (min(amts, key=lambda x: x[1]) if amts else (None, None))
+            rows_out.append({"name": name, "cells": cells,
+                             "min_vendor": mv, "min_amount": ma})
+        out_groups.append({"group": grp, "n": len(rows_out), "rows": rows_out})
+
+    # Σ잎 == 묶음(업체별) 정합 (±1원)
+    allv = set(vendor_totals) | set(bundle_totals)
+    subtotal_ok = all(abs(vendor_totals.get(v, 0) - bundle_totals.get(v, 0)) <= 1.0
+                      for v in allv)
+    return {
+        "cluster_id": cluster_id, "name": cl.get("representative_name") or "",
+        "n_leaves": sum(g["n"] for g in out_groups), "vendors": vendors,
+        "groups": out_groups,
+        "vendor_totals": dict(vendor_totals), "bundle_totals": dict(bundle_totals),
+        "subtotal_ok": subtotal_ok,
+    }
 
 
 # ─── 입찰 간 단순 비교 (Phase 2 전 임시) ────────

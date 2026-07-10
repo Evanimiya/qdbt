@@ -235,6 +235,16 @@ def clusters_json(bid_id):
     return jsonify({"clusters": out, "method": method, "for": for_id})
 
 
+@bp.route("/bid/<bid_id>/cluster/<cluster_id>/leaves")
+@login_required
+def cluster_leaves(bid_id, cluster_id):
+    """[T8 잎펼치기] 한 클러스터의 묶음 하위 잎을 그룹별로 반환(표시 전용·읽기 전용)."""
+    from db.queries import get_cluster_leaves
+    if not get_bid(bid_id):
+        abort(404)
+    return jsonify(get_cluster_leaves(bid_id, cluster_id))
+
+
 @bp.route("/bid/<bid_id>")
 @login_required
 def bid_compare(bid_id):
