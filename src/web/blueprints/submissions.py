@@ -574,10 +574,13 @@ def set_fx_rate(submission_id):
     가 보존되므로 재추출 없이 환율만 교정 가능.
     """
     from db.queries import set_submission_fx_rate
+    from core.numparse import parse_amount
     currency = request.form.get("currency", "").strip().upper()
-    rate_raw = request.form.get("rate", "").strip().replace(",", "")
+    # [코드리뷰 L2] 콤마만 제거하던 것 → 공용 파서(통화기호·유럽식 등) + 양수 검증.
+    rate = parse_amount(request.form.get("rate", ""))
     try:
-        rate = float(rate_raw)
+        if rate is None or rate <= 0:
+            raise ValueError("환율은 0보다 큰 숫자여야 합니다.")
         r = set_submission_fx_rate(submission_id, currency, rate)
         flash(f"✅ 환율 적용: {r['currency']} → KRW = {r['rate']:,.2f} "
               f"({r['items_updated']}개 항목 원화 재계산)", "success")

@@ -219,32 +219,33 @@ def run_extraction(submission_id: str, file_path: Path,
                             encoding="utf-8")
         _log("5. JSON 저장 완료")
 
-        # ── USD 항목 사후처리 ──────────────────────────────────────
-        # unit_price_currency_in_source='USD'이고 amount(KRW)가 있는 항목에서
-        # 환율 도출 후 unit_price를 원화로 변환.
+        # ── 외화 항목 사후처리 (통화 무관) ─────────────────────────
+        # [코드리뷰 M2] USD 전용·환율밴드 500~2000 하드코딩 제거. 통화 코드별로 각각
+        #  환율(KRW금액 ÷ 통화단가×수량)을 도출해 원화로 변환. 밴드는 통화 무관 광범위
+        #  sanity(0 < fx < 100000: 엔/위안/달러/유로 모두 포함)로만 방어.
+        from extractors.extract_by_mapping import normalize_currency_code
         items = extraction.get("items", [])
-        fx_rate_derived = None
+        fx_by_cur = {}   # 통화코드 → 도출 환율
         for it in items:
-            currency_in_src = it.get("unit_price_currency_in_source", "")
-            if currency_in_src not in ("USD", "$"):
+            cur = normalize_currency_code(it.get("unit_price_currency_in_source", ""))
+            if cur == "KRW" or cur in fx_by_cur:
                 continue
-            up   = it.get("unit_price")
-            qty  = it.get("quantity")
-            amt  = it.get("amount")
-            if up and qty and amt and up > 0:
-                candidate = amt / (up * qty)
-                # 합리적 환율 범위 (500 ~ 2000)
-                if 500 <= candidate <= 2000:
-                    fx_rate_derived = round(candidate)
-                    break
+            up, qty, amt = it.get("unit_price"), it.get("quantity"), it.get("amount")
+            if up and qty and amt and up > 0 and qty > 0:
+                cand = amt / (up * qty)
+                if 0 < cand < 100000:
+                    fx_by_cur[cur] = round(cand, 4)
 
-        if fx_rate_derived:
+        if fx_by_cur:
             for it in items:
-                if it.get("unit_price_currency_in_source") in ("USD", "$"):
-                    up = it.get("unit_price")
-                    if up is not None:
-                        it["unit_price_orig"] = up
-                        it["unit_price"] = round(up * fx_rate_derived)
+                cur = normalize_currency_code(it.get("unit_price_currency_in_source", ""))
+                fx = fx_by_cur.get(cur)
+                up = it.get("unit_price")
+                if fx and up is not None:
+                    it["unit_price_orig"] = up
+                    it["unit_price"] = round(up * fx)
+        # 하위 호환용(대표 환율 1개). has_usd 판정 등에서 사용.
+        fx_rate_derived = next(iter(fx_by_cur.values()), None)
 
         # ── DB 저장 (기존 아이템 먼저 삭제 후 재삽입) ───────────
         _log(f"6. DB 저장 시작 ({len(items)}개 항목)")
