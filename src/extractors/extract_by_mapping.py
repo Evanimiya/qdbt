@@ -191,6 +191,10 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         col = next((c for c, r in column_mapping.items() if r == role), None)
         if col:
             info_cols[field] = col
+    # [품명 없는 시트] 품목명(name) 역할이 아예 매핑되지 않았는지. True면 '가장 깊은
+    #  분류값'을 잎(품목)으로 삼아 집계에 포함한다(_stitch_passthrough와 동일 규칙).
+    #  ※ 품명 열이 있는데 특정 행만 비어있는 경우(진짜 소계행)와 구분하기 위한 플래그.
+    has_name_col = "name_normalized" in info_cols
 
     # 번호(seq) 열: "1", "1.1", "1.1.2" 패턴으로 계층 구성 (분류명 = 그 행 품목명)
     seq_col = next((c for c, r in column_mapping.items() if r == "seq"), None)
@@ -395,8 +399,13 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         # 품목명이 없으면 — 분류 헤더 행이거나 빈 행일 수 있음
         name = item.get("name_normalized")
         if not name:
-            # 품목명 없고 금액만 있으면 소계 가능성 → category_header 표시
-            if item.get("amount"):
+            # [품명 없는 시트] 품명 열 자체가 없으면 '가장 깊은 분류값'을 잎(품목)으로
+            #  삼아 정상 집계(is_category_header=False). 중/소분류까지만 기입된 견적서도
+            #  그 분류가 곧 항목이 되도록 — 추출 0/총액 0 방지(_stitch_passthrough와 동일).
+            if not has_name_col and item.get("amount") and parts:
+                item["name_normalized"] = parts[-1]
+            # 품명 열은 있는데 이 행만 비었고 금액만 있으면 소계 가능성 → category_header 표시
+            elif item.get("amount"):
                 item["is_category_header"] = True
                 item["name_normalized"] = parts[-1] if parts else "(소계)"
             else:
