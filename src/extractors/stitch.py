@@ -522,20 +522,54 @@ def _cross_sheet_reparent(items):
     if not interior:
         return items
 
-    for sh, its in by_sheet.items():
-        # 이 시트 최상위 분류의 의미 레벨(대=1/중=2/…). 짧은 시트 판정용.
-        sheet_top = min((it.get("_top_level", 1) for it in its), default=1)
-        # 이 시트의 루트 값들(norm→표시값)
+    def _roots_of(its):
         roots = {}
         for it in its:
             parts = _path_parts(it.get("path"))
             if parts:
                 roots.setdefault(_norm(parts[0]), parts[0])
-        for rnorm in roots:
-            # 다른 시트에서 같은 이름의 '내부 분류 노드' 조상경로 후보
-            prefixes = {pre for (s, pre) in interior.get(rnorm, set()) if s != sh and pre}
+        return roots
+
+    def _ext_prefixes(sh, rnorm, imap):
+        return {pre for (s, pre) in imap.get(rnorm, set()) if s != sh and pre}
+
+    # ── 1차: 매칭 안 되는 짧은 시트의 상위 레벨 placeholder padding ──
+    #  (접합 대상이 될 시트를 '먼저' 절대 레벨로 채운 뒤 interior를 재구성해야, 다른 시트가
+    #   이 시트의 '정렬된' 조상경로 아래로 접합돼 시트 간 같은 레벨이 같은 depth로 정렬된다.)
+    for sh, its in by_sheet.items():
+        sheet_top = min((it.get("_top_level", 1) for it in its), default=1)
+        if sheet_top <= 1:
+            continue
+        pad = [_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT)
+               for lv in range(1, sheet_top)]
+        pre = PATH_SEP.join(pad)
+        for rnorm in _roots_of(its):
+            # 이 루트가 다른 시트의 내부 노드로 유일 접합되면 → padding 말고 2차에서 접합.
+            if len(_ext_prefixes(sh, rnorm, interior)) == 1:
+                continue
+            for it in its:
+                parts = _path_parts(it.get("path"))
+                if parts and _norm(parts[0]) == rnorm:
+                    it["path"] = pre + PATH_SEP + it["path"]
+                    it["depth"] = len(_path_parts(it["path"]))
+                    it["category"] = pad[0]
+                    it["_level_residual"] = True   # 상위 미매칭 → 미연계 표기
+
+    # interior 재구성(1차 padding 반영) — 접합 시 padding된 조상경로를 쓰도록.
+    interior2 = {}
+    for sh, its in by_sheet.items():
+        for it in its:
+            parts = _path_parts(it.get("path"))
+            for i in range(1, len(parts)):
+                nm = _norm(parts[i])
+                if nm:
+                    interior2.setdefault(nm, set()).add((sh, PATH_SEP.join(parts[:i])))
+
+    # ── 2차: 매칭되는 시트 루트를 (padding 정렬된) 조상경로 아래로 접합 ──
+    for sh, its in by_sheet.items():
+        for rnorm in _roots_of(its):
+            prefixes = {pre for (s, pre) in interior2.get(rnorm, set()) if s != sh and pre}
             if len(prefixes) == 1:
-                # 유일 매칭 → 조상 경로 아래로 접합(의미 레벨 자동 정렬)
                 prefix = next(iter(prefixes))
                 for it in its:
                     parts = _path_parts(it.get("path"))
@@ -543,23 +577,6 @@ def _cross_sheet_reparent(items):
                         it["path"] = prefix + PATH_SEP + it["path"]
                         it["depth"] = len(_path_parts(it["path"]))
                         it["category"] = _path_parts(it["path"])[0]   # 최상위 분류 갱신
-            elif sheet_top > 1:
-                # [레벨 정렬 픽스] 매칭 실패 + 짧은 시트(최상위가 대분류가 아님):
-                #  누락된 상위 레벨(1..top-1)만큼 placeholder를 앞에 붙여 '의미 레벨'을
-                #  보존한다 → 중분류가 대분류(root)로 승격되지 않고 정확한 depth에 놓임.
-                #  해당 잎은 residual(미연계)로 표기 → 사용자가 캔버스에서 올바른 대분류
-                #  하위로 드래그(가지 재부모화)하면 placeholder가 벗겨지며 연결된다.
-                pad = [_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT)
-                       for lv in range(1, sheet_top)]
-                pre = PATH_SEP.join(pad)
-                for it in its:
-                    parts = _path_parts(it.get("path"))
-                    if parts and _norm(parts[0]) == rnorm:
-                        it["path"] = pre + PATH_SEP + it["path"]
-                        it["depth"] = len(_path_parts(it["path"]))
-                        it["category"] = pad[0]
-                        it["_level_residual"] = True   # 상위 미매칭 → 미연계 표기
-            # else: 매칭 없음이나 이미 대분류 시작(top==1) → 보존(기존 동작)
     return items
 
 
