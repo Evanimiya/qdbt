@@ -43,6 +43,17 @@ def _cat_level(role):
     return int(role[3:])  # 'cat3' -> 3
 
 
+def _cat_name_match(c, key):
+    """[코드리뷰 M20] 요약행명↔상세 카테고리 매칭. 정확일치 또는 '2자 이상' 포함만.
+    단일 문자(예 '관')의 부분일치 오탐 방지."""
+    if not c or not key:
+        return False
+    if c == key:
+        return True
+    short, long = (c, key) if len(c) <= len(key) else (key, c)
+    return len(short) >= 2 and short in long
+
+
 def _norm(s):
     """비교용 정규화: 공백 제거 + 소문자."""
     return re.sub(r"\s+", "", str(s if s is not None else "")).lower()
@@ -124,7 +135,10 @@ def _dedup_and_rollup(items, tol_ratio=0.005):
                         continue
                     key = _norm(s.get("name_normalized"))
                     for c, tot in cat_total.items():
-                        if c and (c == key or c in key or key in c) and \
+                        # [코드리뷰 M20] 짧은 카테고리(예 '관')가 무관한 요약행명에 substring
+                        #  매칭돼 금액 우연 일치 시 정상행이 오 roll-up되던 것 방지: 정확일치 또는
+                        #  '2자 이상' 포함만 인정.
+                        if _cat_name_match(c, key) and \
                                 abs(amt - tot) <= max(1.0, tot * tol_ratio):
                             pend.append((s, c, tot))
                             break
@@ -203,8 +217,10 @@ def _classify_sheet(recs, meta):
     # [구분자 무관] 숫자 그룹이 2개 이상인 번호가 있으면 계층 시트(구분자 종류 무관).
     dotted = meta["has_seq"] and any(
         (r.get("seq_t") is not None and len(r["seq_t"]) >= 2) for r in recs)
+    # [코드리뷰 M19] 품명+금액만 있고 수량·단가 열이 없는 요약형 잎 시트도 leaf로 인식
+    #  (amount 포함). 금액만 있는 견적서가 band/seq_list로 오분류돼 잎이 안 붙던 것 방지.
     has_item = meta["has_name"] and any(
-        (r.get("price") or r.get("qty")) for r in recs)
+        (r.get("price") or r.get("qty") or r.get("amount")) for r in recs)
     if dotted and has_item:
         return "seq_leaf"
     if dotted:
