@@ -574,8 +574,17 @@ def _run_stitch(path, sheet_infos, sheet_names):
         # 단일(또는 밴드/시퀀스 아님) → leaf 시트 passthrough 병합
         items, residuals, mode = [], [], "passthrough"
         cset = set()
+        # [품명 없는 다중시트] leaf(품명+수량/단가) 시트가 하나도 없으면, 금액/수량을
+        #  지닌 데이터 시트를 각각 passthrough로 추출한다(_stitch_passthrough가 품명
+        #  없을 때 최말단 분류를 잎으로 승격 — 단일시트 경로와 동일 원칙).
+        #  → 모든 시트가 '분류+금액'만인 다중시트 통합에서 추출 0/총액 0 방지.
+        #  leaf가 있으면 band/seq/기존 passthrough가 처리하므로 이 폴백은 비활성(회귀 없음).
+        #  중복(요약↔상세)은 뒤의 _dedup_and_rollup이 총액 불변으로 정리.
+        _has_leaf = any(role == "leaf" for _, _, role in sheets)
         for (recs, meta, role), info in zip(sheets, infos):
-            if role == "leaf" or len(sheet_names) == 1:
+            _data_bearing = any(r.get("amount") or r.get("price") or r.get("qty")
+                                for r in recs)
+            if role == "leaf" or len(sheet_names) == 1 or (not _has_leaf and _data_bearing):
                 it, rs, _, cd = _stitch_passthrough(path, info["name"], info["mapping"], info["header_row"])
                 for x in it:
                     x["_sheet"] = info["name"]   # [중복 병합] 출처 시트 태깅
