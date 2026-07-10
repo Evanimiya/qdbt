@@ -5,6 +5,56 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르며,
 버전은 [유의적 버전(SemVer)](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.9.11] - 2026-07-10 — 무품명·비연속레벨·번호계층 견고화 + 파이프라인 취약점 일괄 수정
+
+> 회귀 게이트(모든 항목 공통): 단일시트 샘플 총합 **Δ=0**(62,680,494,000), 스티칭 실샘플
+> 총액 **Δ=0**, `create_app` 133라우트 정상, 전 모듈 `py_compile` 통과. 통화·총계행 관련
+> 일부 auto-stitch 샘플은 **기존 버그값이 정확값으로 교정**(아래 명시).
+
+### Fixed — 추출/스티칭 견고화 (전반부 세션)
+- **품명(name) 열 미지정 추출 실패**: 분류+금액만 있는 시트가 `is_category_header`로 전부
+  빠져 총액 0이던 것 → 최말단 분류를 잎으로 승격(단일시트·다중시트 양쪽). leaf 없는 다중시트
+  0건, seq 모드 다중 세부시트·seq_list 자체금액 소실도 함께 해소. (`extract_by_mapping`, `stitch`)
+- **비연속 분류 레벨(gap) 미보존**: `[중분류,세분류]`처럼 중간 레벨이 비면 세분류가 소분류
+  자리로 당겨지던 것 → 절대 레벨 배치 + 상단·중간 gap을 `⟨미연계·N분류⟩` placeholder로 충전.
+  교차시트 정렬(`_cross_sheet_reparent`)을 2-pass로 바꿔 시트 간 같은 레벨을 같은 depth로 정렬.
+- **번호(seq) 계층이 점(.)만 인식**: 하이픈·공백·가운뎃점 등 어떤 구분자든 "숫자 그룹 튜플"로
+  해석(구분자 무관, `seq_tuple`/`_SEQ_TUPLE_RE`). 원본 문자열은 변형하지 않음.
+
+### Fixed — 파이프라인 취약점 코드리뷰 일괄 수정 (`docs/QDBT_코드리뷰_취약점_20260710.md`)
+- **숫자·통화 파싱 통합** (`core/numparse.py` 신규): extract·queries의 별개 `_to_number`를
+  단일 `parse_amount`로 통합. 통화기호(₩$¥€元£ 등) 제거, 괄호·△·▲·−(U+2212)=음수(부호 보존),
+  유럽식 소수 표기, 전각(NFKC) 처리. (기존엔 ¥·€ 금액이 통째로 소실·괄호음수가 양수로 뒤집힘)
+- **외화 원화정합 공용화 + 스티칭 반영**: 통화 처리(`apply_currency_fields`)를 extract·stitch가
+  공유. 환율 미확정 외화는 `needs_fx=True`+원화 None으로 KRW 합계 오염 방지. 스티칭 `_read_records`가
+  통화/원화 열을 읽음. (교정: D엔지니어링 976,583,400→2,277,532,000 = CCY 혼합합산→Amount(KRW),
+  A상사 0→2,289,400,000 = amount_krw 무시 해소)
+- **합계행 판정 견고화**(`is_total_label`): "합계 : 1,200,000"·"합 계 (VAT 별도)"의 뒤 값/괄호
+  주석 제거 후 판정(과소탐지 해소). 영문 단독 grand/sum 제외(제품명 오탐 방지), CJK 合計/小計 추가.
+  (교정: F글로벌·G테크의 괄호 달린 총계행 이중계상 제거)
+- **헤더 자동매핑 부분일치 오탐**(`suggest_column_mapping`): 짧은 토큰(no/item 등) 단어경계 매칭
+  (`Notes`가 seq로 오인되던 것), `quantity` 인식 추가, amount 가드의 '원'을 통화표기로 한정.
+- **LLM 경로 방어**: 응답을 `content[0].text` 가정 대신 text 블록만 결합(추론형 모델 전면 실패
+  방지), JSON을 코드펜스·서두산문·후행텍스트 허용 추출(`core/llm_json.py`), gpt content=None 방어,
+  max_tokens 16000→32000, 매칭 temperature=0, 클러스터 score 파싱 실패 시 행 단위 격리.
+- **스티칭 nego 시트경계**: 다중시트 nego가 다른 시트 동일 행을 오차감하던 것 → (시트,행) 쌍 매칭.
+- **residual/candidate 무통보 절단**: 상한 상향(200/1000) + `*_truncated` 플래그로 UI 통지.
+- **집계**: 죽은 코드·domain 중복정의 제거, path 구분자 통일(`_split_path`/`_path_under`), dedup
+  카테고리 substring 오매칭 방지, 최저가 판정에 0원 제안 포함.
+- **LLM 파이프라인 환율도출**을 USD 전용·밴드 500~2000 → 통화별 일반화. `set_fx_rate` 양수 검증.
+
+### Changed
+- **추출 프롬프트 도메인/통화 중립화**(`docs/prompt_extract_v1.md`, `llm_extractor`): "한국 IT" 및
+  고정 카테고리 5종·"KRW|USD" 강제 제거 → 견적서에 적힌 분류·통화를 그대로 사용하도록.
+- 레벨명 배열(`대분류`…`세부`) 단일 상수화 + 깊이 초과 시 `N레벨` 폴백.
+- `line_no` 파싱을 `int(ln[1:])`(첫 글자 제거) → `_line_row`(정규식 숫자부 추출)로 통일.
+- 앱 표시 버전 `config.VERSION` 0.9.4 → 0.9.11.
+
+### Added
+- `docs/QDBT_코드리뷰_취약점_20260710.md`: 추출·비교 파이프라인 취약점 진단 보고서(HIGH 10/
+  MEDIUM 20/LOW 9).
+- `src/core/numparse.py`(숫자·통화 파서), `src/core/llm_json.py`(LLM JSON 견고추출).
+
 ## [0.9.10] - 2026-07-09 — 다중시트 중복 병합(요약↔상세, 총액 불변) + 4단계 연계 위저드
 
 ### Added (연계 캔버스 — 목업 4단계 완성, `src/web/templates/submissions/link.html`)
