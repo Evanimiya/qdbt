@@ -26,11 +26,18 @@ def _db_connect():
 bp = Blueprint("compare", __name__)
 
 
+# [코드리뷰 M13] 유사도 임계·top-N·임베딩 모델·입력 길이를 상수로 모아 조정 가능하게.
 # 임베딩 코사인 유사도가 이 값 이상이면 "병합 추천" 대상으로 표시
 # (text-embedding-3-small 은 느슨히 관련된 항목도 0.45~0.5 를 주므로 0.55 로 상향)
 _EMBED_SUGGEST_THRESHOLD = 0.55
 # 임베딩 사용 불가 시 어휘 유사도(SequenceMatcher) 임계값
 _LEXICAL_SUGGEST_THRESHOLD = 0.55
+# 병합 추천으로 노출할 상위 후보 수(임계 초과 후보가 이보다 많으면 상위 N만). 3→8 상향.
+_SUGGEST_TOPN = 8
+# 임베딩 입력 텍스트 최대 길이(클러스터 멤버명+스펙 결합이 잘려 변별력 손실되지 않게 상향).
+_EMBED_INPUT_MAXLEN = 8000
+# 임베딩 모델(게이트웨이에 없을 수 있음 — 그 경우 어휘 폴백).
+_EMBED_MODEL = "text-embedding-3-small"
 
 
 def _pick_openai_key() -> str:
@@ -40,19 +47,20 @@ def _pick_openai_key() -> str:
     (2) 환경변수 OPENAI_API_KEY 가 sk- 형식이면 그것. 없으면 빈 문자열.
     (형식 검사로 잘못된 값에 대한 무의미한 401 호출을 방지)
     """
+    # [코드리뷰 M15] sk- 접두 화이트리스트는 게이트웨이·Azure·사내 토큰(gw_ 등)을 차단한다.
+    #  비어있지 않으면 시도(잘못된 키의 401은 _embed_texts가 조용히 폴백 처리).
     try:
         from db.queries import get_user_llm_settings
         uid = session.get("user_id", "")
         if uid:
             s = get_user_llm_settings(uid)
             k = (s.get("api_key") or "").strip()
-            if k.startswith("sk-"):
+            if k:
                 return k
     except Exception:
         pass
     import os
-    env_k = (os.environ.get("OPENAI_API_KEY", "") or "").strip()
-    return env_k if env_k.startswith("sk-") else ""
+    return (os.environ.get("OPENAI_API_KEY", "") or "").strip()
 
 
 def _pick_openai_conf():
@@ -67,14 +75,14 @@ def _pick_openai_conf():
         if uid:
             s = get_user_llm_settings(uid)
             k = (s.get("api_key") or "").strip()
-            if k.startswith("sk-"):
+            if k:   # [M15] 게이트웨이 키 허용(비어있지 않으면 시도)
                 return (k, (s.get("base_url") or "").strip() or None,
                         s.get("verify_ssl", True))
     except Exception:
         pass
     import os
     env_k = (os.environ.get("OPENAI_API_KEY", "") or "").strip()
-    if env_k.startswith("sk-"):
+    if env_k:
         return (env_k, None, True)
     return ("", None, True)
 
@@ -99,9 +107,9 @@ def _embed_texts(texts: list, api_key: str, base_url: str = None,
         if not verify_ssl:
             kwargs["http_client"] = httpx.Client(verify=False)
         client = OpenAI(**kwargs)
-        safe = [(t or " ")[:2000] for t in texts]
+        safe = [(t or " ")[:_EMBED_INPUT_MAXLEN] for t in texts]
         resp = client.embeddings.create(
-            model="text-embedding-3-small", input=safe
+            model=_EMBED_MODEL, input=safe
         )
         return [d.embedding for d in resp.data]
     except Exception:
@@ -213,7 +221,7 @@ def clusters_json(bid_id):
             and o["similarity"] is not None
         ]
         candidates.sort(key=lambda o: o["similarity"], reverse=True)
-        for o in candidates[:3]:
+        for o in candidates[:_SUGGEST_TOPN]:   # [M13] 상위 N 상향
             if o["similarity"] >= threshold:
                 o["suggested"] = True
 
