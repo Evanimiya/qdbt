@@ -109,10 +109,10 @@ def run():
             "PASS" if ok else "FAIL",
             "" if ok else "헤더 위치 이상 처리 실패")
 
-    # ── 6f. [결정필요] seq 모드에 'leaf' 역할 시트(정수번호+금액) 혼재 → 통째 소실 ──
-    #  갑지(정수 No + 금액 → role 'leaf')가 산출(1.1 계층 → seq_leaf)과 함께 오면
-    #  seq 모드가 발동, _stitch_seq 는 seq_leaf/seq_list/seq_tree 만 방출하고 'leaf'
-    #  시트는 어디에서도 방출 안 됨 → residual·roll-up 흔적 없이 통째 소실.
+    # ── 6f. seq 모드 leaf/breakdown 시트 보존(은닉 소실 금지) [Fix1 반영] ──
+    #  갑지(정수 No + 금액 → role 'leaf')가 산출(1.1 계층 → seq_leaf)과 함께 와도 방출된다.
+    #  독립 breakdown(갑지 8000 ≠ 산출 300)이므로 잎+residual로 보존(총액에 포함, 손실 0).
+    #  요약(총액 일치)이면 전체요약 roll-up으로 제외(별도 6f-2에서 검증).
     p = build_wb("s6f.xlsx", [
         ("갑지", [["No", "품명", "금액"], [1, "자재총괄", 5000], [2, "인력총괄", 3000]], []),
         ("산출", [["No", "품명", "수량", "단가", "금액"],
@@ -123,20 +123,39 @@ def run():
         {"sheet": "산출", "mapping": {1: "seq", 2: "name", 3: "qty", 4: "price", 5: "amount"}, "header_row": 1},
     ]
     res = stitch_sheets(p, specs)
-    all_names = {it["name_normalized"] for it in res["items"]}
+    all_names = {it["name_normalized"] for it in res["items"] if not it.get("merge_status")}
     resid_names = {r.get("name") for r in res["residuals"]}
-    # 갑지 항목(자재총괄/인력총괄)이 items·residuals 어디에도 없으면 = 은닉 소실.
-    gapji_seen = ({"자재총괄", "인력총괄"} & (all_names | resid_names))
-    lost = not gapji_seen
-    rec.add("6f", "[결정필요] seq모드 leaf 시트 은닉 소실",
-            "갑지(정수No+금액 role=leaf) + 산출(1.1 계층 seq_leaf)",
-            "갑지 항목이 items 또는 residual 로 최소 흔적 보존(은닉 소실 금지)",
-            f"seq총액={res['totals']['leaf_sum']}(산출300만) · 갑지흔적={gapji_seen or '없음(소실)'}",
-            "FAIL" if lost else "PASS",
-            ("[결정필요] _stitch_seq 가 leaf 역할 시트를 미방출→은닉 소실. 실샘플 C3 공종목록은 "
-             "정본합과 우연 일치(요약)해 총액엔 무해하나, 독립 breakdown이면 금액 소실. "
-             "안전 수정은 leaf 시트를 residual passthrough로 방출+roll-up 정합 필요—이름매칭 "
-             "실패 시 C3 총액 회귀(3.35B) 위험 → 대개편 없이 별도 설계결정 필요.") if lost else "")
+    gapji_seen = {"자재총괄", "인력총괄"} <= (all_names | resid_names)
+    tot = res["totals"]["leaf_sum"]
+    ok = gapji_seen and approx(tot, 8300)   # 독립 갑지 8000 보존 + 산출 300
+    rec.add("6f", "seq모드 leaf 독립 breakdown 보존",
+            "갑지(정수No+금액 role=leaf) + 산출(1.1 seq_leaf), 갑지는 독립(총액 불일치)",
+            "갑지 잎+residual 보존, 총액 8,300(은닉 소실 0)",
+            f"총액={tot} · 갑지흔적={'보존' if gapji_seen else '소실'}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "seq모드 leaf 시트 소실")
+
+    # ── 6f-2. seq 모드 요약 leaf 시트 → 전체요약 roll-up(이중계상 방지, Δ=0) ──
+    #  갑지 총액(300)이 산출 정본 총액과 일치하면 요약으로 보고 roll-up(제외).
+    p = build_wb("s6f2.xlsx", [
+        ("갑지", [["No", "품명", "금액"], [1, "볼트류", 100], [2, "너트류", 200]], []),
+        ("산출", [["No", "품명", "수량", "단가", "금액"],
+                  ["1.1", "볼트", 1, 100, 100], ["1.2", "너트", 1, 200, 200]], []),
+    ])
+    specs = [
+        {"sheet": "갑지", "mapping": {1: "seq", 2: "name", 3: "amount"}, "header_row": 1},
+        {"sheet": "산출", "mapping": {1: "seq", 2: "name", 3: "qty", 4: "price", 5: "amount"}, "header_row": 1},
+    ]
+    res = stitch_sheets(p, specs)
+    tot = res["totals"]["leaf_sum"]
+    rolled = len(res["reconciliation"]["rollups"])
+    ok = approx(tot, 300) and rolled >= 2   # 산출 300만, 갑지 roll-up
+    rec.add("6f-2", "seq모드 요약 leaf → 전체요약 roll-up",
+            "갑지 총액(300)=산출 정본 총액 → 요약 판별",
+            "총액 300(갑지 roll-up 제외, 이중계상 없음)",
+            f"총액={tot} rollups={rolled}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "요약 leaf roll-up 실패(이중계상 or 소실)")
 
     return rec.flush()
 

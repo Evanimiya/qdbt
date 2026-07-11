@@ -13,16 +13,17 @@ from core.numparse import parse_amount
 def run():
     rec = Recorder("S7 경계탐침")
 
-    # ── 7-1. 유럽식 단일점 천단위 '1.000' (로케일 모호) ──
+    # ── 7-1. 단일점 천단위 휴리스틱 '1.000'→1000 [Fix4 반영] ──
     got = parse_amount("1.000")
-    # 도메인(KRW 정수 우세)에선 '.' 단독 1개는 소수점 → 1.0. 유럽식이면 1000.
-    ok = got == 1  # 현 정책상 소수 → 1 (관찰: 로케일 힌트 없으면 모호)
-    rec.add("7-1", "유럽식 단일점 천단위 '1.000'",
-            "'1.000' (로케일 미상)",
-            "정책: 단일점 1개=소수(1.0). 유럽식(1000) 여부는 로케일 힌트 필요",
-            f"parse_amount('1.000')={got}",
-            "WARN",
-            "[결정필요] 통화/로케일 힌트 없이는 '1.000'=1 vs 1000 모호. 콤마 단독만 천단위.")
+    dec = parse_amount("3.5")   # 소수는 유지되어야
+    z = parse_amount("0.125")   # 정수부 0 → 소수 유지
+    ok = got == 1000 and dec == 3.5 and z == 0.125
+    rec.add("7-1", "단일점 천단위 휴리스틱 '1.000'",
+            "'1.000'(3자리 소수부) · '3.5' · '0.125'",
+            "'1.000'→1000(천단위), '3.5'→3.5·'0.125'→0.125(소수 유지)",
+            f"1.000={got} 3.5={dec} 0.125={z}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "단일점3자리 천단위 휴리스틱 오동작")
 
     # ── 7-4. band 요약시트의 '상세에 없는 비용'(부대비) 은닉 소실 ──
     p = build_wb("s7_4.xlsx", [
@@ -39,25 +40,25 @@ def run():
     all_txt = " ".join(str(it.get("name_normalized")) for it in res["items"]) + \
         " ".join(str(r) for r in res["residuals"])
     budae_seen = "부대비" in all_txt
-    rec.add("7-4", "band 요약 '상세에 없는 비용'(부대비) 보존",
+    tot = res["totals"]["leaf_sum"]
+    ok = budae_seen and approx(tot, 3500)   # 상세3000 + 부대비500(고유비용 보존)
+    rec.add("7-4", "band 요약 고유비용(부대비) 보존 [Fix2]",
             "갑지(band, 대분류별 금액)에 상세에 없는 부대비 500",
-            "부대비가 items/residual 로 흔적 보존(은닉 소실 금지)",
-            f"총액={res['totals']['leaf_sum']}(상세3000만) · 부대비흔적={'있음' if budae_seen else '없음(소실)'}",
-            "PASS" if budae_seen else "WARN",
-            "" if budae_seen else ("[결정필요] band 아키타입은 요약시트를 골격으로만 써 요약 "
-                                   "고유 비용(부대비 등)이 은닉 소실. band 금액 무조건 방출 시 "
-                                   "이중/삼중 계상(C2 회귀) → 별도 설계결정 필요."))
+            "부대비 잎+residual 보존, 총액 3,500(누락 없음)",
+            f"총액={tot} · 부대비={'보존' if budae_seen else '소실'}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "band 고유비용 소실")
 
-    # ── 7-5. 범위표기 '1-5' 금액열 오계상 위험(비금액 문자열) ──
+    # ── 7-5. 범위표기 '1-5' → 미상(None) 보존 [Fix4 반영] ──
     got = parse_amount("1-5")
-    # '1-5'는 범위표기지만 파서는 비숫자 구분자를 제거해 15로 해석.
-    ok = got == 15
-    rec.add("7-5", "범위표기 '1-5' 금액 파싱(관찰)",
-            "금액열에 '1-5' 같은 범위/비금액 문자열",
-            "예측 불가 표기 — 파서가 15로 해석(오계상 위험, 참고)",
-            f"parse_amount('1-5')={got}",
-            "WARN",
-            "[관찰] 금액열엔 범위표기가 드묾. 힌트 없이 '1-5'=15 vs 범위 판별 불가.")
+    got2 = parse_amount("1~5")
+    ok = got is None and got2 is None
+    rec.add("7-5", "범위표기 '1-5' 미상 보존",
+            "금액열에 '1-5'/'1~5' 범위 문자열",
+            "억지 숫자화(15) 대신 None(미상) 보존 → 오계상 방지",
+            f"'1-5'={got} '1~5'={got2}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "범위표기 오계상(숫자화)")
 
     return rec.flush()
 

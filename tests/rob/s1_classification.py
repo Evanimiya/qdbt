@@ -109,23 +109,17 @@ def run():
     res = stitch_sheets(p, specs)
     kept = [it for it in res["items"] if not it.get("merge_status")]
     tot = res["totals"]["leaf_sum"]
-    dup = res["reconciliation"]["duplicates"]
-    # 분류명이 달라 dedup 키(path 포함) 불일치 → 병합 안 되고 2건·10000 유지될 것.
-    double_counted = (len(kept) == 2 and approx(tot, 10000))
-    if dup >= 1:
-        verdict, root = "PASS", ""
-        actual = f"dedup {dup}건, 총액 {tot}"
-    elif double_counted:
-        verdict, root = "WARN", ("dedup 키가 분류경로 포함 → 분류명만 다른 동일항목은 병합 안 됨. "
-                                 "시트 간 동일 품명·규격·금액 잠재 이중계상(결정 필요: 분류 무관 dedup 옵션).")
-        actual = f"kept {len(kept)}건, 총액 {tot} (병합 없음)"
-    else:
-        verdict, root = "FAIL", "예상외 동작"
-        actual = f"kept {len(kept)}건, 총액 {tot}, dup {dup}"
-    rec.add("1e", "분류명만 다른 동일항목(시트 간)",
+    similar = [r for r in res["residuals"] if r["reason"] == "cross_sheet_similar"]
+    flagged = {it.get("_cross_sheet_similar") for it in kept} == {True}
+    # [Fix3] 분류명이 달라 자동 병합은 안 함(오합치 방지) — 별도 유지 + '미연계' 표기.
+    ok = (len(kept) == 2 and approx(tot, 10000)
+          and len(similar) == 2 and flagged)
+    rec.add("1e", "분류명만 다른 동일항목(시트 간) 미연계 표기 [Fix3]",
             "같은 제출서 두 시트에 동일 품명·규격·금액이 다른 분류명으로",
-            "이중계상 방지(dedup) 또는 residual 표기",
-            actual, verdict, root)
+            "자동병합 안 함(총액 10000 유지) + cross_sheet_similar residual 2건 표기",
+            f"kept={len(kept)} 총액={tot} similar_residual={len(similar)} flagged={flagged}",
+            "PASS" if ok else "FAIL",
+            "" if ok else "미연계 표기 실패")
 
     return rec.flush()
 
