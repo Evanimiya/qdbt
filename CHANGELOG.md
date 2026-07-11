@@ -12,18 +12,22 @@
 > 상세 매트릭스: `docs/QDBT_견고성테스트_20260711.md`.
 
 ### 원칙 — 항목 연결 3단계 (코드 → LLM → 사람) *(반드시 유지)*
-스티칭은 **자체적으로** 3단계를 소유한다(한 제출서 내 시트 간 항목 연결):
-- **1단계 완전합치(코드)** *(구현됨)*: 시트 내/시트 간 **완전동일**(정규화 분류경로+품명+규격+금액
-  정확일치)만 자동 병합 — `stitch._dedup_and_rollup` (A) 완전중복 dedup + (B) 요약행 roll-up.
-- **2단계 유사 합치(LLM 제안)** *(계획 — 미구현)*: 완전합치 안 된 **유사** 항목쌍을 LLM으로 유사도
-  파악해 **연결 '제안'**(자동 병합 금지). intra-submission 축으로 `catalog_clusterer`/`matcher`의
-  LLM 유사도 엔진을 재사용하되 온디맨드 라우트로 분리(추출 헤드리스 인라인 금지, 폐쇄망=휴리스틱 폴백).
-- **3단계 사람 확정** *(계획 — 미구현)*: 제안을 residual 패널/연계 캔버스에서 accept/reject·드래그 확정.
-  미연계는 LLM 제안 실패 또는 사람 확인 대기 상태로만.
-- ⚠️ 스티칭이 유사(비완전합치)를 코드로 자동 병합하거나 '미연계'로 **종결 표기**하면 2단계(LLM)를
-  건너뛴 오합치·오종결이다. 코드-종결 `cross_sheet_similar` 플래그는 제거했고, 2·3단계는
-  스티칭 플로우가 자체 수행하도록 구현 예정. 유사 항목은 그 전까지 **별도 정본 잎으로 보존(총액 Δ=0)**.
-- **설계 계획**: `docs/QDBT_스티칭_LLM유사연결_계획_20260711.md`. (원칙 배너: `src/extractors/stitch.py`)
+스티칭은 **자체적으로** 3단계를 소유한다(한 제출서 내 시트 간 항목 연결) — *구현 완료*:
+- **1단계 완전합치(코드)**: 시트 내/시트 간 **완전동일**(정규화 분류경로+품명+규격+금액 정확일치)만
+  자동 병합 — `stitch._dedup_and_rollup` (A)+(B). 완전합치 안 된 유사 후보(정규화 품명 동일+다른
+  경로+다른 시트+금액 근접)는 `stitch._detect_link_candidates`가 **비파괴 산출** → `map_config.stitch.link_candidates`.
+- **2단계 유사 합치(LLM 제안)**: `extractors/stitch_link.suggest_links` — 기존 provider/JSON/짧은id
+  인프라 재사용 + intra-submission 전용 프롬프트('동일 라인아이템?'). 온디맨드 라우트
+  `POST /<sid>/links/suggest`가 후보를 item_id 복원 후 제안 생성 → `link_suggestions`(자동 병합 없음).
+  **폐쇄망/무LLM**: 결정적 휴리스틱 폴백 → 애매하면 `status='pending'`(사람 확인 대기).
+- **3단계 사람 확정**: `POST /<sid>/links/confirm` + detail 패널 '유사 연결 제안' 카드 —
+  `accept`(연결만·**총액 Δ=0**)/`reject`/`exclude_member`(사람 명시 중복 제외, `is_header=1`,
+  되돌리기 가능·이때만 총액 변동)/`restore_member`.
+- ⚠️ 유사(비완전합치)를 코드가 자동 병합하거나 '미연계'로 **종결 표기**하지 않는다 —
+  반드시 LLM(또는 휴리스틱) 제안 → 사람 확정. 코드-종결 `cross_sheet_similar` 플래그는 제거.
+- **정본 불변·Δ=0**: 후보·제안·확정은 전부 `map_config`. `submission_items` 미변경.
+  견고성 매트릭스 S8(3단계 파이프라인) 40/40 PASS, 실샘플 Δ=0. 설계:
+  `docs/QDBT_스티칭_LLM유사연결_계획_20260711.md`. (배너: `src/extractors/stitch.py`)
 
 ### Fixed — 스티칭/파싱 견고화 (견고성 테스트에서 발견)
 - **합계행 미탐 → 이중계상** (`stitch._is_total_row`·`extract.detect_total_rows`): 합계 마커가
