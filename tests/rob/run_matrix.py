@@ -25,9 +25,10 @@ import s5_amounts
 import s6_misc
 import s7_edges
 import s8_link
+import s9_pumyeong
 
 MODULES = [s1_classification, s2_currency, s3_tabs, s4_numbering,
-           s5_amounts, s6_misc, s7_edges, s8_link]
+           s5_amounts, s6_misc, s7_edges, s8_link, s9_pumyeong]
 
 DOC = ROOT / "docs" / "QDBT_견고성테스트_20260711.md"
 _MARK = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "WARN": "⚠️ WARN"}
