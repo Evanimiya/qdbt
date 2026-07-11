@@ -407,6 +407,62 @@
 </div>
 {% endif %}
 
+<!-- ══ [항목연결 3단계] 시트 간 유사 연결 제안(코드 완전합치 → LLM 유사 → 사람 확정) ══ -->
+{% if has_role('manager') %}
+<div class="bg-sky-50 rounded-xl shadow-sm border border-sky-300 p-4 sm:p-5 mb-5" id="linkPanel">
+  <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+    <h2 class="text-base font-bold break-ko" style="color:#075985;">
+      🔗 시트 간 유사 항목 연결 제안
+      <span class="text-sm font-normal" id="linkCount">({{ link_view|length }}건)</span>
+    </h2>
+    <button onclick="suggestLinks()" id="linkSuggestBtn"
+            class="text-xs bg-white border border-sky-400 text-sky-800 rounded-lg px-3 py-1.5 hover:bg-sky-100 break-ko">🤖 유사 연결 제안 생성</button>
+  </div>
+  <p class="text-[11px] text-gray-500 mb-2 break-ko">
+    완전합치(경로+품명+규격+금액 동일)는 이미 자동 병합됨. 여기는 <b>분류경로만 다른 유사 후보</b>를
+    LLM(폐쇄망이면 휴리스틱)으로 판정해 <b>제안</b>만 만든다. <b>accept=연결(금액 불변)</b>,
+    reject=기각, [중복 제외]는 사람이 명시할 때만 합계에서 뺀다(되돌리기 가능).
+  </p>
+  <div class="space-y-2" id="linkCards">
+    {% for lv in link_view %}
+    <div class="bg-white rounded-lg border border-sky-200 p-3 link-card" data-group="{{ lv.group_id }}"
+         style="border-left:3px solid #38bdf8">
+      <div class="flex flex-col sm:flex-row sm:items-start gap-2">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-semibold text-gray-900 break-ko">
+            <span style="font-size:9px;font-weight:700;color:#0369a1;background:#e0f2fe;border-radius:9px;padding:1px 6px;margin-right:5px;">유사 연결</span>{{ lv.name }}
+            <span class="text-[11px] font-normal text-gray-400" style="margin-left:6px;">
+              {{ lv.method }} · 신뢰도 {{ lv.score }}{% if lv.status == 'pending' %} · <span style="color:#b45309;">확인 대기</span>{% endif %}</span>
+          </div>
+          <div class="text-[11px] text-sky-700 break-ko">🔎 {{ lv.summary }}</div>
+          <div class="mt-1 space-y-0.5">
+            {% for m in lv.members %}
+            <div class="text-[11px] text-gray-600 break-ko flex items-center gap-1.5">
+              <span class="text-gray-400">•</span>{{ m.path or '(경로없음)' }}
+              {% if m.amount %}<span class="text-gray-400">{{ "{:,.0f}".format(m.amount) }}</span>{% endif %}
+              {% if m.excluded %}<span style="font-size:9px;color:#b91c1c;background:#fee2e2;border-radius:8px;padding:0 5px;">제외됨</span>{% endif %}
+              <button onclick="linkExclude('{{ lv.group_id }}','{{ m.item_id }}',{{ 'false' if m.excluded else 'true' }})"
+                      class="text-[10px] border border-gray-300 text-gray-500 rounded px-1.5 py-0.5 hover:bg-gray-50 break-ko shrink-0">{{ '↩ 복원' if m.excluded else '중복 제외' }}</button>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          {% if lv.confirmed == 'accepted' %}<span class="text-[11px] font-bold text-emerald-700 bg-emerald-50 rounded-full px-2 py-0.5 break-ko">연결됨</span>
+          {% elif lv.confirmed == 'rejected' %}<span class="text-[11px] font-bold text-gray-500 bg-gray-100 rounded-full px-2 py-0.5 break-ko">기각</span>{% endif %}
+          <button onclick="linkConfirm('{{ lv.group_id }}','accept')"
+                  class="text-xs bg-sky-700 text-white font-semibold rounded-lg px-3 py-1.5 hover:bg-sky-800 break-ko">✔ 연결</button>
+          <button onclick="linkConfirm('{{ lv.group_id }}','reject')"
+                  class="text-xs border border-gray-300 text-gray-600 rounded-lg px-2 py-1.5 hover:bg-gray-50 break-ko">✕ 기각</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% if not link_view %}<p class="text-[11px] text-gray-400 break-ko" id="linkEmpty">유사 연결 후보 없음(또는 [🤖 제안 생성]을 눌러 후보 판정).</p>{% endif %}
+</div>
+{% endif %}
+
 <!-- ══ 추출 기준정보: 장비 대수 · 대당 단가 ══ -->
 {% if items %}
 <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5">
@@ -693,6 +749,40 @@ function suggestResiduals(){
       });
       alert('제안 완료: '+n+'건 채움 ('+(d.method||'')+'). 확인 후 [적용]하세요.');
     }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='🤖 LLM 제안';} alert('오류: '+e); });
+}
+
+/* ── [항목연결 3단계] 시트 간 유사 연결 제안·확정 ── */
+function suggestLinks(){
+  var btn = document.getElementById('linkSuggestBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '판정 중…'; }
+  fetch('/submissions/'+SUBMISSION_ID+'/links/suggest', {method:'POST'})
+    .then(function(r){return r.json();}).then(function(d){
+      if(btn){ btn.disabled = false; btn.textContent = '🤖 유사 연결 제안 생성'; }
+      if(!d.ok){ alert('제안 실패: '+(d.error||'')); return; }
+      alert('유사 연결 제안: '+(d.n||0)+'건 ('+(d.method||'')+'). 화면을 새로고침합니다.');
+      location.reload();
+    }).catch(function(e){ if(btn){btn.disabled=false;btn.textContent='🤖 유사 연결 제안 생성';} alert('오류: '+e); });
+}
+function linkConfirm(gid, action){
+  if(action==='reject' && !confirm('이 유사 연결 제안을 기각할까요?')) return;
+  fetch('/submissions/'+SUBMISSION_ID+'/links/confirm', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({group_id:gid, action:action})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d.ok){ alert('실패: '+(d.error||'')); return; }
+      location.reload();
+    }).catch(function(e){ alert('오류: '+e); });
+}
+function linkExclude(gid, itemId, exclude){
+  var act = exclude ? 'exclude_member' : 'restore_member';
+  if(exclude && !confirm('이 항목을 합계에서 제외할까요? (이중계상 제거 — 되돌리기 가능, 총액이 변합니다)')) return;
+  fetch('/submissions/'+SUBMISSION_ID+'/links/confirm', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({group_id:gid, action:act, item_id:itemId})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d.ok){ alert('실패: '+(d.error||'')); return; }
+      location.reload();
+    }).catch(function(e){ alert('오류: '+e); });
 }
 
 /* ── [T7] 표준분류 직접 추가(후보에 없을 때) ── */
