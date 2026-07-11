@@ -125,9 +125,27 @@ def _dedup_and_rollup(items, tol_ratio=0.005):
                     topcat = parts[0] if parts else (it.get("category") or "")
                     cat_total[_norm(topcat)] = cat_total.get(_norm(topcat), 0.0) + \
                         float(it.get("amount") or 0)
+            detail_grand = sum(cat_total.values())   # 상세 정본 총액(전체)
             for sname in summary_sheets:
                 srows = [it for it in items
                          if it.get("_sheet") == sname and not it.get("merge_status")]
+                # [견고성 6f · 전체요약] 요약 시트의 상위 레벨(대분류)이 상세의 상위카테고리
+                #  (더 깊은 레벨)와 이름이 안 맞아 per-category roll-up이 실패해도, '시트 총액이
+                #  상세 정본 총액과 일치'하면 이 시트 전체가 top-level 요약(갑지·공종목록)이다.
+                #  → 전 행 roll-up(이중계상 방지, Δ=0). 독립 breakdown(총액 불일치)은 여기 미해당
+                #  → 아래 per-category/summary_unmatched 경로로 잎·residual 보존(손실 0).
+                sheet_sum = sum(float(s.get("amount") or 0) for s in srows)
+                whole = (detail_grand > 0
+                         and abs(sheet_sum - detail_grand) <= max(1.0, detail_grand * tol_ratio))
+                if whole:
+                    for s in srows:
+                        if s.get("amount") and not s.get("merge_status"):
+                            s["merge_status"] = "rolled_up"
+                            report["rollups"].append({
+                                "name": s.get("name_normalized"), "amount": s.get("amount"),
+                                "matched_category": "(전체요약)", "detail_sum": detail_grand,
+                                "sheet": sname})
+                    continue
                 pend = []
                 for s in srows:
                     amt = float(s.get("amount") or 0)
@@ -699,8 +717,12 @@ def _run_stitch(path, sheet_infos, sheet_names):
         #  보강: 그런 시트를 passthrough로 추가 방출해 residual(미연계)로 보존(캔버스 수기
         #  연결 대기). 요약(총액이 leaf와 중복)인 경우는 뒤의 _dedup_and_rollup이 시트경계·
         #  카테고리 합 일치로 roll-up 처리 → 총액 불변(Δ=0). 즉 breakdown은 보존, 요약은 정리.
+        #  [견고성 6f] 'leaf' 역할 시트(정수번호+금액, 예 갑지·공종목록)도 동일하게 방출.
+        #   기존엔 seq 모드에서 seq_* 만 방출해 leaf 시트가 흔적 없이 통째 소실됐다.
+        #   방출 후 요약이면 _dedup_and_rollup 이 카테고리 합 일치로 roll-up(Δ=0), 독립
+        #   breakdown이면 residual(미연계)로 보존 → 손실 0. (C3 공종목록=요약 → roll-up 유지.)
         for (recs, meta, role), info in zip(sheets, infos):
-            if role in ("seq_list", "seq_tree") and any(r.get("amount") for r in recs):
+            if role in ("seq_list", "seq_tree", "leaf") and any(r.get("amount") for r in recs):
                 _it, _rs, _, _cd = _stitch_passthrough(
                     path, info["name"], info["mapping"], info["header_row"])
                 for x in _it:
