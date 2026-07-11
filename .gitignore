@@ -72,3 +72,7 @@ poetry.lock
 data/*.xlsx
 data/*.pdf
 data/입찰*
+
+# 견고성 테스트 생성물(재생성 가능)
+tests/rob/_fixtures/
+tests/rob/_results.jsonl
