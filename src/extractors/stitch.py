@@ -694,39 +694,23 @@ def _cross_sheet_reparent(items):
     return items
 
 
-def _flag_cross_sheet_similar(items, residuals):
-    """[분류명 상이 동일항목] 시트 간 (품명+규격+금액)이 같지만 분류경로가 다른 잎을
-    '미연계(잠재중복)'로 표기(자동 병합은 안 함). 비파괴: 금액·merge_status 불변 → Δ=0.
-
-    · 대상: merge_status 없는(정본) 잎 중 amount 있는 것.
-    · 그룹키 = (norm품명, norm규격, round(amount)). 그룹이 2개 이상의 '서로 다른 시트'와
-      2개 이상의 '서로 다른 정규화 경로'에 걸치면 → 각 항목에 _cross_sheet_similar 표기 +
-      residual(reason=cross_sheet_similar) 1건씩. (경로가 모두 같으면 (A) dedup 대상이라 제외.)
-    """
-    groups = {}
-    for it in items:
-        if it.get("merge_status"):
-            continue
-        amt = it.get("amount")
-        if not amt:
-            continue
-        key = (_norm(it.get("name_normalized")), _norm(it.get("spec")),
-               round(float(amt), 2))
-        groups.setdefault(key, []).append(it)
-    for key, grp in groups.items():
-        if len(grp) < 2:
-            continue
-        sheets = {g.get("_sheet") for g in grp}
-        paths = {_norm(g.get("path")) for g in grp}
-        if len(sheets) >= 2 and len(paths) >= 2:
-            for g in grp:
-                g["_cross_sheet_similar"] = True
-                ln = g.get("line_no", "")
-                row = int(ln[1:]) if isinstance(ln, str) and ln[1:].isdigit() else None
-                residuals.append({"reason": "cross_sheet_similar",
-                                  "name": g.get("name_normalized"),
-                                  "assigned_path": g.get("path"),
-                                  "sheet": g.get("_sheet"), "row": row})
+# ─────────────────────────────────────────────────────────────────────────────
+# [항목 연결 3단계 원칙]  (반드시 유지)
+#   1단계 완전합치(코드)  : 결정론적 exact-match. 스티칭 계층의 책임.
+#       · 시트 내/시트 간 완전동일(정규화 분류경로+품명+규격+금액)만 자동 병합
+#         → _dedup_and_rollup (A) 완전중복 dedup + (B) 요약행 roll-up.
+#   2단계 유사도(LLM)      : 완전합치 안 된 '유사' 항목의 연결 제안. 스티칭이 아니라
+#       DB 저장 후 기존 LLM 파이프라인이 담당 — extractors.catalog_clusterer
+#       (코드 exact prepass → LLM 유사도 클러스터), extractors.matcher(LLM 카탈로그 매칭,
+#       match_status='suggested'). 결과는 '제안'일 뿐 자동확정 아님.
+#   3단계 사람 점검        : LLM 제안을 담당자가 최종 확인·수정(accept/reject, 확정 플로우).
+#
+# ⚠️ 스티칭 계층은 '무LLM 결정론'이다. 시트 간 '유사(비완전합치) 동일항목'을 코드가
+#    자동 병합하거나 '미연계'로 종결 표기하면 2단계(LLM)를 건너뛴 오합치·오종결이 된다.
+#    → 완전합치가 아닌 유사 항목은 별도 정본 잎으로 보존(총액 Δ=0)해 DB에 저장하고,
+#      유사도 연결은 위 2단계(clusterer/matcher) → 3단계(사람 확정)에 위임한다.
+#    (설계 결정: docs/QDBT_견고성테스트_20260711.md · CHANGELOG 참조.)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _finalize_items(items):
@@ -863,11 +847,10 @@ def _run_stitch(path, sheet_infos, sheet_names):
                               "name": it.get("name_normalized"),
                               "assigned_path": it.get("path"), "row": row})
 
-    # [분류명 상이 동일항목] 시트 간 (품명+규격+금액) 동일하나 '분류경로가 다른' 잎은
-    #  자동 병합하지 않는다(오합치 위험) — 별도 유지하되 '미연계(잠재중복)'로 표기해
-    #  사람이 판단하도록 residual 로 올린다. 완전동일(경로까지 동일)은 이미 (A)에서 dedup.
-    #  금액·병합상태 불변 → 총액 Δ=0(잠재중복 표기만 추가).
-    _flag_cross_sheet_similar(items, residuals)
+    # [항목 연결 3단계 원칙 — 위 배너 참조] 시트 간 (품명+규격+금액) 동일하나 '분류경로가
+    #  다른' 잎은 '유사(비완전합치)'이므로 스티칭(무LLM)이 자동 병합·미연계 종결하지 않는다.
+    #  → 별도 정본 잎으로 보존(총액 Δ=0)해 DB 저장 → 2단계 LLM 유사도(catalog_clusterer/
+    #  matcher)가 연결 '제안' → 3단계 사람 확정. 완전동일(경로까지)은 이미 (A)에서 dedup.
 
     # 총액·건수는 병합 제외행(merge_status)을 뺀 정본 잎 기준.
     leaf_total = sum(it["amount"] for it in items
