@@ -86,6 +86,13 @@ window.LKC = (function(){
   function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
   function fmt(v){ return Math.round(v||0).toLocaleString('ko-KR'); }
   function levelName(d){ return S.levels[d] || ('레벨' + (d+1)); }
+  // [품명레벨 버그수정] 열(depth) 헤더 라벨. 그 depth의 노드가 '전부 잎(품목)'이면 분류레벨명
+  //  (대/중/소/세) 대신 '품명'으로 표기한다. [대,중,품명]처럼 분류 레벨이 적으면 품명 잎이 낮은
+  //  depth(예 2)에 놓여 고정 위치매핑상 '소분류'로 오라벨되던 것을 교정(품명은 분류가 아니라 항목).
+  //  leaf-only 판정은 표시 전용 — 트리 구조·금액 불변(Δ=0).
+  function colHeaderLabel(d, leafOnlyByDepth){
+    return (leafOnlyByDepth && leafOnlyByDepth[d]) ? (S.levels[4] || '품명') : levelName(d);
+  }
 
   function sortSib(list){
     // 형제 노드(같은 상위분류의 하위)를 금액/이름으로 정렬. 기본('')은 원래 순서.
@@ -158,12 +165,18 @@ window.LKC = (function(){
     // 깊이별 전체 노드 수(접힘 무관) — 헤더에 (현재 표시/총계) 표기용.
     var totalByDepth={};
     S.nodes.forEach(function(n){ totalByDepth[n.depth]=(totalByDepth[n.depth]||0)+1; });
+    // [품명레벨 버그수정] depth별 '전부 잎' 여부(표시 라벨용). 잎만 있는 열은 '품명'으로 표기.
+    var leafOnlyByDepth={};
+    S.nodes.forEach(function(n){
+      if(leafOnlyByDepth[n.depth]===undefined) leafOnlyByDepth[n.depth]=true;
+      if(!n.is_leaf) leafOnlyByDepth[n.depth]=false;
+    });
 
     var html='<div class="lkc-canvas'+(S.readonly?' lkc-ro':'')+'"><svg class="lkc-svg"></svg><div class="lkc-cols">';
     for(var d=0; d<=maxD; d++){
       var cnt=(cols[d]||[]).length;
       var tot=totalByDepth[d]||0;
-      html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(levelName(d))
+      html += '<div class="lkc-col" data-depth="'+d+'"><div class="lkc-col-h">'+esc(colHeaderLabel(d, leafOnlyByDepth))
             + '<span class="lkc-col-n">'+cnt+'/'+tot+'개</span></div>';
       (cols[d]||[]).forEach(function(n){ html += nodeCard(n); });
       html += '</div>';
