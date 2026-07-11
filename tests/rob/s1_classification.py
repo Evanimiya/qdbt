@@ -93,33 +93,44 @@ def run():
             "PASS" if ok else "FAIL",
             "" if ok else "fill-down 상속 실패")
 
-    # ── 1e. 분류명만 다르고 동일 항목(시트 간) ──
-    #  같은 제출서의 두 시트에 동일 품명·규격·금액이 서로 다른 분류명으로.
-    #  → 이중계상 방지(dedup) 또는 최소한 residual 표기 기대.
+    # ── 1e. 항목 연결 3단계 원칙 [Fix3 재작업] ──
+    #  1단계 완전합치(코드): 경로+품명+규격+금액 정확일치만 자동 dedup.
+    #  유사(품명·규격·금액 같고 분류경로만 다름)는 스티칭(무LLM)이 병합/미연계 종결하지
+    #  않고 별도 정본 잎으로 보존(총액 Δ=0) → 2단계 LLM 유사도(clusterer/matcher)로 위임.
+    mp = {1: "cat1", 2: "name", 3: "spec", 4: "qty", 5: "price", 6: "amount"}
+    # (i) 유사(다른 경로) → 별도 잎 보존, 코드-종결 표기 없음
     p = build_wb("s1e.xlsx", [
         ("자재A", [["대분류", "품명", "규격", "수량", "단가", "금액"],
                    ["구매자재", "베어링", "6203ZZ", 1, 5000, 5000]], []),
         ("자재B", [["대분류", "품명", "규격", "수량", "단가", "금액"],
                    ["수입자재", "베어링", "6203ZZ", 1, 5000, 5000]], []),
     ])
-    specs = [
-        {"sheet": "자재A", "mapping": {1: "cat1", 2: "name", 3: "spec", 4: "qty", 5: "price", 6: "amount"}, "header_row": 1},
-        {"sheet": "자재B", "mapping": {1: "cat1", 2: "name", 3: "spec", 4: "qty", 5: "price", 6: "amount"}, "header_row": 1},
-    ]
-    res = stitch_sheets(p, specs)
+    res = stitch_sheets(p, [{"sheet": "자재A", "mapping": mp, "header_row": 1},
+                            {"sheet": "자재B", "mapping": mp, "header_row": 1}])
     kept = [it for it in res["items"] if not it.get("merge_status")]
     tot = res["totals"]["leaf_sum"]
-    similar = [r for r in res["residuals"] if r["reason"] == "cross_sheet_similar"]
-    flagged = {it.get("_cross_sheet_similar") for it in kept} == {True}
-    # [Fix3] 분류명이 달라 자동 병합은 안 함(오합치 방지) — 별도 유지 + '미연계' 표기.
-    ok = (len(kept) == 2 and approx(tot, 10000)
-          and len(similar) == 2 and flagged)
-    rec.add("1e", "분류명만 다른 동일항목(시트 간) 미연계 표기 [Fix3]",
-            "같은 제출서 두 시트에 동일 품명·규격·금액이 다른 분류명으로",
-            "자동병합 안 함(총액 10000 유지) + cross_sheet_similar residual 2건 표기",
-            f"kept={len(kept)} 총액={tot} similar_residual={len(similar)} flagged={flagged}",
+    terminal = [r for r in res["residuals"] if r["reason"] == "cross_sheet_similar"]
+    code_flag = any(it.get("_cross_sheet_similar") for it in kept)
+    sim_ok = (len(kept) == 2 and approx(tot, 10000)
+              and not terminal and not code_flag)   # 코드 자동병합·종결표기 없음
+    # (ii) 완전동일(경로까지 동일) → 1단계 코드 dedup
+    p2 = build_wb("s1e2.xlsx", [
+        ("자재A", [["대분류", "품명", "규격", "수량", "단가", "금액"],
+                   ["구매자재", "베어링", "6203ZZ", 1, 5000, 5000]], []),
+        ("자재B", [["대분류", "품명", "규격", "수량", "단가", "금액"],
+                   ["구매자재", "베어링", "6203ZZ", 1, 5000, 5000]], []),
+    ])
+    res2 = stitch_sheets(p2, [{"sheet": "자재A", "mapping": mp, "header_row": 1},
+                              {"sheet": "자재B", "mapping": mp, "header_row": 1}])
+    exact_ok = (res2["reconciliation"]["duplicates"] == 1
+                and approx(res2["totals"]["leaf_sum"], 5000))
+    ok = sim_ok and exact_ok
+    rec.add("1e", "항목 연결 3단계 원칙(완전합치=코드, 유사도=LLM 위임) [Fix3]",
+            "시트 간 동일 품명·규격·금액 — 유사(다른경로) vs 완전동일(같은경로)",
+            "완전동일만 코드 dedup, 유사는 별도 잎 보존(총액 불변)·코드종결 없이 LLM에 위임",
+            f"유사:kept={len(kept)} 총액={tot} 종결표기={len(terminal)}/{code_flag} | 완전동일:dedup={res2['reconciliation']['duplicates']} 총액={res2['totals']['leaf_sum']}",
             "PASS" if ok else "FAIL",
-            "" if ok else "미연계 표기 실패")
+            "" if ok else "3단계 원칙 위반(코드 자동병합/종결 or exact dedup 실패)")
 
     return rec.flush()
 
