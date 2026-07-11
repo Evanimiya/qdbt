@@ -1434,6 +1434,7 @@ def column_map_extract(submission_id):
             all_compare_units.extend(sp["compare_units"])
         _resid = sres["residuals"]
         _cand = sres.get("candidates", [])
+        _lcand = sres.get("link_candidates", [])
         stitch_info = {
             "mode": sres["mode"],
             "n_items": sres["n_items"],
@@ -1443,6 +1444,10 @@ def column_map_extract(submission_id):
             "n_candidates": len(_cand),
             "candidates": _cand[:_CANDIDATE_CAP],  # 정상 분류경로(재지정 후보)
             "candidates_truncated": len(_cand) > _CANDIDATE_CAP,   # [H8] 절단 통지
+            # [항목연결 1단계] 시트 간 유사 연결 후보(코드). 2단계 LLM 제안 입력용(비파괴).
+            "link_candidates": _lcand[:_CANDIDATE_CAP],
+            "n_link_candidates": len(_lcand),
+            "link_candidates_truncated": len(_lcand) > _CANDIDATE_CAP,
             "reconciliation": sres.get("reconciliation"),   # [중복 병합] 요약↔상세 정리 리포트
             "n_dropped": sres.get("n_dropped", 0),
             "sheet_roles": [{"name": s["name"], "role": s["role"]}

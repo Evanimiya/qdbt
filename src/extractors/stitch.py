@@ -720,6 +720,50 @@ def _finalize_items(items):
     return items
 
 
+def _detect_link_candidates(items, tol_ratio=0.01):
+    """[항목연결 1→2단계 다리] 시트 간 '유사 연결 후보'(코드)를 비파괴 산출.
+
+    기준(보수적 시작): **정규화 품명 동일 + 서로 다른 분류경로 + 서로 다른 시트 + 금액 근접**.
+    이는 자동 병합·미연계 종결이 '아니다'. 2단계(LLM 유사 제안)의 입력 후보 목록만 만든다.
+    (완전동일=경로까지 같음은 이미 _dedup_and_rollup (A)에서 dedup되어 여기 안 들어옴.)
+
+    item_id는 이 시점(추출)엔 없다 → 후보 멤버는 (line_no, sheet, path)로 식별하고,
+    DB 저장 후 2단계 라우트가 line_no+path로 item_id를 복원한다(_build_residual_view와 동일).
+
+    반환: [{"key", "name", "members": [{line_no, sheet, path, amount, spec, name}...]}]
+    금액·merge_status 불변 → 총액 Δ=0(읽기 전용).
+    """
+    groups = {}
+    for it in items:
+        if it.get("merge_status"):
+            continue
+        amt = it.get("amount")
+        nm = _norm(it.get("name_normalized"))
+        if not amt or not nm:
+            continue
+        groups.setdefault(nm, []).append(it)
+    cands = []
+    for nm, grp in groups.items():
+        if len(grp) < 2:
+            continue
+        sheets = {g.get("_sheet") for g in grp}
+        paths = {_norm(g.get("path")) for g in grp}
+        if len(sheets) < 2 or len(paths) < 2:
+            continue   # 시트경계·경로차이 없으면 후보 아님
+        amts = [float(g.get("amount")) for g in grp]
+        amax = max(abs(a) for a in amts) or 1.0
+        if (max(amts) - min(amts)) > max(1.0, amax * tol_ratio):
+            continue   # 금액 근접 아님 → 다른 항목일 가능성(보수적 제외)
+        members = [{
+            "line_no": g.get("line_no"), "sheet": g.get("_sheet"),
+            "path": g.get("path"), "amount": g.get("amount"),
+            "spec": g.get("spec"), "name": g.get("name_normalized"),
+        } for g in grp]
+        cands.append({"key": nm, "name": grp[0].get("name_normalized"),
+                      "members": members})
+    return cands
+
+
 def _run_stitch(path, sheet_infos, sheet_names):
     """sheet_infos: [{name, mapping, header_row}]. 공통 스티칭 실행부."""
     sheets = []
@@ -854,10 +898,14 @@ def _run_stitch(path, sheet_infos, sheet_names):
                      if it.get("amount") and not it.get("merge_status"))
     n_dropped = reconciliation["duplicates"] + len(reconciliation["rollups"])
     n_kept = sum(1 for it in items if not it.get("merge_status"))
+    # [항목연결 1단계] 유사 연결 후보(코드, 비파괴) → 2단계 LLM 제안 입력.
+    link_candidates = _detect_link_candidates(items)
     return {
         "mode": mode, "items": items, "n_items": n_kept,
         "residuals": residuals, "n_residuals": len(residuals),
         "candidates": candidates,
+        "link_candidates": link_candidates,
+        "n_link_candidates": len(link_candidates),
         "sheets": infos, "totals": {"leaf_sum": leaf_total},
         "reconciliation": reconciliation,
         "n_dropped": n_dropped,
