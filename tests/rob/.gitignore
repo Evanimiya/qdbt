@@ -1,0 +1,4 @@
+_fixtures/
+_results.jsonl
+__pycache__/
+*.xlsx
