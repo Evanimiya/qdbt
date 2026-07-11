@@ -24,9 +24,10 @@ import s4_numbering
 import s5_amounts
 import s6_misc
 import s7_edges
+import s8_link
 
 MODULES = [s1_classification, s2_currency, s3_tabs, s4_numbering,
-           s5_amounts, s6_misc, s7_edges]
+           s5_amounts, s6_misc, s7_edges, s8_link]
 
 DOC = ROOT / "docs" / "QDBT_견고성테스트_20260711.md"
 _MARK = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "WARN": "⚠️ WARN"}
@@ -111,6 +112,15 @@ def render(rows):
              "3자리 소수부 → 유럽식 천단위(`'1.000'→1000`; `'3.5'`·`'0.125'` 소수 유지). "
              "`'1-5'`/`'1~5'` 범위표기는 억지 숫자화(15) 대신 `None`(미상) 보존해 오계상 방지 "
              "(계층번호는 seq 역할 열의 `seq_tuple` 이 별도 처리). 실샘플 총액 Δ=0. (S7 7-1/7-5 PASS)\n")
+    o.append("### 🔗 스티칭 자체 3단계 항목 연결 (S8 — 구현)\n")
+    o.append("- 스티칭이 **자체적으로** 항목 연결 3단계를 수행(intra-submission 시트 간): "
+             "`①완전합치(코드)` 정확일치만 자동 dedup → `②유사 합치(LLM 제안)` 완전합치 안 된 "
+             "유사 후보(`stitch._detect_link_candidates`: 정규화 품명 동일+다른 경로+다른 시트+금액 근접)를 "
+             "`stitch_link.suggest_links`가 LLM으로 '동일 라인아이템?' 판정해 **제안**(자동 병합 없음) → "
+             "`③사람 확정` `POST /links/confirm` accept(연결·**금액 불변**)/reject/명시적 중복 제외"
+             "(되돌리기 가능·이때만 총액 변동). **폐쇄망/무LLM**: 결정적 휴리스틱 폴백 → 애매하면 "
+             "`pending`(사람 확인 대기). 제안·확정은 전부 `map_config`(정본 `submission_items` 불변). "
+             "코드↔DB↔라우트↔UI 경로 검증(temp DB·인증 렌더) 완료. (S8 8-1~8-4 PASS)\n")
     o.append("### ⚠️ 남은 결정 필요\n")
     o.append("- **없음.** 상정한 엉망 시나리오(S1~S7)는 합리적 기본값으로 모두 처리됨. "
              "위 로케일 휴리스틱(단일점3자리=천단위)은 도메인(KRW 정수 우세) 기본값으로, "
