@@ -1144,6 +1144,66 @@ def residuals_suggest(submission_id):
                     "n": len(suggestions)})
 
 
+def _link_suggestions_for(submission_id, llm, provider=None):
+    """[항목연결 2단계 코어] map_config.stitch.link_candidates → 현재 항목의 item_id 복원
+    → stitch_link.suggest_links(LLM/휴리스틱) → link_suggestions 저장·반환.
+
+    정본(submission_items) 불변 — map_config만 갱신. provider 주입 가능(테스트용).
+    반환: {ok, proposals, method, n}."""
+    import json as _json
+    from extractors.stitch_link import _norm as _lnorm, suggest_links
+    sub = get_submission(submission_id)
+    if not sub:
+        return {"ok": False, "error": "not found"}
+    subd = dict(sub)
+    try:
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    stitch_meta = mc.get("stitch") or {}
+    cands = stitch_meta.get("link_candidates") or []
+    items = [dict(it) for it in get_items(submission_id)]
+    # 후보 멤버(line_no, path) → item_id 복원 (_build_residual_view와 동일 원리)
+    lut = {}
+    for it in items:
+        lut.setdefault((it.get("line_no"), _lnorm(it.get("path"))), it.get("item_id"))
+    resolved = []
+    for g in cands:
+        ms = [{**m, "item_id": lut.get((m.get("line_no"), _lnorm(m.get("path"))))}
+              for m in (g.get("members") or [])]
+        ms = [m for m in ms if m.get("item_id")]
+        if len(ms) >= 2:
+            resolved.append({**g, "members": ms})
+    res = suggest_links(resolved,
+                        api_key=(llm or {}).get("api_key"),
+                        provider_id=(llm or {}).get("provider", "claude"),
+                        model=(llm or {}).get("model"),
+                        base_url=(llm or {}).get("base_url"),
+                        verify_ssl=(llm or {}).get("verify_ssl", True),
+                        provider=provider)
+    stitch_meta["link_suggestions"] = res["proposals"]
+    stitch_meta["link_suggest_method"] = res["method"]
+    mc["stitch"] = stitch_meta
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    return {"ok": True, "proposals": res["proposals"], "method": res["method"],
+            "n": len(res["proposals"])}
+
+
+@bp.route("/<submission_id>/links/suggest", methods=["POST"])
+@require_role("manager")
+def links_suggest(submission_id):
+    """[항목연결 2단계] 시트 간 유사 후보에 LLM(또는 휴리스틱) 연결 '제안' 생성.
+    자동 병합 없음 — 제안만 저장(map_config.stitch.link_suggestions), 사람이 3단계에서 확정."""
+    if not get_submission(submission_id):
+        abort(404)
+    try:
+        from db.queries import get_user_llm_settings
+        llm = get_user_llm_settings(session.get("user_id", "")) or {}
+    except Exception:
+        llm = {}
+    return jsonify(_link_suggestions_for(submission_id, llm))
+
+
 @bp.route("/<submission_id>/map/save-sheet", methods=["POST"])
 @require_role("manager")
 def map_save_sheet(submission_id):
