@@ -251,6 +251,8 @@ def detail(submission_id):
 
     # [T7] 스티칭 미해결(residual) 검토용
     stitch_meta, residual_view = _build_residual_view(_subd, items)
+    # [항목연결 3단계] 시트 간 유사 연결 제안 카드
+    link_view = _build_link_view(_subd, items)
 
     # [연계 캔버스 공유] 상세 페이지에서도 동일 컴포넌트로 연계 트리 표시.
     residual_ids = sorted({rv["item_id"] for rv in residual_view} if residual_view else set(),
@@ -267,6 +269,7 @@ def detail(submission_id):
                            sheet_list=sheet_list, prev_sheets=prev_sheets,
                            grouped=grouped, compare_level=level,
                            stitch_meta=stitch_meta, residual_view=residual_view,
+                           link_view=link_view,
                            tree_json=_json.dumps(tree_data, ensure_ascii=False),
                            canvas_tree_json=_json.dumps(tree_data.get("tree") or [], ensure_ascii=False),
                            residual_ids_json=_json.dumps(residual_ids, ensure_ascii=False),
@@ -1202,6 +1205,97 @@ def links_suggest(submission_id):
     except Exception:
         llm = {}
     return jsonify(_link_suggestions_for(submission_id, llm))
+
+
+def _build_link_view(subd, items):
+    """[항목연결 3단계 표시] map_config.stitch.link_suggestions(+link_confirmations)를
+    현재 항목과 결합해 residual 패널의 '유사 연결 제안' 카드 목록으로.
+    반환: [{group_id,name,score,summary,method,status,confirmed,representative_item_id,
+            members:[{item_id,name,path,amount,excluded}]}]"""
+    import json as _json
+    try:
+        mc = _json.loads(subd.get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    props = (mc.get("stitch") or {}).get("link_suggestions") or []
+    confs = mc.get("link_confirmations") or {}
+    by_id = {dict(it).get("item_id"): dict(it) for it in items}
+    view = []
+    for p in props:
+        conf = confs.get(p.get("group_id")) or {}
+        members = []
+        for iid in (p.get("member_ids") or []):
+            it = by_id.get(iid)
+            if not it:
+                continue
+            members.append({"item_id": iid, "name": it.get("name_normalized"),
+                            "path": it.get("path"), "amount": it.get("amount"),
+                            "excluded": bool(it.get("is_header"))})
+        if len(members) < 2:
+            continue
+        view.append({
+            "group_id": p.get("group_id"), "name": p.get("name"),
+            "score": p.get("score"), "summary": p.get("summary"),
+            "method": p.get("method"), "status": p.get("status"),
+            "representative_item_id": p.get("representative_item_id"),
+            "confirmed": conf.get("status"), "members": members})
+    return view
+
+
+def _link_confirm(submission_id, payload):
+    """[항목연결 3단계 코어] 유사 연결 제안을 사람이 확정.
+
+    action:
+      · accept        : 연결 확정(링크만, 구조/표시) → 총액 Δ=0.
+      · reject        : 제안 기각.
+      · exclude_member: 특정 멤버(중복 잎)를 명시적으로 합계 제외(is_header=1, 되돌리기 가능)
+                        → 이때만 총액 변동(사람의 명시적 이중계상 제거). item_id 필요.
+      · restore_member: exclude 해제(is_header=0).
+    자동 병합/제외 없음 — 전부 사람의 명시적 액션. 정본 행은 보존(exclude는 되돌리기 가능).
+    """
+    import json as _json
+    from db.queries import set_item_excluded, recompute_subtotal
+    sub = get_submission(submission_id)
+    if not sub:
+        return {"ok": False, "error": "not found"}
+    gid = (payload.get("group_id") or "").strip()
+    action = (payload.get("action") or "").strip()
+    if action not in ("accept", "reject", "exclude_member", "restore_member"):
+        return {"ok": False, "error": "action 필요(accept/reject/exclude_member/restore_member)"}
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    confs = mc.get("link_confirmations") or {}
+    changed_total = False
+    if action == "accept":
+        prop = next((p for p in ((mc.get("stitch") or {}).get("link_suggestions") or [])
+                     if p.get("group_id") == gid), None)
+        confs[gid] = {"status": "accepted",
+                      "representative_item_id": (prop or {}).get("representative_item_id"),
+                      "member_ids": (prop or {}).get("member_ids", [])}
+    elif action == "reject":
+        confs[gid] = {"status": "rejected"}
+    elif action in ("exclude_member", "restore_member"):
+        iid = (payload.get("item_id") or "").strip()
+        if not iid:
+            return {"ok": False, "error": "item_id 필요"}
+        set_item_excluded(iid, action == "exclude_member")
+        changed_total = True
+    mc["link_confirmations"] = confs
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+    total = recompute_subtotal(submission_id) if changed_total else None
+    return {"ok": True, "action": action, "group_id": gid,
+            "changed_total": changed_total, "total": total}
+
+
+@bp.route("/<submission_id>/links/confirm", methods=["POST"])
+@require_role("manager")
+def links_confirm(submission_id):
+    """[항목연결 3단계] 유사 연결 제안 사람 확정(accept 링크만 Δ=0 / reject / 명시적 제외)."""
+    if not get_submission(submission_id):
+        abort(404)
+    return jsonify(_link_confirm(submission_id, request.get_json(silent=True) or {}))
 
 
 @bp.route("/<submission_id>/map/save-sheet", methods=["POST"])
