@@ -662,7 +662,9 @@ def detect_total_rows(path, sheet_name, mapping: dict, header_row: int = 1):
 
         reason = None
         # ① 합계 키워드 — 정밀 경계 매칭(부분문자열 오탐 방지). [C.i]
-        if is_total_label(joined):
+        #  [견고성 5-det] 마커가 품명 셀에 있고 분류 셀 값이 조인 뒤에 붙으면
+        #  ("소계 재료비") endswith 앵커 무력화로 미탐 → 셀 단독으로도 판정.
+        if is_total_label(joined) or any(is_total_label(t) for t in texts if t):
             reason = "합계·소계 키워드"
         # ② 품명·번호 비었는데 금액만 있는 행(요약행 성격)
         elif amt_num is not None and not name_val and not (

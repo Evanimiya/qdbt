@@ -207,9 +207,19 @@ def _read_records(path, sheet, mapping, header_row):
 
 
 def _is_total_row(rec, levels):
-    """총계/소계 행 판정 — 정밀 경계 매칭(부분문자열 오탐 방지). [C.i]"""
-    txt = " ".join(str(rec.get(k) or "") for k in (["name"] + levels)).strip()
-    return is_total_label(txt)
+    """총계/소계 행 판정 — 정밀 경계 매칭(부분문자열 오탐 방지). [C.i]
+
+    [견고성 5-dc] 합계 마커가 품명 셀에 있어도 분류 셀 값이 조인 뒤에 붙으면
+    ("소계 재료비") is_total_label 의 endswith 앵커가 무력화돼 미탐 → 이중계상.
+    → 조인 문자열 검사에 더해 '각 셀 단독'으로도 판정(마커가 어느 셀에 있든 검출).
+    셀 단독 판정은 is_total_label 자체가 정밀(강마커 endswith·단독'계'·영문 전체일치)
+    하므로 오탐 위험 없음. 실샘플 총액 불변(Δ=0) 확인.
+    """
+    keys = ["name"] + list(levels)
+    txt = " ".join(str(rec.get(k) or "") for k in keys).strip()
+    if is_total_label(txt):
+        return True
+    return any(is_total_label(rec.get(k)) for k in keys if rec.get(k))
 
 
 def _classify_sheet(recs, meta):
