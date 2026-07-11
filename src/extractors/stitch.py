@@ -391,6 +391,56 @@ def _stitch_band(sheets):
     return items, residuals, "band", sorted(cand_paths)
 
 
+def _emit_uncovered_band_costs(sheets, items, residuals):
+    """[견고성 7-4] band 요약 시트의 금액 행 중 '하위 상세에 대응 없는 고유비용'
+    (부대비 등)을 잎/residual 로 보존해 총액 누락을 막는다.
+
+    · '완전 고립' 판정(보수적 · Δ=0 우선): 요약 band 행의 분류 레벨 값이 방출된 어떤 잎의
+      경로 세그먼트에도 '전혀 등장하지 않으면'(공유값 0) → 하위 상세가 전무한 독립 고유비용
+      (예 부대비) → 잎+residual로 보존(총액 포함). 한 값이라도 잎 경로에 등장하면 그 행은
+      분류 계층의 일부(빈 카테고리 소계 등)이므로 방출 안 함 → C2 실샘플 Δ=0(회귀 없음).
+    · 총계/소계·금액 없는 행 제외, 통화 정합 적용, band 시트 간 동일경로 중복 방출 방지.
+    """
+    union_segs = set()
+    for it in items:
+        if it.get("merge_status"):
+            continue
+        union_segs |= {_norm(x) for x in _path_parts(it.get("path"))}
+    seen_paths = set()
+    for recs, meta, role in sheets:
+        if role != "band":
+            continue
+        levels = meta["levels"]
+        for r in recs:
+            amt = r.get("amount")
+            if not amt or _is_total_row(r, levels):
+                continue
+            vals = [r.get(lv) for lv in levels if r.get(lv)]
+            if not vals:
+                continue
+            vset = {_norm(v) for v in vals}
+            if vset & union_segs:
+                continue   # 잎 경로와 값 하나라도 공유 = 계층 일부 → 방출 안 함(Δ=0)
+            path = PATH_SEP.join(vals)
+            if _norm(path) in seen_paths:
+                continue   # band 시트 간 동일 고유비용 중복 방출 방지
+            seen_paths.add(_norm(path))
+            item = {
+                "path": path, "depth": len(vals),
+                "name_normalized": vals[-1], "name_raw": vals[-1],
+                "spec": r.get("spec"), "maker": r.get("maker"),
+                "quantity": r.get("qty"), "unit": r.get("unit"),
+                "unit_price": r.get("price"), "amount": amt,
+                "line_no": f"R{r['row']}", "_matched": False,
+                "_band_unique": True, "category": vals[0],
+                "is_category_header": False, "_sheet": None,
+            }
+            _apply_currency(item, r)   # [H10] 통화 정합
+            items.append(item)
+            residuals.append({"reason": "band_unique_cost", "name": vals[-1],
+                              "assigned_path": path, "row": r["row"]})
+
+
 # ── SEQ 아키타입: 번호계층 → 이름 해석 ──
 def _rec_name(r):
     """seq 행의 '레벨 이름'을 얻는다. 품목명(name)이 있으면 그것, 없으면 가장 깊은
@@ -738,6 +788,12 @@ def _run_stitch(path, sheet_infos, sheet_names):
                           if r == "leaf"), None)
         for x in items:
             x.setdefault("_sheet", _leafname)
+        # [견고성 7-4] band 요약(갑지 대분류별 금액)에 '상세에 없는 고유비용'(부대비 등)이
+        #  있으면 골격으로만 쓰여 소실됐다. band 금액을 '무조건' 방출하면 band-JOIN(C2:
+        #  분류체계+세부내역 골격 + 품목명세 잎)에서 같은 돈이 이중/삼중 계상돼 회귀한다.
+        #  → '대응 잎이 없는(커버 안 되는) 요약행'만 선별 방출: C2처럼 모두 커버되면 미방출
+        #  (Δ=0), 부대비처럼 하위 상세 없는 고유비용만 잎+residual로 보존(총액 누락 방지).
+        _emit_uncovered_band_costs(sheets, items, residuals)
     else:
         # 단일(또는 밴드/시퀀스 아님) → leaf 시트 passthrough 병합
         items, residuals, mode = [], [], "passthrough"
