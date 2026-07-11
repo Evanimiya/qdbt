@@ -465,13 +465,26 @@ def _stitch_seq(sheets, names=None):
     if names is None:
         names = [None] * len(sheets)
     seqmap = {}       # 번호 튜플 prefix -> 이름 (계층 정의: 목록/트리 시트 우선)
-    for (recs, m, role), _sn in zip(sheets, names):
-        if role in ("seq_list", "seq_tree", "seq_leaf"):
+
+    def _add_name_sources(role_ok):
+        for (recs, m, role), _sn in zip(sheets, names):
+            if not role_ok(role, m):
+                continue
             for r in recs:
                 st = r.get("seq_t")   # [구분자 무관] 숫자 그룹 튜플
                 nm = _rec_name(r)
                 if st and nm and not _is_total_row(r, []):
-                    seqmap.setdefault(st, nm)
+                    seqmap.setdefault(st, nm)   # 기존 정의 우선(회귀 방지)
+
+    # 1차: 명시적 목록/트리/세부 시트가 계층 이름을 정의(우선).
+    _add_name_sources(lambda role, m: role in ("seq_list", "seq_tree", "seq_leaf"))
+    # 2차: [C3 실파일 대분류 소실] 정수-seq '이름 목록' 시트(예 공종목록: 번호 1,2,3,4 +
+    #  공종명 + 금액)는 금액 때문에 role='leaf'로 분류돼 1차에서 빠졌다 → 상위 분류(대분류)
+    #  이름이 seqmap에 없어 잎 경로에서 대분류가 소실됐다(gap: 1→1.1.1). has_seq인 leaf 시트를
+    #  이름 소스로 추가하되 setdefault로 '미정의 prefix(대분류 자리)만' 채움 → 세부/트리 이름은
+    #  그대로, 대분류만 복원. 금액은 뒤의 roll-up이 정리(Δ=0).
+    _add_name_sources(lambda role, m: role == "leaf" and m.get("has_seq"))
+
     items, residuals = [], []
     leaf_sheets = [(recs, sn) for (recs, m, role), sn in zip(sheets, names)
                    if role == "seq_leaf"]
