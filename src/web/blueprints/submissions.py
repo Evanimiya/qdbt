@@ -996,7 +996,15 @@ def _build_residual_view(subd, items):
     seen_ids = set()
     item_paths = {dict(it).get("path") for it in items if dict(it).get("path")}
     skel = set(stitch_meta.get("candidates") or [])
-    all_paths = sorted(skel | item_paths)
+    # [중간레벨 부재=직접 붙임] 잎을 대분류(및 임의 상위 가지)에 '직접' 재지정할 수 있도록,
+    #  후보 경로의 모든 조상 프리픽스(재료비 · 재료비 > 기구부 …)도 선택지에 넣는다.
+    _base = skel | item_paths
+    _expanded = set(_base)
+    for _p in _base:
+        _segs = [s for s in (_p or "").split(" > ") if s.strip()]
+        for _i in range(1, len(_segs)):
+            _expanded.add(" > ".join(_segs[:_i]))
+    all_paths = sorted(x for x in _expanded if x and "⟨미연계" not in x)
     if stitch_meta and stitch_meta.get("residuals"):
         # line_no(R{row})는 시트마다 재시작해 다중시트에서 충돌할 수 있으므로
         # 리스트로 모으고, 충돌 시 assigned_path 로 정확한 항목을 고른다.
