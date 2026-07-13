@@ -592,6 +592,36 @@ def set_fx_rate(submission_id):
     return redirect(url_for("submissions.detail", submission_id=submission_id))
 
 
+@bp.route("/<submission_id>/source-currency", methods=["POST"])
+@require_role("manager")
+def set_source_currency(submission_id):
+    """[제출서 기본 통화] 라인에 통화 표기가 없을 때 적용할 원통화 지정 → 원화 재계산.
+
+    라인 명시 통화 우선. 기본통화≠KRW면 rate(선택)로 즉시 환산, 미입력 시 원화 미확정(환율 입력 유도).
+    KRW 선택 시 직전 기본통화 라인 원복(되돌리기).
+    """
+    from db.queries import set_submission_source_currency
+    from core.numparse import parse_amount
+    currency = (request.form.get("currency", "").strip().upper()) or "KRW"
+    rate = parse_amount(request.form.get("rate", ""))
+    try:
+        if rate is not None and rate <= 0:
+            raise ValueError("환율은 0보다 큰 숫자여야 합니다.")
+        r = set_submission_source_currency(submission_id, currency,
+                                           rate if (currency != "KRW") else None)
+        if currency == "KRW":
+            flash(f"✅ 기본 통화를 KRW로 설정(원복 {r['items_updated']}개).", "success")
+        elif r.get("rate"):
+            flash(f"✅ 기본 통화 {currency} 적용 · 환율 {r['rate']:,.2f} → "
+                  f"{r['items_updated']}개 라인 원화 재계산.", "success")
+        else:
+            flash(f"⚠ 기본 통화 {currency} 지정({r['items_updated']}개). "
+                  f"{currency} 환율을 입력하면 원화가 확정됩니다.", "warning")
+    except Exception as e:
+        flash(f"❌ 기본 통화 설정 실패: {e}", "error")
+    return redirect(url_for("submissions.detail", submission_id=submission_id))
+
+
 @bp.route("/<submission_id>/fx-rate/remove", methods=["POST"])
 @require_role("manager")
 def remove_fx_rate(submission_id):

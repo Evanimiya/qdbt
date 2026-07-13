@@ -84,6 +84,24 @@
         <div class="text-xs font-semibold text-blue-900 mb-1.5 break-ko">💱 통화·환율
           <span class="text-[10px] font-normal text-blue-600">— 타겟(비교) 통화: KRW · 환율 = 원화 환산율(1 외화 = ? 원)</span>
         </div>
+        {# [제출서 기본 통화] 라인에 통화 표기 없을 때 적용할 원통화. 감지된 외화 없어도 노출. #}
+        {% set _src_cur = (sub.source_currency or 'KRW')|upper %}
+        <form method="POST" action="{{ url_for('submissions.set_source_currency', submission_id=sub.submission_id) }}"
+              onsubmit="return confirm('이 견적서의 통화 표기 없는 라인을 기본 통화로 설정하고 원화를 재계산합니다(되돌리기 가능). 계속하시겠습니까?')"
+              class="flex items-center flex-wrap gap-1.5 bg-white rounded-lg border border-blue-300 px-2.5 py-1.5 mb-2">
+          <span class="text-xs font-bold text-blue-900 break-ko">🏳 이 견적서 기본 통화</span>
+          <select name="currency" class="text-xs border rounded px-1.5 py-0.5">
+            {% for c in ['KRW','USD','EUR','JPY','CNY'] %}
+            <option value="{{ c }}" {{ 'selected' if _src_cur == c else '' }}>{{ c }}</option>
+            {% endfor %}
+          </select>
+          <span class="text-[10px] text-gray-500 break-ko">(라인 명시 통화 우선 · 미표기 라인에 적용)</span>
+          <input type="number" step="any" min="0" name="rate" placeholder="환율(비KRW)" style="width:96px"
+                 class="text-xs border rounded px-1.5 py-0.5 text-right"
+                 title="기본 통화가 KRW가 아니면 원화 환율(선택). 비우면 원화 미확정.">
+          <button type="submit" class="text-xs bg-blue-700 text-white rounded px-2 py-0.5 hover:bg-blue-800">확정</button>
+          {% if _src_cur != 'KRW' %}<span class="text-[10px] font-bold text-indigo-700 bg-indigo-100 rounded-full px-1.5 py-0.5">기본 {{ _src_cur }}</span>{% endif %}
+        </form>
         <div class="flex flex-wrap gap-2">
           {% for cur, info in fx_rates.items() %}
           <form method="POST" action="{{ url_for('submissions.set_fx_rate', submission_id=sub.submission_id) }}"
