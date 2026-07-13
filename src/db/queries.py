@@ -1568,6 +1568,38 @@ def _apply_compare_units(all_items, units_by_sub):
     return out
 
 
+def _unroll_cluster_split_groups(conn, bid_id, items, raw_leaves):
+    """[granularity 정합] 클러스터가 '잎 레벨'인데 비교단위는 '그룹 레벨'이면,
+    한 비교단위 그룹의 잎들이 서로 다른 클러스터에 나뉘어, 렌더 시 같은 그룹 총액이
+    여러 잎-클러스터에 중복 귀속된다(예: GPU서버·IB스위치·관리서버가 모두 '컴퓨팅 인프라'
+    전체 금액으로 표시). 이런 '분할된 그룹'은 롤업하지 않고 원본 잎으로 되돌려 각 클러스터가
+    자기 잎만 갖게 한다. 정상(그룹 전체가 한 클러스터이거나 미분류)인 그룹은 롤업 유지.
+    총액 불변(그룹 금액 = 되돌린 잎 금액 합)."""
+    leaf2cl = {}
+    for r in conn.execute("""
+        SELECT cm.catalog_item_id AS iid, cm.cluster_id AS cid
+        FROM catalog_cluster_members cm
+        JOIN catalog_clusters cl ON cl.cluster_id = cm.cluster_id
+        WHERE cl.bid_id = ? AND cl.status IN ('accepted','pending','held')
+    """, (bid_id,)).fetchall():
+        leaf2cl[r["iid"]] = r["cid"]
+    if not leaf2cl:
+        return items
+    out = []
+    for it in items:
+        lf = it.get("member_item_ids") if hasattr(it, "get") else None
+        if lf and len(lf) > 1:
+            cls = {leaf2cl[x] for x in lf if x in leaf2cl}
+            if len(cls) >= 2:      # 그룹이 2개 이상 클러스터에 걸침 → 롤업 해제
+                for x in lf:
+                    rl = raw_leaves.get(x)
+                    if rl is not None:
+                        out.append(rl)
+                continue
+        out.append(it)
+    return out
+
+
 def category_order_for_bid(bid_id: str, present_cats=None) -> list:
     """입찰의 카테고리 표시 순서를 결정.
 
@@ -1712,7 +1744,10 @@ def compare_bid_submissions(bid_id):
             if u:
                 units_by_sub[ur["submission_id"]] = sorted(u, key=lambda p: -len(p))
         if units_by_sub:
+            _raw_leaves = {it["item_id"]: it for it in all_items}   # 롤업 전 원본 잎
             all_items = _apply_compare_units(all_items, units_by_sub)
+            # 잎-레벨 클러스터 + 그룹-레벨 비교단위 불일치 시 중복 귀속 방지(총액 불변).
+            all_items = _unroll_cluster_split_groups(c, bid_id, all_items, _raw_leaves)
 
         # 확정된 클러스터 조회
         # accepted + pending 클러스터 모두 표시
