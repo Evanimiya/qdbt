@@ -24,19 +24,20 @@ def run():
     r = extract_by_mapping(p, "Sheet", {1: "cat2", 2: "cat4", 3: "name", 4: "amount"}, 1)
     it0 = r["items"][0]
     parts = it0["path"].split(" > ")
-    ok = (r["n_items"] == 2 and it0["depth"] == 4
-          and parts[0] in PH and parts[2] in PH        # 대·소 placeholder
-          and parts[1] == "기구부" and parts[3] == "차폐"
-          and it0.get("is_level_residual") is True
+    # [중간레벨 부재=직접 붙임] 미매핑 레벨(대·소)은 placeholder 없이 직접 → 기구부 > 차폐.
+    ok = (r["n_items"] == 2 and it0["depth"] == 2
+          and parts == ["기구부", "차폐"]
+          and not any(x in PH for x in parts)
+          and not it0.get("is_level_residual")
           and approx(leaf_total(r["items"]), 300))
-    rec.add("1a", "비연속 레벨(중+세, 소 skip)",
-            "cat2,cat4 매핑 · 세분류가 소분류 자리로 당겨지면 안 됨",
-            "세분류 depth4 보존, 대·소 placeholder, residual, 총액300",
+    rec.add("1a", "비연속 레벨(중+세, 소·대 미매핑) → 직접",
+            "cat2,cat4 매핑 · 미매핑 레벨은 placeholder 없이 직접 붙임(①)",
+            "기구부 > 차폐(depth2), placeholder 없음, resid 없음, 총액300",
             f"depth={it0['depth']} path={it0['path']} resid={it0.get('is_level_residual')} tot={leaf_total(r['items'])}",
             "PASS" if ok else "FAIL",
-            "" if ok else "레벨 절대배치/placeholder 미동작")
+            "" if ok else "미매핑 레벨 직접 붙임 규칙 위반")
 
-    # ── 1b. 대분류 없이 시작 (중분류부터) ──
+    # ── 1b. 대분류 없이 시작 (중분류부터, 대분류 미매핑) → 직접 ──
     p = build_wb("s1b.xlsx", [("Sheet", [
         ["중분류", "소분류", "품명", "금액"],
         ["전장부", "제어", "PLC", 500],
@@ -44,15 +45,15 @@ def run():
     r = extract_by_mapping(p, "Sheet", {1: "cat2", 2: "cat3", 3: "name", 4: "amount"}, 1)
     it0 = r["items"][0]
     parts = it0["path"].split(" > ")
-    ok = (it0["depth"] == 3 and parts[0] in PH
-          and parts[1] == "전장부" and parts[2] == "제어"
-          and it0.get("is_level_residual") is True)
-    rec.add("1b", "대분류 없이 중분류부터 시작",
-            "중분류가 대분류로 승격되면 안 됨(placeholder로 자리 보존)",
-            "depth3, 대분류 placeholder, 중=전장부, residual",
+    ok = (it0["depth"] == 2 and parts == ["전장부", "제어"]
+          and not any(x in PH for x in parts)
+          and not it0.get("is_level_residual"))
+    rec.add("1b", "대분류 미매핑, 중분류부터 → 직접",
+            "cat1 미매핑 → placeholder 없이 중분류가 루트로 직접(①)",
+            "전장부 > 제어(depth2), placeholder 없음, resid 없음",
             f"depth={it0['depth']} path={it0['path']} resid={it0.get('is_level_residual')}",
             "PASS" if ok else "FAIL",
-            "" if ok else "상위 레벨 placeholder 미삽입")
+            "" if ok else "미매핑 대분류 직접 붙임 규칙 위반")
 
     # ── 1c. 행마다 depth 불일치 ──
     p = build_wb("s1c.xlsx", [("Sheet", [

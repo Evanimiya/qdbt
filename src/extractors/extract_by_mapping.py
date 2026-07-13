@@ -355,6 +355,45 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     # 번호 계층용: 번호 → 그 행의 분류명 (예: "1" → "MATERIAL")
     seq_names = {}  # seq prefix -> name
 
+    # [중간레벨 부재 표준 = 직접 붙임] 매핑된 각 cat 역할의 값(병합/이어받기 fill-down 반영,
+    #  단 상위값 복제 없음)을 절대레벨에 채운다. _prev_val(대분류 이름을 중/소에 베끼는) 복제는
+    #  제거 — 가짜 노드 금지. 빈 중간레벨은 기본 '직접 붙임'(스킵)이고, placeholder(⟨미연계⟩)는
+    #  '누락 의심'(④ 형제 비교: 같은 부모 형제는 그 레벨이 있는데 이 행만 빔)에만 삽입.
+    _mapped_levels = sorted(int(role[3:]) for role, _ in cat_cols)
+
+    def _row_levels(rr, _last):
+        lv_val = {}
+        for role, col in cat_cols:
+            lv = int(role[3:])
+            v = cell_val(rr, col)
+            v = str(v).strip() if v is not None else ""
+            if not v and fill_down_categories:
+                v = _last.get(role, "")   # ② 병합/이어받기 정당 상속(유지)
+            if v:
+                _last[role] = v
+                lv_val[lv] = v
+            elif not fill_down_categories:
+                _last[role] = ""
+        return lv_val
+
+    # 사전 패스(cat 모드): 각 데이터 행의 레벨값 + '형제가 그 레벨을 가진 부모키' 집합.
+    _row_lvl_cache = {}
+    _sibling_parent_keys = {lv: set() for lv in _mapped_levels}
+    if seq_col is None and cat_cols:
+        _pre_last = {}
+        for _rr in range(header_row + 1, sheet.max_row + 1):
+            if _rr in excluded_rows:
+                continue
+            _rv = [sheet.cell(row=_rr, column=c).value for c in range(1, sheet.max_column + 1)]
+            if not any(v is not None and str(v).strip() for v in _rv):
+                continue
+            _lvv = _row_levels(_rr, _pre_last)
+            _row_lvl_cache[_rr] = _lvv
+            for _L in _mapped_levels:
+                if _L in _lvv:
+                    _pk = tuple(_lvv.get(x) for x in _mapped_levels if x < _L)
+                    _sibling_parent_keys[_L].add(_pk)
+
     for r in range(header_row + 1, sheet.max_row + 1):
         # 사용자가 제외한 행 (subtotal 등) 스킵
         if r in excluded_rows:
@@ -411,34 +450,27 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
 
             path_str = PATH_SEP.join(parts)
         else:
-            # ── cat 열 모드 (절대 레벨 배치 + gap placeholder) ──
-            # 1) 매핑된 각 cat 역할의 값(빈칸 상속 포함)을 '절대 레벨'에 채운다.
-            _lvl_val = {}       # 절대레벨 -> 값
-            _prev_val = None
-            for role, col in cat_cols:
-                lv = int(role[3:])
-                v = cell_val(r, col)
-                v = str(v).strip() if v is not None else ""
-                if not v and fill_down_categories:
-                    v = last_cat.get(role, "")
-                if not v and _prev_val:
-                    v = _prev_val   # 매핑된 깊은 분류가 비면 직전 상위값 상속(기존 동작)
-                if v:
-                    last_cat[role] = v
-                    _lvl_val[lv] = v
-                    _prev_val = v
-                else:
-                    if not fill_down_categories:
-                        last_cat[role] = ""
-            # 2) 레벨 1..max로 조립. 값 있으면 그 값, 없으면(상단/중간 gap) placeholder.
+            # ── cat 열 모드 (중간레벨 부재 = 직접 붙임, 누락 의심만 placeholder) ──
+            _lvl_val = _row_lvl_cache.get(r, {})   # 사전 패스 결과(fill-down 반영, 복제 없음)
+            # 조립: 존재값은 넣고, 빈 레벨은 규칙에 따라 직접(스킵) 또는 미연계(placeholder).
+            #  ① 미매핑 레벨 → 스킵(직접). ④ 매핑됐지만 이 행만 빔+형제엔 있음 → placeholder(미연계).
+            #  ⑤ 그 외(형제도 없음/후행 빈 레벨) → 스킵(직접). _prev_val 복제 없음.
             parts = []
             if _lvl_val:
-                for lv in range(1, _cat_max_level + 1):
+                # 매핑된 최심 레벨까지 훑되(후행 누락도 ④ 대상), 마지막 존재값 뒤의 '형제도 없는'
+                #  빈 레벨은 스킵돼 자연히 직접 붙는다(끝에 placeholder가 남지 않음).
+                for lv in range(1, (_mapped_levels[-1] if _mapped_levels else 0) + 1):
                     if lv in _lvl_val:
                         parts.append(_lvl_val[lv])
+                    elif lv not in _mapped_levels:
+                        continue   # ① 미매핑(gap) → 직접 붙임
                     else:
-                        parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
-                        _row_level_resid = True   # 미연계 레벨(상위 수기 연결 대기)
+                        # 매핑됐지만 이 행에서 빈 레벨 → ④ 형제 비교(같은 부모키에 그 레벨 존재?)
+                        _pk = tuple(_lvl_val.get(x) for x in _mapped_levels if x < lv)
+                        if _pk in _sibling_parent_keys.get(lv, set()):
+                            parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
+                            _row_level_resid = True   # 누락 의심 → 미연계(사람 확인)
+                        # else ⑤ → 직접(스킵)
             path_str = PATH_SEP.join(parts)
 
         # 정보 추출
