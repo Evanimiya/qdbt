@@ -612,6 +612,11 @@ def migrate_db(db_path=None):
         #   플래그 행은 is_header=1로 저장돼 모든 합계 쿼리에서 제외되며,
         #   삭제하지 않고 보존(되돌리기 가능: is_header=0·merge_status=NULL).
         migrations.append("ALTER TABLE submission_items ADD COLUMN merge_status TEXT")
+    if "cat_levels" not in si_cols:
+        # [의미 레벨 · 표시전용] path 세그먼트별 절대 분류레벨 + 잎 레벨(품명/부품). JSON
+        #   {"segs":[1,3],"leaf":5}. 연계 캔버스가 트리 depth 대신 '의미 레벨 열'에 노드를 배치해
+        #   빈 중간 계층(직접 붙임)이 보이게 한다. NULL이면 depth 폴백(seq/band·구데이터). 금액 무관.
+        migrations.append("ALTER TABLE submission_items ADD COLUMN cat_levels TEXT")
 
     # submissions.fx_rates: 통화별 환율 맵 JSON — {"USD":{"rate":1380,"base":"KRW","source":"extracted|manual"}}
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]

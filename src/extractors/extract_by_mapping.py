@@ -404,6 +404,7 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
             continue
 
         _row_level_resid = False   # [레벨 보존] cat 모드에서 placeholder 삽입 시 True
+        _part_levels = None        # [의미 레벨] cat 모드에서만 채움(seq는 None → depth 폴백)
         # ── 번호(seq) 모드: 번호 패턴으로 계층 구성 ──
         if seq_col is not None:
             seq_raw = cell_val(r, seq_col)
@@ -456,12 +457,14 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
             #  ① 미매핑 레벨 → 스킵(직접). ④ 매핑됐지만 이 행만 빔+형제엔 있음 → placeholder(미연계).
             #  ⑤ 그 외(형제도 없음/후행 빈 레벨) → 스킵(직접). _prev_val 복제 없음.
             parts = []
+            _part_levels = []   # [의미 레벨] 각 path 세그먼트의 절대 분류레벨(대=1..세=4)
             if _lvl_val:
                 # 매핑된 최심 레벨까지 훑되(후행 누락도 ④ 대상), 마지막 존재값 뒤의 '형제도 없는'
                 #  빈 레벨은 스킵돼 자연히 직접 붙는다(끝에 placeholder가 남지 않음).
                 for lv in range(1, (_mapped_levels[-1] if _mapped_levels else 0) + 1):
                     if lv in _lvl_val:
                         parts.append(_lvl_val[lv])
+                        _part_levels.append(lv)
                     elif lv not in _mapped_levels:
                         continue   # ① 미매핑(gap) → 직접 붙임
                     else:
@@ -469,6 +472,7 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                         _pk = tuple(_lvl_val.get(x) for x in _mapped_levels if x < lv)
                         if _pk in _sibling_parent_keys.get(lv, set()):
                             parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
+                            _part_levels.append(lv)
                             _row_level_resid = True   # 누락 의심 → 미연계(사람 확인)
                         # else ⑤ → 직접(스킵)
             path_str = PATH_SEP.join(parts)
@@ -483,6 +487,11 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
         }
         if _row_level_resid:
             item["is_level_residual"] = True   # 캔버스 미연계 표기용(상위 수기 연결 대기)
+        # [의미 레벨 · 표시전용] cat 모드는 각 path 세그먼트의 절대 분류레벨을 싣는다(대=1..세=4).
+        #  잎(품목)은 품명 레벨(5). seq/band(_part_levels None)는 미설정 → 캔버스가 depth 폴백(회귀 없음).
+        if _part_levels is not None:
+            item["cat_levels"] = list(_part_levels)
+            item["leaf_level"] = 5   # 품명 열(맨 오른쪽)
         for field, col in info_cols.items():
             v = cell_val(r, col)
             if field in ("quantity", "unit_price", "amount",
@@ -522,10 +531,14 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                     if _poem != _last:   # 세분류와 품목이 동일하면 중복 방지
                         item["path"] = (item["path"] + PATH_SEP + _poem) if item.get("path") else _poem
                         item["depth"] = (item.get("depth") or 0) + 1
+                        if item.get("cat_levels") is not None:
+                            item["cat_levels"] = item["cat_levels"] + [5]   # 품목=품명 레벨(경로 끝)
                     if not item.get("category"):
                         item["category"] = (item["path"].split(PATH_SEP)[0]) if item.get("path") else _poem
                 item["name_normalized"] = _pv
                 item["name_raw"] = _pv
+                if item.get("leaf_level") is not None:
+                    item["leaf_level"] = 6   # 부품 열
 
         # 품목명이 없으면 — 분류 헤더 행이거나 빈 행일 수 있음
         name = item.get("name_normalized")
@@ -554,6 +567,9 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 item["depth"] = 1
                 if not item.get("category"):
                     item["category"] = "기타"
+                if _part_levels is not None:
+                    item["cat_levels"] = [5]   # 분류 없는 품목 → 품명 레벨 노드
+                    item["leaf_level"] = None
 
         items.append(item)
 

@@ -577,6 +577,7 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
         #  상속(정당) 후에도 비면 직접 스킵. 누락 의심은 아래 matched=complete → residual(level_skip)로
         #  이미 표기되므로 가짜 placeholder 노드를 만들지 않는다(경로/depth만 바뀜, 총액 Δ=0).
         parts = []
+        _part_levels = []   # [의미 레벨] 각 세그먼트의 절대 분류레벨
         _row_gap = False
         _lv_set = set(levels)
         for lv in (range(min(levels), max(levels) + 1) if levels else ()):
@@ -588,15 +589,24 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
                     v = last_cat.get(lv)
                 if v:
                     parts.append(v)
+                    _part_levels.append(lv)
             # else: ① 미매핑 gap → 직접 붙임(스킵)
         matched = complete
-        _pp, _ln = _part_promote(r, PATH_SEP.join(parts), _leafnm)
+        _base = PATH_SEP.join(parts)
+        _pp, _ln = _part_promote(r, _base, _leafnm)
+        # [의미 레벨] path 세그먼트 절대레벨 + 잎(품목=품명 5, 부품 있으면 품목이 경로끝 5·잎=부품 6).
+        _cat_levels = list(_part_levels)
+        _leaf_level = 5
+        if r.get("part") and _pp != _base:
+            _cat_levels = _cat_levels + [5]   # 품목이 경로 끝(품명 레벨)
+            _leaf_level = 6                    # 잎 = 부품
         item = {
             "path": _pp, "depth": len([x for x in _pp.split(PATH_SEP) if x]),
             "name_normalized": _ln, "spec": r.get("spec"), "maker": r.get("maker"),
             "quantity": r.get("qty"), "unit": r.get("unit"),
             "unit_price": r.get("price"), "amount": r.get("amount"),
             "line_no": f"R{r['row']}", "_matched": matched, "_top_level": top_level,
+            "cat_levels": _cat_levels, "leaf_level": _leaf_level,
         }
         _apply_currency(item, r)   # [H10] 통화 정합
         if _row_gap:

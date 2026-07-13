@@ -984,14 +984,21 @@ def insert_items_bulk(submission_id, items: list[dict]):
         for i, it in enumerate(items):
             iid = new_id()
             try:
+                # [의미 레벨] path 세그먼트별 분류레벨 + 잎 레벨 → 캔버스 의미열 배치용(표시 전용).
+                _catlv = None
+                if it.get("cat_levels") is not None:
+                    import json as _json_cl
+                    _catlv = _json_cl.dumps(
+                        {"segs": it.get("cat_levels"), "leaf": it.get("leaf_level")},
+                        ensure_ascii=False)
                 c.execute("""
                     INSERT INTO submission_items
                         (item_id, submission_id, line_no, sort_order, depth, is_header,
                          category, path, name_raw, name_normalized, spec, maker,
                          quantity, unit, unit_price, unit_price_orig,
                          unit_price_currency, fx_rate_used, amount, amount_orig, is_nego,
-                         merge_status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         merge_status, cat_levels)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     iid, submission_id,
                     it.get("line_no"), i, it.get("depth", 0),
@@ -1013,6 +1020,7 @@ def insert_items_bulk(submission_id, items: list[dict]):
                     _to_number(it.get("amount_orig")),
                     1 if it.get("is_nego") else 0,
                     it.get("merge_status"),
+                    _catlv,
                 ))
             except Exception as e:
                 # 어느 항목에서 터졌는지 명확히 출력
@@ -1065,20 +1073,37 @@ def build_items_tree(submission_id):
     max_depth = 1
     order_counter = [0]
 
+    import json as _json_lv
     for it in items:
         d = dict(it)
         path = d.get("path") or ""
         parts = _split_path(path)
+        _path_segs = list(parts)   # 잎 추가 전 분류 세그먼트(의미 레벨 매핑 기준)
         nm = d.get("name_normalized") or d.get("name_raw") or "(미분류)"
         if not parts:
             cat = d.get("category") or ""
             parts = [cat] if cat else []
+            _path_segs = list(parts)
         # path는 분류(대/중/소)까지만 담고 품목명은 별도 → 품목명을 잎으로 추가.
         # 단, path 끝이 이미 품목명과 같으면(중복) 추가하지 않음.
         if not parts or parts[-1] != nm:
             parts = parts + [nm]
         max_depth = max(max_depth, len(parts))
         amt = d.get("amount") or 0
+
+        # [의미 레벨] cat_levels(JSON {"segs":[...],"leaf":N})로 각 노드의 절대 분류레벨 부여.
+        #  없으면(seq/band·구데이터) depth(i+1) 폴백 → 기존 배치 유지(회귀 없음).
+        try:
+            _cl = _json_lv.loads(d.get("cat_levels")) if d.get("cat_levels") else None
+        except Exception:
+            _cl = None
+        _segs = (_cl or {}).get("segs") or []
+        _leaf_lv = (_cl or {}).get("leaf")
+
+        def _lvl_for(i):
+            if i < len(_path_segs):
+                return _segs[i] if i < len(_segs) else (i + 1)
+            return _leaf_lv or (i + 1)   # 추가된 잎(품목/부품)
 
         cur = root
         acc = []
@@ -1088,6 +1113,7 @@ def build_items_tree(submission_id):
                 cur[part] = {
                     "name": part, "path": " > ".join(acc),
                     "amount": 0.0, "n_items": 0, "depth": i + 1,
+                    "level": _lvl_for(i),
                     "_children": {}, "leaf_data": None,
                     "_makers": set(), "_specs": set(),
                     "_order": order_counter[0],
@@ -1123,7 +1149,8 @@ def build_items_tree(submission_id):
             out.append({
                 "name": node["name"], "path": node["path"],
                 "amount": node["amount"], "n_items": node["n_items"],
-                "depth": node["depth"], "is_leaf": len(children) == 0,
+                "depth": node["depth"], "level": node.get("level", node["depth"]),
+                "is_leaf": len(children) == 0,
                 "leaf_data": node["leaf_data"], "children": children,
                 "maker_rep": maker_rep, "spec_rep": spec_rep,
             })
