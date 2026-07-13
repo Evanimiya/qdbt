@@ -807,6 +807,96 @@ def remove_submission_fx_rate(submission_id: str, currency: str) -> dict:
     return {"currency": cur, "items_reverted": reverted}
 
 
+def set_submission_source_currency(submission_id: str, currency: str, rate=None) -> dict:
+    """[제출서 기본 통화] 라인에 통화 표기가 없는(=KRW 간주) 라인들의 원통화를 지정.
+
+    우선순위: 라인 명시 통화 > 제출서 기본. 따라서 '통화 미태그(KRW)' 라인만 대상으로 재태그하고,
+    라인이 명시한 다른 통화(≠KRW·≠직전 기본)는 건드리지 않는다. 비파괴(원통화 orig 보존)·되돌리기 가능.
+
+    - cur ≠ KRW: KRW 라인 → cur 로 재태그. unit_price_orig 에 원통화 보존, rate 있으면 원화=orig×rate
+      (amount=단가×수량 라인정합), rate 없으면 needs_fx(원화 미확정). fx_rates[cur] 기록.
+    - cur = KRW(되돌리기): 직전 기본 통화(old)로 재태그됐던 라인만 원복(orig→원화, fx=NULL, KRW).
+    반환: {source_currency, items_updated, rate}.
+    """
+    import json as _json
+    cur = (currency or "KRW").upper().strip() or "KRW"
+    with get_conn() as c:
+        srow = c.execute("SELECT source_currency, fx_rates FROM submissions WHERE submission_id=?",
+                         (submission_id,)).fetchone()
+        old = (dict(srow).get("source_currency") if srow else None) or "KRW"
+        old = old.upper()
+        updated = 0
+        if cur == "KRW":
+            # 되돌리기: 직전 기본(old)로 재태그됐던 라인만 원복. old=KRW면 할 일 없음.
+            if old != "KRW":
+                rows = c.execute("""
+                    SELECT item_id, unit_price_orig, amount_orig, quantity
+                    FROM submission_items
+                    WHERE submission_id=? AND UPPER(COALESCE(unit_price_currency,'KRW'))=?
+                """, (submission_id, old)).fetchall()
+                for r in rows:
+                    d = dict(r)
+                    op = d.get("unit_price_orig")
+                    qty = d.get("quantity")
+                    if op is not None:
+                        amt = round(op * qty) if qty is not None else (d.get("amount_orig") or op)
+                    else:
+                        amt = d.get("amount_orig")
+                    c.execute("""
+                        UPDATE submission_items
+                           SET unit_price_currency='KRW', unit_price=?, amount=?, fx_rate_used=NULL
+                         WHERE item_id=?
+                    """, (op, amt, d["item_id"]))
+                    updated += 1
+        else:
+            # KRW 라인 → cur 로 재태그(원통화 보존). rate 있으면 원화 환산.
+            rows = c.execute("""
+                SELECT item_id, unit_price, amount, unit_price_orig, amount_orig, quantity
+                FROM submission_items
+                WHERE submission_id=? AND UPPER(COALESCE(unit_price_currency,'KRW'))='KRW'
+            """, (submission_id,)).fetchall()
+            fx = float(rate) if rate else None
+            for r in rows:
+                d = dict(r)
+                orig_price = d.get("unit_price_orig")
+                if orig_price is None:
+                    orig_price = d.get("unit_price")   # 현 표면값을 원통화로 보존
+                orig_amt = d.get("amount_orig")
+                if orig_amt is None:
+                    orig_amt = d.get("amount")
+                qty = d.get("quantity")
+                if fx:
+                    new_price = round(orig_price * fx) if orig_price is not None else None
+                    if new_price is not None and qty is not None:
+                        new_amt = round(new_price * qty)
+                    elif orig_amt is not None:
+                        new_amt = round(orig_amt * fx)
+                    else:
+                        new_amt = None
+                else:
+                    new_price, new_amt = None, None   # 환율 미입력 → 원화 미확정
+                c.execute("""
+                    UPDATE submission_items
+                       SET unit_price_currency=?, unit_price_orig=COALESCE(unit_price_orig,?),
+                           amount_orig=COALESCE(amount_orig,?), unit_price=?, amount=?, fx_rate_used=?
+                     WHERE item_id=?
+                """, (cur, orig_price, orig_amt, new_price, new_amt, fx, d["item_id"]))
+                updated += 1
+            # fx_rates 맵 갱신(환율 있으면 manual, 없으면 missing)
+            try:
+                fx_map = _json.loads((dict(srow).get("fx_rates") if srow else None) or "{}")
+            except Exception:
+                fx_map = {}
+            fx_map[cur] = ({"rate": fx, "base": "KRW", "source": "manual"} if fx
+                           else {"rate": None, "base": "KRW", "source": "missing"})
+            c.execute("UPDATE submissions SET fx_rates=? WHERE submission_id=?",
+                      (_json.dumps(fx_map, ensure_ascii=False), submission_id))
+        c.execute("UPDATE submissions SET source_currency=? WHERE submission_id=?",
+                  (cur, submission_id))
+    recompute_subtotal(submission_id)
+    return {"source_currency": cur, "items_updated": updated, "rate": rate}
+
+
 def set_bid_base_currency(bid_id: str, currency: str):
     """입찰의 최종 비교 기준통화 설정 (기본 KRW, USD 등 선택 가능)."""
     cur = (currency or "KRW").upper().strip() or "KRW"

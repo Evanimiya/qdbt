@@ -622,6 +622,9 @@ def migrate_db(db_path=None):
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]
     if "fx_rates" not in sub_cols:
         migrations.append("ALTER TABLE submissions ADD COLUMN fx_rates TEXT")
+    if "source_currency" not in sub_cols:
+        # [제출서 기본 통화] 라인에 통화 표기가 없을 때 적용할 원통화(기본 KRW). 라인 명시 통화 우선.
+        migrations.append("ALTER TABLE submissions ADD COLUMN source_currency TEXT DEFAULT 'KRW'")
 
     # bids.base_currency: 최종 비교 기준통화 (기본 KRW, 입찰별 선택 가능)
     bid_cols2 = [c[1] for c in conn.execute("PRAGMA table_info(bids)").fetchall()]
