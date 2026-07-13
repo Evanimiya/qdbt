@@ -29,6 +29,18 @@ def create_app():
     app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod")
     app.permanent_session_lifetime = timedelta(hours=8)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
+    # [스키마 정합] 앱 구성 시 자동 마이그레이션을 항상 적용.
+    #  main.py가 아닌 진입점(gunicorn·flask run·wsgi·테스트)으로 띄우면 main.py의
+    #  migrate_db()가 안 돌아, 신규 컬럼(예: cat_levels) 누락 → 추출 INSERT 500이 났다.
+    #  migrate_db는 idempotent(컬럼 존재 시 skip)이라 반복 호출 안전.
+    try:
+        from db.schema import migrate_db as _migrate_db
+        _migrate_db()
+    except Exception as _mig_e:   # 마이그레이션 실패가 앱 기동을 막지 않도록 경고만
+        import logging as _lg
+        _lg.getLogger(__name__).warning("create_app migrate_db skipped: %s", _mig_e)
+
     # [템플릿 즉시 반영] 프로덕션(debug off)에서도 .html 수정이 새로고침만으로
     # 반영되도록 자동 리로드 켜기. (파이썬 코드 변경은 여전히 서버 재시작 필요)
     app.config["TEMPLATES_AUTO_RELOAD"] = True
