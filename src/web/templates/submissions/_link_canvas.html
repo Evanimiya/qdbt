@@ -114,7 +114,11 @@ window.LKC = (function(){
         var status = !n.is_leaf ? 'branch'
           : (iid && S.residual.has(iid) ? 'residual'
             : (iid && S.manual.has(iid) ? 'manual' : 'linked'));
-        var node={ path:n.path, name:n.name, amount:n.amount||0, depth:depth,
+        // [의미 레벨 열] 노드를 트리 depth가 아니라 '의미 분류레벨' 열에 배치.
+        //  n.level(1-based: 대=1..세=4·품명=5·부품=6) → col=level-1. 없으면 depth 폴백(회귀 없음).
+        var col=(typeof n.level==='number' && n.level>0) ? (n.level-1) : depth;
+        var node={ path:n.path, name:n.name, amount:n.amount||0, depth:depth, col:col,
+                   level:n.level||(depth+1),
                    is_leaf:!!n.is_leaf, item_id:iid, parent:parent,
                    nChildren:(n.children||[]).length, status:status };
         out.push(node); byPath[n.path]=node;
@@ -123,6 +127,7 @@ window.LKC = (function(){
     })(S.tree, 0, null);
     S.nodes=out; S.byPath=byPath;
     S.maxDepth = out.reduce(function(m,n){ return Math.max(m,n.depth); }, 0);
+    S.maxCol = out.reduce(function(m,n){ return Math.max(m,n.col); }, 0);
   }
 
   function ancestorCollapsed(node){
@@ -159,17 +164,18 @@ window.LKC = (function(){
     });
     // [정렬] 형제(같은 상위분류) 단위 정렬은 flatten에서 이미 반영됨.
     // 여기서는 flatten 순서를 그대로 열에 담아 상위-하위 그룹 묶음을 유지한다.
-    var cols={}; visible.forEach(function(n){ (cols[n.depth]=cols[n.depth]||[]).push(n); });
-    // [고정 그리드] 전체 트리 최대 깊이까지 열을 항상 렌더 → 접기/이동에도 그리드 안정.
-    var maxD = S.maxDepth;
-    // 깊이별 전체 노드 수(접힘 무관) — 헤더에 (현재 표시/총계) 표기용.
+    // [의미 레벨 열] 노드를 자기 의미레벨 열(col)에 담는다. 중간 레벨이 빈 항목(직접 붙임)은
+    //  그 사이 열이 빈 칸으로 남고, 부모→자식 연결선이 빈 열을 가로질러 그려진다(좌표 기반).
+    var cols={}; visible.forEach(function(n){ (cols[n.col]=cols[n.col]||[]).push(n); });
+    // [고정 그리드] 최대 의미레벨 열까지 항상 렌더 → 빈 중간 열도 표시(뭐가 빠졌는지 보임).
+    var maxD = S.maxCol;
     var totalByDepth={};
-    S.nodes.forEach(function(n){ totalByDepth[n.depth]=(totalByDepth[n.depth]||0)+1; });
-    // [품명레벨 버그수정] depth별 '전부 잎' 여부(표시 라벨용). 잎만 있는 열은 '품명'으로 표기.
+    S.nodes.forEach(function(n){ totalByDepth[n.col]=(totalByDepth[n.col]||0)+1; });
+    // 열별 '전부 잎' 여부(라벨 폴백용). 의미레벨 모드에선 col 자체가 레벨이라 대개 정확.
     var leafOnlyByDepth={};
     S.nodes.forEach(function(n){
-      if(leafOnlyByDepth[n.depth]===undefined) leafOnlyByDepth[n.depth]=true;
-      if(!n.is_leaf) leafOnlyByDepth[n.depth]=false;
+      if(leafOnlyByDepth[n.col]===undefined) leafOnlyByDepth[n.col]=true;
+      if(!n.is_leaf) leafOnlyByDepth[n.col]=false;
     });
 
     var html='<div class="lkc-canvas'+(S.readonly?' lkc-ro':'')+'"><svg class="lkc-svg"></svg><div class="lkc-cols">';
