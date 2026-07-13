@@ -575,11 +575,12 @@ function qdSyncModel(form){
                     data-cluster-id="{{ cl.cluster_id }}"
                     data-cluster-name="{{ cl.representative_name|leaf }}"
                     onclick="event.stopPropagation();openLeafModal(this)"
-                    title="묶음 하위 잎 펼치기 (표시 전용 · 원본·총액 불변)"
-                    style="display:inline-block;font-size:9px;font-weight:800;color:#1C7293;
-                           background:#fff;border:1px solid #1C7293;border-radius:8px;
-                           padding:0 6px;margin-left:4px;cursor:pointer;vertical-align:middle">
-              ⤢ 잎 {{ cl.n_leaves }}
+                    title="묶음 하위 품목을 업체별로 펼쳐보기 (표시 전용 · 원본·총액 불변)"
+                    style="display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:800;
+                           color:#fff;background:#1C7293;border:1px solid #155e78;border-radius:8px;
+                           padding:2px 9px;margin-left:6px;cursor:pointer;vertical-align:middle;
+                           box-shadow:0 1px 2px rgba(0,0,0,.18)">
+              ⤢ 하위 {{ cl.n_leaves }}개 펼쳐보기
             </button>
             {% endif %}
           </div>
@@ -2028,6 +2029,14 @@ refresh();
             background:#f0f7f2;color:#0F2A43;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
   .lfx-foot .chk{color:#2f8f5b;font-weight:800}
   .lfx-foot .warn{color:#B45309;font-weight:800}
+  /* [업체별 캔버스] 그룹 라벨(구분선)·sticky 헤더·최저가 강조 */
+  .lfx-grplabel{padding:9px 10px 4px;font-size:11.5px;font-weight:800;color:#1C7293;
+                display:flex;gap:6px;align-items:center;border-top:1px solid #eef3f6;margin-top:2px}
+  .lfx-grplabel .cnt{font-size:10px;font-weight:700;color:#64748B}
+  .lfx-sticky{position:sticky;top:0;background:#fff;z-index:2;border-bottom:1px solid #D8E3EA}
+  .lfx-leaf .lv{display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}
+  .lfx-leaf .lv .qty{font-style:normal;font-size:9.5px;color:#94a3b8;font-weight:500}
+  .lfx-leaf .lv.lo{color:#2f8f5b;font-weight:800;background:#f0fbf5;border-radius:6px}
 </style>
 <script>
 (function(){
@@ -2068,65 +2077,46 @@ refresh();
   function render(veil, d, cname){
     var vendors = d.vendors||[];
     var groups = d.groups||[];
-    var cols = '1fr repeat('+vendors.length+', minmax(74px,96px))';
-    // 헤더 열
-    var colhead = '<div class="lfx-colhead" style="grid-template-columns:'+cols+'"><span>잎 항목</span>'
+    // [업체별 캔버스] 품목(행) × 업체(열) 정렬 그리드. 항상 펼침(트리 접기 없음).
+    var cols = 'minmax(120px,1.4fr) repeat('+vendors.length+', minmax(96px,1fr))';
+    var colhead = '<div class="lfx-colhead lfx-sticky" style="grid-template-columns:'+cols+'">'
+      + '<span>품목</span>'
       + vendors.map(function(v){return '<span>'+esc(v)+'</span>';}).join('') + '</div>';
-    var body = groups.map(function(gr,gi){
+    var body = groups.map(function(gr){
       var leaves = gr.rows.map(function(rw){
         var cells = vendors.map(function(v){
           var c = rw.cells[v];
-          var isLo = rw.min_vendor && v===rw.min_vendor;
-          return '<span class="lv '+(isLo?'lo':'')+'">'+won(c?c.amount:null)+'</span>';
+          var isLo = rw.min_vendor && v===rw.min_vendor && c;
+          var sub = c ? '<em class="qty">'+won(c.unit_price)+(c.quantity?(' × '+c.quantity):'')+'</em>' : '';
+          return '<span class="lv '+(isLo?'lo':'')+'">'+(isLo?'🏅 ':'')+won(c?c.amount:null)+sub+'</span>';
         }).join('');
         return '<div class="lfx-leaf" data-nm="'+esc((rw.name||'').toLowerCase())+'" '
              + 'style="grid-template-columns:'+cols+'"><span class="nm">'+esc(rw.name)+'</span>'+cells+'</div>';
       }).join('');
-      return '<div class="lfx-grp" data-gi="'+gi+'"><div class="lfx-grph"><span class="car">▸</span>'
-           + '<span>'+esc(gr.group)+'</span><span class="cnt">'+gr.n+'개</span></div>'
-           + '<div class="lfx-ch" style="display:none">'+colhead+'</div>'
-           + '<div class="lfx-leaves" style="display:none">'+leaves+'</div></div>';
-    }).join('') || '<div style="padding:20px;text-align:center;color:#64748B">펼칠 하위 잎이 없습니다.</div>';
+      // 그룹 라벨(구분선) — 접이식 아님, 항상 펼쳐진 캔버스 섹션.
+      return '<div class="lfx-grp"><div class="lfx-grplabel">'+esc(gr.group)
+           + '<span class="cnt">'+gr.n+'개</span></div>' + leaves + '</div>';
+    }).join('') || '<div style="padding:20px;text-align:center;color:#64748B">펼칠 하위 품목이 없습니다.</div>';
 
     // 푸터: 소계 정합 + 업체별 잎 합
     var vt = d.vendor_totals||{};
     var totals = vendors.map(function(v){return esc(v)+' '+won(vt[v]||0);}).join('  ·  ');
     var chk = d.subtotal_ok
-      ? '<span class="chk">✓ 소계 정합 — 잎 합 = 묶음 금액 (총액 불변)</span>'
+      ? '<span class="chk">✓ 소계 정합 — 하위 합 = 묶음 금액 (총액 불변)</span>'
       : '<span class="warn">⚠ 소계 불일치 — 데이터 확인 필요</span>';
 
     var m = veil.querySelector('.lfx-modal');
     m.innerHTML =
-      '<div class="lfx-head"><span class="t">'+esc(cname)+' — 하위 잎 ('+(d.n_leaves||0)+'개)</span>'
+      '<div class="lfx-head"><span class="t">'+esc(cname)+' — 업체별 하위 품목 ('+(d.n_leaves||0)+'개)</span>'
       + '<button class="x" aria-label="닫기">✕</button></div>'
-      + '<div class="lfx-tools"><input placeholder="잎 이름 검색…">'
-      + '<button class="allbtn">모두 펼치기</button></div>'
-      + '<div class="lfx-body">'+body+'</div>'
+      + '<div class="lfx-tools"><input placeholder="품목 이름 검색…"></div>'
+      + '<div class="lfx-body">'+colhead+body+'</div>'
       + '<div class="lfx-foot">'+chk+'<span>'+totals+'</span></div>';
 
     function close(){ if(veil.parentNode) veil.parentNode.removeChild(veil); }
     m.querySelector('.x').onclick=close;
     var bodyEl = m.querySelector('.lfx-body');
-    // 그룹 토글
-    bodyEl.querySelectorAll('.lfx-grph').forEach(function(h){
-      h.onclick=function(){
-        var grp=h.parentNode, lv=grp.querySelector('.lfx-leaves'), ch=grp.querySelector('.lfx-ch');
-        var on = lv.style.display!=='none';
-        lv.style.display=on?'none':'block'; ch.style.display=on?'none':'block';
-        h.querySelector('.car').textContent=on?'▸':'▾';
-      };
-    });
-    // 모두 펼치기/접기
-    m.querySelector('.allbtn').onclick=function(){
-      var anyClosed=[].some.call(bodyEl.querySelectorAll('.lfx-leaves'),function(l){return l.style.display==='none';});
-      bodyEl.querySelectorAll('.lfx-grp').forEach(function(grp){
-        grp.querySelector('.lfx-leaves').style.display=anyClosed?'block':'none';
-        grp.querySelector('.lfx-ch').style.display=anyClosed?'block':'none';
-        grp.querySelector('.car').textContent=anyClosed?'▾':'▸';
-      });
-      this.textContent=anyClosed?'모두 접기':'모두 펼치기';
-    };
-    // 검색
+    // 검색: 품목 행 필터(그룹 라벨은 해당 그룹에 표시 행 있을 때만).
     m.querySelector('input').oninput=function(){
       var q=this.value.trim().toLowerCase();
       bodyEl.querySelectorAll('.lfx-grp').forEach(function(grp){
@@ -2135,10 +2125,6 @@ refresh();
           var hit=!q || lf.dataset.nm.indexOf(q)>=0;
           lf.style.display=hit?'grid':'none'; if(hit)shown++;
         });
-        var open=q!=='';
-        grp.querySelector('.lfx-leaves').style.display=(open&&shown)?'block':(q?'none':grp.querySelector('.lfx-leaves').style.display);
-        grp.querySelector('.lfx-ch').style.display=(open&&shown)?'block':(q?'none':grp.querySelector('.lfx-ch').style.display);
-        grp.querySelector('.car').textContent=(open&&shown)?'▾':'▸';
         grp.style.display=(q&&!shown)?'none':'block';
       });
     };
