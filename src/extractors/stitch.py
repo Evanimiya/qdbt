@@ -557,10 +557,10 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
         # 병합복원 후 실제 존재하는 레벨
         present = [lv for lv in levels if r.get(lv)]
         complete = all(r.get(lv) for lv in levels)  # 1..deepest 모두 존재?
-        # 경로: 존재값 + (필요 시) 행간 상속(best-effort, 사용성 위해)
-        # [레벨 gap 보존] 매핑이 비연속(예: cat2+cat4로 소분류 gap)이면 매핑 안 된 중간
-        #  레벨 자리에 placeholder를 끼워 절대 depth 보존 → 세분류가 소분류 자리로 당겨지지
-        #  않음. 상단(cat1..) 미매칭 padding은 기존대로 _cross_sheet_reparent가 담당.
+        # [중간레벨 부재=직접 붙임, extract와 통일] 존재값만 이어 붙인다.
+        #  ① 미매핑 레벨(비연속 gap) → placeholder 없이 직접 스킵. ② 매핑 빈 레벨은 fill-down
+        #  상속(정당) 후에도 비면 직접 스킵. 누락 의심은 아래 matched=complete → residual(level_skip)로
+        #  이미 표기되므로 가짜 placeholder 노드를 만들지 않는다(경로/depth만 바뀜, 총액 Δ=0).
         parts = []
         _row_gap = False
         _lv_set = set(levels)
@@ -573,10 +573,7 @@ def _stitch_passthrough(path, sheet, mapping, header_row):
                     v = last_cat.get(lv)
                 if v:
                     parts.append(v)
-            else:
-                # 매핑 안 된 중간 레벨(gap) → placeholder로 자리 보존(미연계)
-                parts.append(_LEVEL_PLACEHOLDER.get(lv, _LEVEL_PLACEHOLDER_DEFAULT))
-                _row_gap = True
+            # else: ① 미매핑 gap → 직접 붙임(스킵)
         matched = complete
         _pp, _ln = _part_promote(r, PATH_SEP.join(parts), _leafnm)
         item = {
