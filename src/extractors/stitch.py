@@ -494,8 +494,18 @@ def _stitch_seq(sheets, names=None):
         for r in leaf:
             st = r.get("seq_t")
             nm = r.get("name")
-            if not nm or _is_total_row(r, []):
+            if _is_total_row(r, []):
                 continue
+            _name_missing = False
+            if not nm:
+                # ③ 번호가 레벨 존재를 암시(예 1.2.1)인데 이름만 빔 + 금액 있음 = 실 항목인데
+                #  이름 누락 → 조용히 버리지 말고 미연계로 보존(금액 계상, 사람 확인). 번호·금액도
+                #  없으면 기존대로 스킵. (1→1.1.1처럼 '번호 자체가 없는' 중간 gap은 건너뜀=정상.)
+                if st is not None and r.get("amount"):
+                    nm = f"⟨이름 누락·{r.get('seq') or ''}⟩"
+                    _name_missing = True
+                else:
+                    continue
             parts = []
             if st is not None:
                 # 튜플 prefix로 부모 이름 조인 (구분자 종류 무관).
@@ -519,7 +529,12 @@ def _stitch_seq(sheets, names=None):
             _apply_currency(item, r)   # [H10] 통화 정합
             if sname is not None:
                 item["_sheet"] = sname   # [다중 seq_leaf] 시트 출처 태깅(중복정리 경계)
+            if _name_missing:
+                item["_level_residual"] = True   # ③ 이름 누락 → 미연계
             items.append(item)
+            if _name_missing:
+                residuals.append({"reason": "seq_name_missing",
+                                  "seq": r.get("seq"), "name": nm, "row": r["row"]})
             if not matched:
                 residuals.append({"reason": "seq_parent_missing",
                                   "seq": r.get("seq"), "name": nm, "row": r["row"]})
