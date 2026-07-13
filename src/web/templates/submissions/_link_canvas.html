@@ -62,7 +62,8 @@
 window.LKC = (function(){
   var S = { mount:null, tree:[], nodes:[], byPath:{}, maxDepth:0,
             residual:new Set(), manual:new Set(), levels:[], subId:'',
-            collapsed:{}, sel:null, selected:new Set(), onlyRed:false, drag:null, readonly:false };
+            collapsed:{}, sel:null, selected:new Set(), onlyRed:false, drag:null, readonly:false,
+            sortScope:{} };
 
   // [상태 보존] 접힘/선택/스크롤을 sessionStorage에 저장·복원(이동·리로드 후 유지).
   function viewKey(){ return 'lkc:' + S.subId + ':' + S.mount; }
@@ -94,14 +95,17 @@ window.LKC = (function(){
     return (leafOnlyByDepth && leafOnlyByDepth[d]) ? (S.levels[4] || '품명') : levelName(d);
   }
 
-  function sortSib(list){
-    // 형제 노드(같은 상위분류의 하위)를 금액/이름으로 정렬. 기본('')은 원래 순서.
-    if(!S.sortBy) return list||[];
+  function sortSib(list, parentPath){
+    // [스코프 정렬] 형제(같은 상위분류의 직계 자식)를 그 '상위 노드에 지정된' 정렬로만 정렬.
+    //  S.sortScope[parentPath] 가 있으면 그 모드로, 없으면 원래 순서 → 레벨(노드)별 독립 정렬.
+    //  parentPath='' 는 최상위(루트 직계). (구 전역 S.sortBy 는 미사용.)
+    var mode = S.sortScope[parentPath || ''] || '';
+    if(!mode) return list||[];
     var a=(list||[]).slice();
     a.sort(function(x,y){
-      if(S.sortBy==='amt_desc') return (y.amount||0)-(x.amount||0);
-      if(S.sortBy==='amt_asc')  return (x.amount||0)-(y.amount||0);
-      if(S.sortBy==='name')     return String(x.name||'').localeCompare(String(y.name||''),'ko');
+      if(mode==='amt_desc') return (y.amount||0)-(x.amount||0);
+      if(mode==='amt_asc')  return (x.amount||0)-(y.amount||0);
+      if(mode==='name')     return String(x.name||'').localeCompare(String(y.name||''),'ko');
       return 0;
     });
     return a;
@@ -109,7 +113,7 @@ window.LKC = (function(){
   function flatten(){
     var out=[], byPath={};
     (function walk(list, depth, parent){
-      sortSib(list).forEach(function(n){
+      sortSib(list, parent).forEach(function(n){
         var ld=n.leaf_data||{}; var iid=ld.item_id||null;
         var status = !n.is_leaf ? 'branch'
           : (iid && S.residual.has(iid) ? 'residual'
@@ -438,7 +442,7 @@ window.LKC = (function(){
       S.stdCats=cfg.stdCats||[];   // 도메인 표준 대분류(강등 대상 추천). 없으면 기본값 사용.
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
       S.readonly=!!cfg.readonly;
-      S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false; S.sortBy='';
+      S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false; S.sortBy=''; S.sortScope={};
       flatten();
       // [상태 보존] 이전(이동 전) 접힘/선택/스크롤 복원. 없으면 기본(전부 펼침).
       var saved=restoreViewState();
@@ -454,7 +458,16 @@ window.LKC = (function(){
     collapseAll: function(){ S.nodes.forEach(function(n){ if(!n.is_leaf && n.nChildren) S.collapsed[n.path]=true; }); render(); },
     toLevel: function(lv){ S.collapsed={}; S.nodes.forEach(function(n){ if(!n.is_leaf && n.depth>=lv-1) S.collapsed[n.path]=true; }); render(); },
     setOnlyRed: function(v){ S.onlyRed=!!v; render(); },
-    setSort: function(mode){ S.sortBy=mode||''; flatten(); render(); },
+    // [스코프 정렬] 현재 '선택 노드'의 직계 자식에만 정렬 적용(레벨별 독립). 선택 없으면 최상위.
+    //  같은 모드를 다시 누르면 해제(원래 순서). 반환: 적용된 스코프(라벨 표시용).
+    setSort: function(mode){
+      var key = S.sel || '';
+      if(mode) S.sortScope[key]=mode; else delete S.sortScope[key];   // ''(트리순)=해제
+      flatten(); render();
+      return { scope: key, name: (key ? (S.byPath[key] && S.byPath[key].name) : '전체'), mode: mode||'' };
+    },
+    sortScopeLabel: function(){ var k=S.sel||''; return { scope:k,
+      name:(k ? (S.byPath[k]&&S.byPath[k].name) : '전체'), mode:S.sortScope[k]||'' }; },
     maxDepth: function(){ return S.maxDepth; }
   };
 })();
