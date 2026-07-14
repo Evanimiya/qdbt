@@ -2103,6 +2103,81 @@ def reparent_branch(submission_id):
     return jsonify({"ok": True, "moved": n, "new_base": new_base})
 
 
+def _recon_find(nodes, path, parent_level=0):
+    """recon 트리에서 path 노드 + 부모레벨 + 서브트리 최대레벨 반환. (없으면 None)"""
+    for n in nodes:
+        if n.get("path") == path:
+            def _maxlv(nd):
+                m = nd.get("level") or nd.get("depth") or 1
+                for c in nd.get("children") or []:
+                    m = max(m, _maxlv(c))
+                return m
+            return n, parent_level, _maxlv(n)
+        got = _recon_find(n.get("children") or [], path, n.get("level") or n.get("depth") or 1)
+        if got:
+            return got
+    return None
+
+
+def _recon_relevel(submission_id, path, new_level):
+    """[#4 재레벨링] 가지의 의미레벨만 조정(부모 유지·양방향·서브트리 동반). 비파괴·Δ=0.
+
+    순환/역전 방지: 새 레벨 > 부모 레벨. 클램프: 서브트리가 부품(6)을 넘지 않게 delta 축소.
+    저장: map_config.recon.level_overrides[path] = 새 레벨(공유 오버레이).
+    """
+    from db.queries import build_items_tree, get_recon, save_recon
+    tree = build_items_tree(submission_id)   # 현재(오버레이 반영) 상태
+    found = _recon_find(tree.get("tree") or [], path)
+    if not found:
+        return {"ok": False, "error": "노드를 찾을 수 없습니다."}
+    node, parent_lv, submax = found
+    cur = node.get("level") or node.get("depth") or 1
+    try:
+        new_level = int(new_level)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "레벨 값 오류"}
+    # 역전 방지: 부모보다 아래(더 큰 레벨)여야.
+    if new_level <= parent_lv:
+        new_level = parent_lv + 1
+    # 클램프: 서브트리 최대(부품 6) 초과 금지.
+    delta = new_level - cur
+    if submax + delta > 6:
+        delta = 6 - submax
+        new_level = cur + delta
+    if new_level <= parent_lv:
+        return {"ok": False, "error": "부모 레벨보다 아래로만 이동할 수 있습니다."}
+    if new_level == cur:
+        return {"ok": True, "path": path, "level": cur, "changed": False}
+    recon = get_recon(submission_id) or {}
+    lo = recon.get("level_overrides") or {}
+    lo[path] = new_level
+    recon["level_overrides"] = lo
+    save_recon(submission_id, recon)
+    return {"ok": True, "path": path, "level": new_level, "changed": True,
+            "delta": new_level - cur}
+
+
+@bp.route("/<submission_id>/recon/relevel", methods=["POST"])
+@require_role("manager")
+def recon_relevel(submission_id):
+    """[#4] 가지 재레벨링(레벨만·부모 유지·클램프·역전 방지). payload: {path, level}."""
+    if not get_submission(submission_id):
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    return jsonify(_recon_relevel(submission_id, (p.get("path") or "").strip(), p.get("level")))
+
+
+@bp.route("/<submission_id>/recon/reset", methods=["POST"])
+@require_role("manager")
+def recon_reset(submission_id):
+    """[#2/#4] 재구성 오버레이 전체 초기화(정본 그대로). 되돌리기."""
+    from db.queries import save_recon
+    if not get_submission(submission_id):
+        abort(404)
+    save_recon(submission_id, {})
+    return jsonify({"ok": True})
+
+
 @bp.route("/<submission_id>/link/bulk-reparent", methods=["POST"])
 @require_role("manager")
 def bulk_reparent(submission_id):
