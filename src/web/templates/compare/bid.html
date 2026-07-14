@@ -246,9 +246,9 @@ function qdSyncModel(form){
       {% else %}—{% endif %}
     </div>
     {% set vpairs = [] %}
-    {% for cc, ii in (vmap or {}).items() %}{% if ii.rate %}{% set _ = vpairs.append(cc ~ ' ' ~ '{:,.0f}'.format(ii.rate)) %}{% endif %}{% endfor %}
-    {% if vpairs %}<div class="text-xs text-blue-500 mb-1">💱 {{ vpairs|join(' · ') }} →KRW</div>
-    {% elif fx %}<div class="text-xs text-blue-500 mb-1">💱 {{ '{:,}'.format(fx|int) }}원</div>{% endif %}
+    {% for cc, ii in (vmap or {}).items() %}{% if ii.rate %}{% set _ = vpairs.append('1 ' ~ cc ~ ' = ₩' ~ '{:,.0f}'.format(ii.rate)) %}{% endif %}{% endfor %}
+    {% if vpairs %}<div class="text-xs text-blue-500 mb-1">💱 {{ vpairs|join(' · ') }}</div>
+    {% elif fx %}<div class="text-xs text-blue-500 mb-1">💱 1 외화 = ₩{{ '{:,}'.format(fx|int) }}</div>{% endif %}
     {% set cat_order = ['자재','인건비','출장비','영업이익','관리비'] %}
     {% set has_any = namespace(v=false) %}
     {% for cat in cat_order %}

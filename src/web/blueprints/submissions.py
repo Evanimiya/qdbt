@@ -2040,7 +2040,13 @@ def reparent_branch(submission_id):
     if target == branch or target.startswith(branch + SEP):
         return jsonify({"ok": False, "error": "자기 자신 또는 하위로는 이동할 수 없습니다."}), 200
     root_name = branch.split(SEP)[-1]
-    new_base = target + SEP + root_name
+    # [버그4] 대상의 마지막 세그먼트가 이동 가지와 '같은 이름'이면(예: '자재'를 '자재'로),
+    #  '자재 > 자재' 중첩 대신 대상에 병합 — 이동 가지의 하위가 대상 아래로 직접 붙는다.
+    _norm = lambda s: "".join(str(s or "").split()).lower()
+    if _norm(target.split(SEP)[-1]) == _norm(root_name):
+        new_base = target
+    else:
+        new_base = target + SEP + root_name
     if new_base == branch:
         return jsonify({"ok": True, "moved": 0, "note": "변경 없음(이미 해당 위치)"})
 
