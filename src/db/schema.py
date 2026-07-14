@@ -617,6 +617,15 @@ def migrate_db(db_path=None):
         #   {"segs":[1,3],"leaf":5}. 연계 캔버스가 트리 depth 대신 '의미 레벨 열'에 노드를 배치해
         #   빈 중간 계층(직접 붙임)이 보이게 한다. NULL이면 depth 폴백(seq/band·구데이터). 금액 무관.
         migrations.append("ALTER TABLE submission_items ADD COLUMN cat_levels TEXT")
+    # [부품 BOM] 품목 하위 부품(레벨6, is_header=1=합계 제외)의 부품수량·부품단가·파트금액.
+    #   경제구조: 부품수량×부품단가=파트금액, Σ파트금액≈품목단가(per-unit), 품목수량×품목단가=금액.
+    #   총액은 품목금액만 합산(부품 파트금액 미포함) — 이중계상 방지. NULL이면 비-부품 행.
+    if "part_qty" not in si_cols:
+        migrations.append("ALTER TABLE submission_items ADD COLUMN part_qty REAL")
+    if "part_price" not in si_cols:
+        migrations.append("ALTER TABLE submission_items ADD COLUMN part_price REAL")
+    if "part_amount" not in si_cols:
+        migrations.append("ALTER TABLE submission_items ADD COLUMN part_amount REAL")
 
     # submissions.fx_rates: 통화별 환율 맵 JSON — {"USD":{"rate":1380,"base":"KRW","source":"extracted|manual"}}
     sub_cols = [c[1] for c in conn.execute("PRAGMA table_info(submissions)").fetchall()]

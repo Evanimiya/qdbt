@@ -143,6 +143,46 @@ def check_node_subtotals(nodes, tol: float = 1.0) -> Result:
     return r
 
 
+# ─── ⑤ 부품 BOM 이중구조 ─────────────────────
+
+def check_bom(items, tol: float = 1.0, tol_ratio: float = 0.005) -> Result:
+    """부품 BOM 경제구조 검증(품목별).
+
+    items: [{'name','quantity','unit_price','amount',
+             'parts':[{'part_qty','part_price','part_amount'},...]}]
+    불변식:
+      ① Σ파트금액 ≈ 품목단가 (per-unit BOM 원가)   → kind 'bom_cost'
+      ② 품목수량 × 품목단가 ≈ 품목금액              → kind 'bom_line'
+    per-unit vs total 애매성: Σ파트금액이 단가가 아니라 '금액(=수량×단가)'에 가까우면
+      파트금액이 총량 스케일일 수 있음 → kind 'bom_scale'(경고, 자동수정 안 함).
+    부품 파트금액은 총액에 더하지 않는다(호출부에서 is_header=1로 제외) — 여기선 정합만.
+    """
+    r = Result()
+    for it in items:
+        parts = _get(it, "parts") or []
+        if not parts:
+            continue
+        name = str(_get(it, "name") or _get(it, "path") or "?")
+        price = _num(_get(it, "unit_price"))
+        qty = _get(it, "quantity")
+        amount = _num(_get(it, "amount"))
+        part_sum = sum(_num(_get(p, "part_amount")) for p in parts)
+        # ① Σ파트금액 ≈ 단가(per-unit)
+        if price:
+            if abs(part_sum - price) > max(tol, abs(price) * tol_ratio):
+                # 애매성: 파트합이 금액(수량×단가)에 더 가까우면 total-scaled 경고로 표기.
+                if amount and abs(part_sum - amount) <= max(tol, abs(amount) * tol_ratio):
+                    r.add("bom_scale", name, price, part_sum)
+                else:
+                    r.add("bom_cost", name, price, part_sum)
+        # ② 수량 × 단가 ≈ 금액
+        if price and qty is not None:
+            expected = round(_num(price) * _num(qty))
+            if abs(amount - expected) > tol:
+                r.add("bom_line", name, expected, amount)
+    return r
+
+
 # ─── 통합 진입점 ─────────────────────────────
 
 def check_all(items=None, declared_total=None, bundles=None, nodes=None,
