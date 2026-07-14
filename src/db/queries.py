@@ -2253,16 +2253,31 @@ def get_cluster_leaves(bid_id, cluster_id):
     with get_conn() as c:
         ph = ",".join("?" * len(leaf_ids))
         rows = [dict(r) for r in c.execute(f"""
-            SELECT si.item_id, si.name_raw, si.name_normalized, si.spec, si.unit,
+            SELECT si.item_id, si.submission_id, si.name_raw, si.name_normalized, si.spec, si.unit,
                    si.quantity, si.unit_price, si.amount, si.path, si.category,
                    s.vendor_name
             FROM submission_items si JOIN submissions s USING (submission_id)
             WHERE si.item_id IN ({ph}) AND si.is_header = 0
         """, tuple(sorted(leaf_ids))).fetchall()]
+        # [부품 BOM] 잎이 속한 제출서의 부품(bom_part) 행을 조회 → 각 품목 셀에 첨부.
+        sub_ids = sorted({d["submission_id"] for d in rows if d.get("submission_id")})
+        part_rows = []
+        if sub_ids:
+            sph = ",".join("?" * len(sub_ids))
+            part_rows = [dict(r) for r in c.execute(f"""
+                SELECT si.name_normalized, si.part_qty, si.part_price, si.part_amount,
+                       si.path, s.vendor_name
+                FROM submission_items si JOIN submissions s USING (submission_id)
+                WHERE si.submission_id IN ({sph}) AND si.part_amount IS NOT NULL
+            """, tuple(sub_ids)).fetchall()]
 
     # 그룹(상위 분류) → 잎 이름 → 업체 셀
     grouped = _dd(lambda: _dd(dict))    # group -> name -> vendor -> cell
     vendor_totals = _dd(float)
+    _cell_by_key = {}                   # (vendor, 품목 전체경로) -> cell (부품 첨부용)
+
+    def _pk(p):   # 경로 정규화 키(세그먼트 기준) — 부품↔품목 매칭용
+        return " > ".join(_split_path(p or ""))
     for d in rows:
         parts = _split_path(d.get("path") or "")
         name = (d.get("name_normalized") or d.get("name_raw") or "").strip() or "미명명"
@@ -2272,11 +2287,25 @@ def get_cluster_leaves(bid_id, cluster_id):
             grp = parts[-2]
         else:
             grp = d.get("category") or "기타"
-        grouped[grp][name][d["vendor_name"]] = {
+        cell = {
             "amount": d.get("amount"), "unit_price": d.get("unit_price"),
             "quantity": d.get("quantity"), "unit": d.get("unit"), "spec": d.get("spec"),
+            "parts": [],
         }
+        grouped[grp][name][d["vendor_name"]] = cell
+        # 부품(bom_part)은 path = 품목분류 > 품목명. 그 전체 경로를 키로 매칭.
+        _full = " > ".join(_split_path(d.get("path") or "") + [name])
+        _cell_by_key[(d["vendor_name"], _pk(_full))] = cell
         vendor_totals[d["vendor_name"]] += (d.get("amount") or 0)
+    # 부품을 해당 품목 셀에 첨부(총액엔 불참 — 표시·단가 내역만).
+    for p in part_rows:
+        cell = _cell_by_key.get((p.get("vendor_name"), _pk(p.get("path"))))
+        if cell is not None:
+            cell["parts"].append({
+                "name": p.get("name_normalized"),
+                "part_qty": p.get("part_qty"), "part_price": p.get("part_price"),
+                "part_amount": p.get("part_amount"),
+            })
 
     out_groups = []
     for grp in sorted(grouped):
