@@ -62,8 +62,8 @@ def leaf_total(items):
     """
     tot = 0.0
     for it in items:
-        if it.get("merge_status") or it.get("is_category_header"):
-            continue
+        if it.get("merge_status") or it.get("is_category_header") or it.get("bom_part"):
+            continue   # 부품(bom_part)은 단가 내역 → 총액 제외(is_header=1과 동일)
         amt = it.get("amount")
         if amt:
             tot += amt

@@ -27,6 +27,9 @@ INFO_ROLES = {
     "amount_krw": "amount_krw",     # 원화 금액 (있으면 확정 원화)
     "maker": "maker",               # 메이커(제조사/브랜드)
     "remark": "remark",
+    "part_qty": "part_qty",         # [부품 BOM] 부품수량
+    "part_price": "part_price",     # [부품 BOM] 부품단가
+    "part_amount": "part_amount",   # [부품 BOM] 파트금액(=부품수량×부품단가)
 }
 
 PATH_SEP = " > "
@@ -345,6 +348,15 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
     # [부품] '부품' 열이 지정되면: 품목(name)을 분류 경로의 한 단계로 내리고, 부품을 잎으로.
     #  → 한 품목에 부품 0..N. 부품 없으면 품목이 잎(기존과 동일). 스키마 무변경(path만 깊어짐).
     part_col = next((c for c, r in column_mapping.items() if r == "part"), None)
+    # [부품 BOM] 부품 경제열(부품수량/단가/파트금액) 중 하나라도 매핑되면 BOM 모드.
+    #  BOM 모드: 품목=집계 잎(is_header=0), 부품=품목 하위(레벨6) 표시노드(is_header=1=총액 제외).
+    #  부품 행은 별도 항목으로 방출(파트금액=part_amount). 표준구조: 품목행(name) 아래 부품행들
+    #  (name 빈칸·part 채움) 또는 같은 행에 품목+첫부품. BOM 열 미매핑이면 기존 [부품] 승격(회귀 없음).
+    _bom_cols = {rl: next((c for c, r in column_mapping.items() if r == rl), None)
+                 for rl in ("part_qty", "part_price", "part_amount")}
+    bom_mode = part_col is not None and any(_bom_cols.values())
+    _cur_bom_parent = None      # 부품이 매달릴 품목 경로(분류 > 품목명)
+    _cur_bom_levels = None      # 그 경로의 cat_levels(+품목 5)
 
     items = []
     warnings = []
@@ -520,8 +532,43 @@ def extract_by_mapping(path, sheet_name, column_mapping, header_row,
                 if item.get(f) is not None:
                     item[f] = -abs(item[f])
 
+        # [부품 BOM 모드] 품목=집계 잎, 부품=품목 하위(레벨6) 표시노드(is_header=1=총액 제외).
+        if bom_mode:
+            _pv = cell_val(r, part_col)
+            _pv = str(_pv).strip() if _pv is not None else ""
+            _pname = item.get("name_normalized")   # 품목명(있으면 이 행이 품목행)
+            if _pname:
+                # 이 품목을 이후 부품행의 부모로 기억(분류 > 품목명).
+                _seg = item.get("path") or ""
+                _cur_bom_parent = (_seg + PATH_SEP + _pname) if _seg else _pname
+                _cl = item.get("cat_levels")
+                _cur_bom_levels = (list(_cl) + [5]) if _cl is not None else None
+            if _pv:
+                _paq = _to_number(cell_val(r, _bom_cols["part_qty"])) if _bom_cols["part_qty"] else None
+                _pap = _to_number(cell_val(r, _bom_cols["part_price"])) if _bom_cols["part_price"] else None
+                _paa = _to_number(cell_val(r, _bom_cols["part_amount"])) if _bom_cols["part_amount"] else None
+                if _paa is None and _paq is not None and _pap is not None:
+                    _paa = round(_paq * _pap)
+                _pp = _cur_bom_parent or (item.get("path") or _pv)
+                _bom_item = {
+                    "path": _pp, "depth": len([x for x in _pp.split(PATH_SEP) if x]),
+                    "name_normalized": _pv, "name_raw": _pv,
+                    "category": _pp.split(PATH_SEP)[0] if _pp else None,
+                    "quantity": _paq, "unit_price": _pap, "amount": _paa,
+                    "part_qty": _paq, "part_price": _pap, "part_amount": _paa,
+                    "bom_part": True, "is_category_header": False, "line_no": f"R{r}",
+                    "unit_price_currency_in_source": item.get("unit_price_currency_in_source", "KRW"),
+                }
+                if _cur_bom_levels is not None:
+                    _bom_item["cat_levels"] = list(_cur_bom_levels)
+                    _bom_item["leaf_level"] = 6   # 부품 열
+                items.append(_bom_item)
+            if not _pname:
+                continue   # 부품 전용 행 → 품목 잎을 또 만들지 않음
+            # 품목행: 품목 잎은 아래 정상 방출(승격 없음). BOM 모드에선 기존 [부품] 승격 미적용.
+
         # [부품] 승격: 부품 값이 있으면 품목(name)을 분류 경로로 내리고 부품을 잎으로.
-        if part_col is not None:
+        if part_col is not None and not bom_mode:
             _pv = cell_val(r, part_col)
             _pv = str(_pv).strip() if _pv is not None else ""
             if _pv:
@@ -600,6 +647,10 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
         "spec": ["규격", "사양", "spec", "remark주요"],
         "maker": ["메이커", "제조사", "제조원", "브랜드", "maker", "manufacturer", "mfr", "make", "brand"],
         "part": ["부품", "부속품", "부속", "구성품", "구성부품", "세부품목", "part", "component"],
+        # [부품 BOM] 부품 경제열. qty/price/amount보다 먼저 매칭돼야(부품수량/부품단가/파트금액).
+        "part_qty": ["부품수량", "부품 수량", "파트수량", "부속수량", "part qty", "part_qty"],
+        "part_price": ["부품단가", "부품 단가", "파트단가", "부속단가", "part price", "part_price"],
+        "part_amount": ["파트금액", "부품금액", "부품 금액", "부속금액", "부품가액", "part amount", "part_amount"],
         "qty": ["수량", "q'ty", "qty", "quantity", "수 량"],
         "unit": ["단위", "unit"],
         "currency": ["ccy", "통화", "currency", "화폐"],
@@ -612,7 +663,10 @@ def suggest_column_mapping(path, sheet_name, max_scan_rows=8):
     }
 
     ROLE_PRIORITY = ["seq", "amount_krw", "price_krw", "currency",
-                     "cat1", "cat2", "cat3", "cat4", "name", "part", "spec", "maker",
+                     "cat1", "cat2", "cat3", "cat4", "name",
+                     # 부품 경제열은 'part'·qty/price/amount보다 먼저(부품수량이 part/수량으로 새는 것 방지).
+                     "part_qty", "part_price", "part_amount", "part",
+                     "spec", "maker",
                      "qty", "unit", "price", "amount", "remark"]
 
     # [코드리뷰 M16] 짧은 ASCII 토큰(no/item/make/unit/sum 등)은 부분일치 오탐(Notes→seq)

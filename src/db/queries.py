@@ -1087,13 +1087,15 @@ def insert_items_bulk(submission_id, items: list[dict]):
                          category, path, name_raw, name_normalized, spec, maker,
                          quantity, unit, unit_price, unit_price_orig,
                          unit_price_currency, fx_rate_used, amount, amount_orig, is_nego,
-                         merge_status, cat_levels)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         merge_status, cat_levels, part_qty, part_price, part_amount)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     iid, submission_id,
                     it.get("line_no"), i, it.get("depth", 0),
                     # [중복 병합] 병합 제외행은 is_header=1로 저장 → 모든 합계 쿼리에서 자동 제외.
-                    1 if (it.get("is_category_header") or it.get("merge_status")) else 0,
+                    # [부품 BOM] 부품(bom_part)도 is_header=1 → 총액/소계에서 제외(단가 내역만 표시).
+                    1 if (it.get("is_category_header") or it.get("merge_status")
+                          or it.get("bom_part")) else 0,
                     it.get("category"),
                     it.get("path") or it.get("parent_path", ""),
                     _strip_indent_prefix(it.get("name_raw") or ""),
@@ -1111,6 +1113,9 @@ def insert_items_bulk(submission_id, items: list[dict]):
                     1 if it.get("is_nego") else 0,
                     it.get("merge_status"),
                     _catlv,
+                    _to_number(it.get("part_qty")),
+                    _to_number(it.get("part_price")),
+                    _to_number(it.get("part_amount")),
                 ))
             except Exception as e:
                 # 어느 항목에서 터졌는지 명확히 출력
