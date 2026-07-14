@@ -2180,6 +2180,88 @@ def export_level_tree(submission_id):
     return send_file(str(path), as_attachment=True, download_name=path.name)
 
 
+@bp.route("/<submission_id>/recon/node", methods=["POST"])
+@require_role("manager")
+def recon_node(submission_id):
+    """[#2] 임의 레벨에 '신규 분류' 생성(비파괴 오버레이). payload: {name, level, parent_path}."""
+    from db.queries import get_recon, save_recon
+    if not get_submission(submission_id):
+        abort(404)
+    p = request.get_json(silent=True) or {}
+    name = (p.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "분류명이 필요합니다."})
+    try:
+        level = int(p.get("level") or 1)
+    except (TypeError, ValueError):
+        level = 1
+    level = max(1, min(level, 6))
+    parent_path = (p.get("parent_path") or "").strip()
+    recon = get_recon(submission_id) or {}
+    nodes = recon.get("nodes") or []
+    new_path = (parent_path + " > " + name) if parent_path else name
+    if any((n.get("parent_path") or "") == parent_path and n.get("name") == name for n in nodes):
+        return jsonify({"ok": False, "error": "이미 있는 분류입니다."})
+    nid = "u" + str(len(nodes) + 1)
+    nodes.append({"id": nid, "name": name, "level": level, "parent_path": parent_path})
+    recon["nodes"] = nodes
+    save_recon(submission_id, recon)
+    return jsonify({"ok": True, "id": nid, "path": new_path, "level": level})
+
+
+def _recon_leaves_under(tree_nodes, prefix):
+    """recon 트리에서 prefix(경로) 하위의 잎 (item_id, path) 수집."""
+    out = []
+    def _w(nodes):
+        for n in nodes:
+            pth = n.get("path") or ""
+            if n.get("is_leaf") and (n.get("leaf_data") or {}).get("item_id") and \
+                    (pth == prefix or pth.startswith(prefix + " > ")):
+                out.append((n["leaf_data"]["item_id"], pth))
+            _w(n.get("children") or [])
+    _w(tree_nodes)
+    return out
+
+
+def _recon_move(submission_id, payload):
+    """[#2] 항목(잎)/묶음(가지)을 재구성 오버레이 경로로 이동(정본 불변·총액 Δ=0)."""
+    from db.queries import get_recon, save_recon, build_items_tree
+    kind = (payload.get("kind") or "").strip()
+    target = (payload.get("target") or "").strip()
+    recon = get_recon(submission_id) or {}
+    moves = recon.get("moves") or {}
+    if kind == "leaf":
+        iid = (payload.get("item_id") or "").strip()
+        if not iid:
+            return {"ok": False, "error": "item_id 필요"}
+        moves[iid] = target
+    elif kind == "branch":
+        src = (payload.get("path") or "").strip()
+        if not src:
+            return {"ok": False, "error": "path 필요"}
+        if target == src or target.startswith(src + " > "):
+            return {"ok": False, "error": "자기 자신/하위로 이동할 수 없습니다."}
+        tree = build_items_tree(submission_id)
+        root_name = src.split(" > ")[-1]
+        newbase = (target + " > " + root_name) if target else root_name
+        for iid, cur in _recon_leaves_under(tree.get("tree") or [], src):
+            moves[iid] = newbase + cur[len(src):]
+    else:
+        return {"ok": False, "error": "kind(leaf|branch) 필요"}
+    recon["moves"] = moves
+    save_recon(submission_id, recon)
+    return {"ok": True, "kind": kind, "target": target}
+
+
+@bp.route("/<submission_id>/recon/move", methods=["POST"])
+@require_role("manager")
+def recon_move(submission_id):
+    """[#2] 항목/묶음을 재구성 경로로 이동(오버레이). payload: {kind, item_id|path, target}."""
+    if not get_submission(submission_id):
+        abort(404)
+    return jsonify(_recon_move(submission_id, request.get_json(silent=True) or {}))
+
+
 @bp.route("/<submission_id>/recon/reset", methods=["POST"])
 @require_role("manager")
 def recon_reset(submission_id):
