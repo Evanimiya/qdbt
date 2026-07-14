@@ -1154,16 +1154,54 @@ def _path_under(path, unit):
     return pp[:len(up)] == up if up else False
 
 
-def build_items_tree(submission_id):
+def get_recon(submission_id):
+    """[재구성 오버레이] map_config.recon 반환(비파괴·정본 불변). 없으면 빈 dict.
+
+    구조: {"nodes":[{id,name,level,parent_path}], "moves":{item_id: 오버레이경로},
+           "level_overrides":{path: 새레벨}}.  UI가 만든 사용자 재구성층 — submission_items 불변.
+    """
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        return {}
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    return mc.get("recon") or {}
+
+
+def save_recon(submission_id, recon):
+    """recon 오버레이 저장(정본 불변, map_config만)."""
+    import json as _json
+    sub = get_submission(submission_id)
+    if not sub:
+        return
+    try:
+        mc = _json.loads(dict(sub).get("map_config") or "{}") or {}
+    except Exception:
+        mc = {}
+    mc["recon"] = recon or {}
+    update_submission(submission_id, map_config=_json.dumps(mc, ensure_ascii=False))
+
+
+def build_items_tree(submission_id, view="recon"):
     """제출서 항목을 path 기반 계층 트리로 구성.
 
     각 잎(품목)의 path를 따라 트리를 만들고, 가지마다 금액 합계.
     트리 UI(+/− 펼침, 그룹별 비교 단위)에서 사용.
 
+    view: 'recon'(기본) = 재구성 오버레이(map_config.recon) 반영 — 이동(moves)·신규분류(nodes)·
+      재레벨(level_overrides). 'original' = 정본 경로 그대로(오버레이 무시). 금액·건수 불변(Δ=0).
+
     반환: {"tree": [노드...], "total": 합계, "max_depth": 최대깊이}
-    각 노드: {name, path, amount, n_items, depth, is_leaf, leaf_data, children}
+    각 노드: {name, path, amount, n_items, depth, level, is_leaf, leaf_data, children}
     """
     items = get_items(submission_id, headers=False)
+    recon = get_recon(submission_id) if view == "recon" else {}
+    _moves = recon.get("moves") or {}
+    _level_ov = recon.get("level_overrides") or {}
+    _extra_nodes = recon.get("nodes") or []
     root = {}
     max_depth = 1
     order_counter = [0]
@@ -1171,7 +1209,8 @@ def build_items_tree(submission_id):
     import json as _json_lv
     for it in items:
         d = dict(it)
-        path = d.get("path") or ""
+        # [재구성 오버레이] 이동된 항목은 오버레이 경로 우선(정본 path 불변).
+        path = (_moves.get(d.get("item_id")) if _moves else None) or d.get("path") or ""
         parts = _split_path(path)
         _path_segs = list(parts)   # 잎 추가 전 분류 세그먼트(의미 레벨 매핑 기준)
         nm = d.get("name_normalized") or d.get("name_raw") or "(미분류)"
@@ -1233,6 +1272,41 @@ def build_items_tree(submission_id):
                 }
             cur = cur[part]["_children"]
 
+    # [재구성 오버레이] 신규 분류(빈 가지) 삽입 — 항목이 아직 안 옮겨진 사용자 생성 노드.
+    for _nd in _extra_nodes:
+        _pp = _nd.get("parent_path") or ""
+        _nm = _nd.get("name")
+        if not _nm:
+            continue
+        _acc, _cur = [], root
+        for _seg in (_split_path(_pp) + [_nm]):
+            _acc.append(_seg)
+            if _seg not in _cur:
+                _cur[_seg] = {"name": _seg, "path": " > ".join(_acc), "amount": 0.0,
+                              "n_items": 0, "depth": len(_acc),
+                              "level": _nd.get("level") if _seg == _nm else len(_acc),
+                              "_children": {}, "leaf_data": None, "_makers": set(),
+                              "_specs": set(), "_order": order_counter[0], "_recon_new": True}
+                order_counter[0] += 1
+            _cur = _cur[_seg]["_children"]
+
+    # [재구성 오버레이 · #4 재레벨링] level_overrides: 지정 경로 노드의 레벨을 바꾸고
+    #  하위 서브트리를 같은 delta로 이동(부모 유지·순환/역전 방지는 저장 시 보장). 표시 전용.
+    if _level_ov:
+        def _apply_lv(nd):
+            for node in nd.values():
+                _ov = _level_ov.get(node["path"])
+                if _ov is not None:
+                    _delta = _ov - node.get("level", node["depth"])
+                    def _shift(n2, dl):
+                        n2["level"] = (n2.get("level", n2["depth"])) + dl
+                        for c in n2["_children"].values():
+                            _shift(c, dl)
+                    _shift(node, _delta)
+                else:
+                    _apply_lv(node["_children"])
+        _apply_lv(root)
+
     def to_list(nd):
         out = []
         for node in sorted(nd.values(), key=lambda n: n["_order"]):
@@ -1248,6 +1322,7 @@ def build_items_tree(submission_id):
                 "is_leaf": len(children) == 0,
                 "leaf_data": node["leaf_data"], "children": children,
                 "maker_rep": maker_rep, "spec_rep": spec_rep,
+                "recon_new": bool(node.get("_recon_new")),
             })
         return out
 
