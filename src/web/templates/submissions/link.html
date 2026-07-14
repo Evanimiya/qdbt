@@ -146,6 +146,16 @@
   <div class="lkc-tools">
     <button class="lkc-tbtn" onclick="LKC.expandAll()">＋ 모두 펼치기</button>
     <button class="lkc-tbtn" onclick="LKC.collapseAll()">－ 모두 접기</button>
+    {# [#2 재구성층] 신규 분류·초기화·원본/재구성 뷰·레벨엑셀 #}
+    <button class="lkc-tbtn" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe"
+            onclick="LKC.reconNewNode()" title="선택 노드(없으면 최상위) 아래에 신규 분류 생성(비파괴)">＋ 신규 분류</button>
+    <button class="lkc-tbtn" onclick="LKC.reconReset()" title="이동·신규분류·재레벨 초기화(원본 복귀)">↺ 재구성 초기화</button>
+    {% if recon_view == 'original' %}
+    <a class="lkc-tbtn" href="{{ url_for('submissions.link_view', submission_id=sub.submission_id) }}" style="text-decoration:none">👁 재구성 보기</a>
+    {% else %}
+    <a class="lkc-tbtn" href="{{ url_for('submissions.link_view', submission_id=sub.submission_id, view='original') }}" style="text-decoration:none">👁 원본 보기</a>
+    {% endif %}
+    <a class="lkc-tbtn" href="{{ url_for('submissions.export_level_tree', submission_id=sub.submission_id) }}" style="text-decoration:none;background:#ecfdf5;color:#047857;border-color:#a7f3d0" title="레벨 트리 엑셀 다운로드">⬇ 레벨 엑셀</a>
     <select id="lkcLevel" class="lkc-tbtn" onchange="if(this.value)LKC.toLevel(parseInt(this.value))" title="선택한 분류 레벨까지 펼침(하위 접기)">
       <option value="">분류…</option>
     </select>
@@ -223,7 +233,7 @@ let lkcReady = false;
 function lkEnsureCanvas(){
   if (lkcReady) return;
   LKC.init({ mount:'lkcCanvas', tree:LK_TREE, residual:LK_RESIDUAL, manual:LK_MANUAL,
-             levels:LK_LEVELS, subId:SUB_ID, stdCats:LK_STD_CATS });
+             levels:LK_LEVELS, subId:SUB_ID, stdCats:LK_STD_CATS, recon:true });
   // 분류 레벨 드롭다운 채우기(사용자 분류명, 데이터 최대 깊이까지)
   const sel = document.getElementById('lkcLevel');
   if (sel){

@@ -1794,7 +1794,9 @@ def link_view(submission_id):
         abort(404)
     subd = dict(sub)
     items = get_items(submission_id)
-    tree = build_items_tree(submission_id)
+    # [#2 재구성층] ?view=original 이면 정본 경로 그대로, 기본은 재구성 오버레이 반영.
+    _view = "original" if request.args.get("view") == "original" else "recon"
+    tree = build_items_tree(submission_id, view=_view)
     stitch_meta, residual_view = _build_residual_view(subd, items)
     residual_ids = {rv["item_id"] for rv in residual_view}
 
@@ -1883,6 +1885,7 @@ def link_view(submission_id):
                            n_residual=len(residual_view),
                            stitch_meta=stitch_meta or {},
                            sheets_view=sheets_view,
+                           recon_view=_view,
                            snapshot_version=(snap or {}).get("version") or 0)
 
 

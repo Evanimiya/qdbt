@@ -64,7 +64,7 @@ window.LKC = (function(){
   var S = { mount:null, tree:[], nodes:[], byPath:{}, maxDepth:0,
             residual:new Set(), manual:new Set(), levels:[], subId:'',
             collapsed:{}, sel:null, selected:new Set(), onlyRed:false, drag:null, readonly:false,
-            sortScope:{} };
+            sortScope:{}, recon:false };
 
   // [상태 보존] 접힘/선택/스크롤을 sessionStorage에 저장·복원(이동·리로드 후 유지).
   function viewKey(){ return 'lkc:' + S.subId + ':' + S.mount; }
@@ -319,9 +319,16 @@ window.LKC = (function(){
       el.addEventListener('drop', function(e){ e.preventDefault(); e.stopPropagation(); el.classList.remove('drop-ok');
         if(!S.drag) return; var d=S.drag; var target=el.dataset.path; S.drag=null;
         if(!canDropOn(d, target)) return;
-        if(d.kind==='multi') bulkReparent(d.paths, target);
-        else if(d.kind==='leaf') reassign(d.item, target);
-        else reparentBranch(d.path, target); });
+        // [#2 재구성 모드] 드롭을 비파괴 오버레이(recon/move)로. 아니면 기존 연계(파괴적 경로수정).
+        if(S.recon){
+          if(d.kind==='multi') reconMoveMulti(d.paths, target);
+          else if(d.kind==='leaf') reconMoveLeaf(d.item, target);
+          else reconMoveBranch(d.path, target);
+        } else {
+          if(d.kind==='multi') bulkReparent(d.paths, target);
+          else if(d.kind==='leaf') reassign(d.item, target);
+          else reparentBranch(d.path, target);
+        } });
     });
     // [#4 재레벨링] 열 헤더에 가지를 드롭 → 그 '의미 레벨'로 재레벨(레벨만·부모 유지·서브트리 동반).
     root.querySelectorAll('.lkc-col').forEach(function(col){
@@ -440,6 +447,44 @@ window.LKC = (function(){
       if(d.ok) location.reload(); else alert('연결 실패: '+(d.error||''));
     }).catch(function(e){ alert('오류: '+e); });
   }
+
+  // ── [#2 재구성층] 비파괴 오버레이(map_config.recon). 정본 불변·총액 Δ=0 ──
+  function _reconPost(url, body, okmsg){
+    saveViewState();
+    fetch('/submissions/'+S.subId+url, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body||{})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(d.ok) location.reload(); else alert((okmsg||'실패')+': '+(d.error||'')); })
+      .catch(function(e){ alert('오류: '+e); });
+  }
+  function reconMoveLeaf(itemId, target){
+    if(!confirm('[재구성] 이 항목을 다음 분류로 이동할까요? (비파괴·총액 불변)\n\n'+target)) return;
+    _reconPost('/recon/move', {kind:'leaf', item_id:itemId, target:target}, '이동 실패');
+  }
+  function reconMoveBranch(path, target){
+    if(!confirm('[재구성] 이 묶음을 다음 분류 하위로 이동할까요? (하위 포함·비파괴·총액 불변)\n\n'+target)) return;
+    _reconPost('/recon/move', {kind:'branch', path:path, target:target}, '이동 실패');
+  }
+  function reconMoveMulti(paths, target){
+    paths.forEach(function(p){ var n=S.byPath[p]; if(!n) return;
+      if(n.is_leaf && n.item_id) return _reconPost('/recon/move', {kind:'leaf', item_id:n.item_id, target:target});
+    });
+    // 가지들은 개별 이동(간단화) — 첫 렌더 후 반영.
+    var br=paths.map(function(p){return S.byPath[p];}).filter(function(n){return n && !n.is_leaf;});
+    if(br.length){ _reconPost('/recon/move', {kind:'branch', path:br[0].path, target:target}); }
+    else location.reload();
+  }
+  function reconNewNode(parentPath){
+    var name = window.prompt('신규 분류 이름 (부모: '+(parentPath||'(최상위)')+')', '');
+    if(name===null) return; name=name.trim(); if(!name) return;
+    var lvStr = window.prompt('레벨 (1=대·2=중·3=소·4=세·5=품명·6=부품)', parentPath ? '' : '1');
+    if(lvStr===null) return;
+    _reconPost('/recon/node', {name:name, level:parseInt(lvStr,10)||1, parent_path:parentPath||''}, '생성 실패');
+  }
+  function reconReset(){
+    if(!confirm('재구성(이동·신규분류·재레벨)을 모두 초기화하고 원본으로 되돌릴까요?')) return;
+    _reconPost('/recon/reset', {}, '초기화 실패');
+  }
   function nodeAction(itemId, action){
     var msg={delete:'이 항목을 영구 삭제할까요?', exclude:'이 항목을 합계에서 제외할까요? (복원 가능)',
              residual:'이 항목을 미연계(빨강)로 되돌릴까요?', unresidual:'이 항목을 연계 완료로 표시할까요?'}[action];
@@ -465,6 +510,7 @@ window.LKC = (function(){
       S.stdCats=cfg.stdCats||[];   // 도메인 표준 대분류(강등 대상 추천). 없으면 기본값 사용.
       S.residual=new Set(cfg.residual||[]); S.manual=new Set(cfg.manual||[]);
       S.readonly=!!cfg.readonly;
+      S.recon=!!cfg.recon;   // [#2] 재구성 모드(드롭=비파괴 오버레이 이동)
       S.collapsed={}; S.sel=null; S.selected=new Set(); S.onlyRed=false; S.sortBy=''; S.sortScope={};
       flatten();
       // [상태 보존] 이전(이동 전) 접힘/선택/스크롤 복원. 없으면 기본(전부 펼침).
@@ -491,7 +537,11 @@ window.LKC = (function(){
     },
     sortScopeLabel: function(){ var k=S.sel||''; return { scope:k,
       name:(k ? (S.byPath[k]&&S.byPath[k].name) : '전체'), mode:S.sortScope[k]||'' }; },
-    maxDepth: function(){ return S.maxDepth; }
+    maxDepth: function(){ return S.maxDepth; },
+    // [#2/#4 재구성층] 공개 API
+    setRecon: function(on){ S.recon=!!on; },
+    reconNewNode: function(parentPath){ reconNewNode(parentPath||(S.sel||'')); },
+    reconReset: function(){ reconReset(); }
   };
 })();
 </script>
