@@ -2037,6 +2037,16 @@ refresh();
   .lfx-leaf .lv{display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}
   .lfx-leaf .lv .qty{font-style:normal;font-size:9.5px;color:#94a3b8;font-weight:500}
   .lfx-leaf .lv.lo{color:#2f8f5b;font-weight:800;background:#f0fbf5;border-radius:6px}
+  /* [부품 BOM] 품목 아래 부품 서브행 + 토글 */
+  .lfx-bomtog{font-size:10px;font-weight:800;color:#1C7293;background:#e6f0f5;border:1px solid #bcd;
+    border-radius:4px;width:16px;height:16px;line-height:1;cursor:pointer;padding:0;margin-right:2px;vertical-align:middle}
+  .lfx-bom{padding:5px 10px 5px 44px;font-size:11px;color:#64748B;background:#fafcfd;
+    border-bottom:1px solid #f1f5f9;font-variant-numeric:tabular-nums}
+  .lfx-bom .nm{text-align:left;color:#475569}
+  .lfx-bom .lv{text-align:right;display:flex;flex-direction:column;align-items:flex-end;line-height:1.2}
+  .lfx-bom .lv .qty{font-style:normal;font-size:9px;color:#a3b1c2}
+  .lfx-bom .lv.lo{color:#2f8f5b;font-weight:700}
+  .lfx-leaf.has-bom .nm{font-weight:700}
 </style>
 <script>
 (function(){
@@ -2082,16 +2092,48 @@ refresh();
     var colhead = '<div class="lfx-colhead lfx-sticky" style="grid-template-columns:'+cols+'">'
       + '<span>품목</span>'
       + vendors.map(function(v){return '<span>'+esc(v)+'</span>';}).join('') + '</div>';
+    var _bomSeq = 0;
     var body = groups.map(function(gr){
       var leaves = gr.rows.map(function(rw){
+        // [부품 BOM] 이 품목의 부품명 수집(업체 합집합) + 부품 유무.
+        var partNames = [], _seen = {};
+        vendors.forEach(function(v){
+          var c = rw.cells[v];
+          ((c && c.parts) || []).forEach(function(p){
+            if (p && p.name != null && !_seen[p.name]) { _seen[p.name] = 1; partNames.push(p.name); }
+          });
+        });
+        var hasBom = partNames.length > 0;
+        var bid = 'bom' + (++_bomSeq);
         var cells = vendors.map(function(v){
           var c = rw.cells[v];
           var isLo = rw.min_vendor && v===rw.min_vendor && c;
           var sub = c ? '<em class="qty">'+won(c.unit_price)+(c.quantity?(' × '+c.quantity):'')+'</em>' : '';
           return '<span class="lv '+(isLo?'lo':'')+'">'+(isLo?'🏅 ':'')+won(c?c.amount:null)+sub+'</span>';
         }).join('');
-        return '<div class="lfx-leaf" data-nm="'+esc((rw.name||'').toLowerCase())+'" '
-             + 'style="grid-template-columns:'+cols+'"><span class="nm">'+esc(rw.name)+'</span>'+cells+'</div>';
+        var tog = hasBom ? '<button type="button" class="lfx-bomtog" data-tg="'+bid+'" title="부품 BOM 펼치기(총액 제외·단가 내역)">＋</button> ' : '';
+        var head = '<div class="lfx-leaf'+(hasBom?' has-bom':'')+'" data-nm="'+esc((rw.name||'').toLowerCase())+'" '
+             + 'style="grid-template-columns:'+cols+'"><span class="nm">'+tog+esc(rw.name)+'</span>'+cells+'</div>';
+        var bom = '';
+        if (hasBom) {
+          bom = partNames.map(function(pn){
+            // 부품별 최저 파트금액 업체 하이라이트.
+            var mv=null, mn=null;
+            vendors.forEach(function(v){
+              var c=rw.cells[v]; var pp=((c&&c.parts)||[]).filter(function(x){return x.name===pn;})[0];
+              if (pp && pp.part_amount!=null && (mn==null || pp.part_amount<mn)) { mn=pp.part_amount; mv=v; }
+            });
+            var pcells = vendors.map(function(v){
+              var c=rw.cells[v]; var pp=((c&&c.parts)||[]).filter(function(x){return x.name===pn;})[0];
+              var lo = pp && v===mv;
+              var sub = pp ? '<em class="qty">'+won(pp.part_price)+(pp.part_qty?(' × '+pp.part_qty):'')+'</em>' : '';
+              return '<span class="lv '+(lo?'lo':'')+'">'+(lo?'🏅 ':'')+won(pp?pp.part_amount:null)+sub+'</span>';
+            }).join('');
+            return '<div class="lfx-bom" data-bom="'+bid+'" style="display:none;grid-template-columns:'+cols+'">'
+                 + '<span class="nm">↳ '+esc(pn)+'</span>'+pcells+'</div>';
+          }).join('');
+        }
+        return head + bom;
       }).join('');
       // 그룹 라벨(구분선) — 접이식 아님, 항상 펼쳐진 캔버스 섹션.
       return '<div class="lfx-grp"><div class="lfx-grplabel">'+esc(gr.group)
@@ -2116,7 +2158,18 @@ refresh();
     function close(){ if(veil.parentNode) veil.parentNode.removeChild(veil); }
     m.querySelector('.x').onclick=close;
     var bodyEl = m.querySelector('.lfx-body');
-    // 검색: 품목 행 필터(그룹 라벨은 해당 그룹에 표시 행 있을 때만).
+    // [부품 BOM] -/+ 토글: 품목 아래 부품 서브행 펼치기/접기(엑셀 그룹 토글 UX). 총액 불변.
+    bodyEl.addEventListener('click', function(e){
+      var b = e.target.closest && e.target.closest('.lfx-bomtog');
+      if(!b) return;
+      var tg = b.getAttribute('data-tg');
+      var open = b.textContent.trim() === '＋';
+      bodyEl.querySelectorAll('.lfx-bom[data-bom="'+tg+'"]').forEach(function(el){
+        el.style.display = open ? 'grid' : 'none';
+      });
+      b.textContent = open ? '－' : '＋';
+    });
+    // 검색: 품목 행 필터(그룹 라벨은 해당 그룹에 표시 행 있을 때만). 부품 서브행도 함께.
     m.querySelector('input').oninput=function(){
       var q=this.value.trim().toLowerCase();
       bodyEl.querySelectorAll('.lfx-grp').forEach(function(grp){
@@ -2129,6 +2182,7 @@ refresh();
       });
     };
   }
+  try { window.__lfxRender = render; } catch(e) {}   // [테스트용] 서버리스 DOM 렌더 검증 노출
 })();
 </script>
 {% endblock %}
