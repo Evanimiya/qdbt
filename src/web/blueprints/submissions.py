@@ -2167,6 +2167,19 @@ def recon_relevel(submission_id):
     return jsonify(_recon_relevel(submission_id, (p.get("path") or "").strip(), p.get("level")))
 
 
+@bp.route("/<submission_id>/export/level-tree.xlsx", methods=["GET"])
+@require_role("manager")
+def export_level_tree(submission_id):
+    """[#3] 레벨별 캔버스 엑셀 다운로드(대/중/소/세/품명/부품 + 규격·수량·단가·금액).
+    상위 셀 반복 생략·빈 레벨 빈 칸·부품 합계 제외. 재구성 오버레이 반영. 총액 불변(표시)."""
+    from flask import send_file
+    if not get_submission(submission_id):
+        abort(404)
+    from reports.excel_report import export_level_tree_xlsx
+    path = export_level_tree_xlsx(submission_id)
+    return send_file(str(path), as_attachment=True, download_name=path.name)
+
+
 @bp.route("/<submission_id>/recon/reset", methods=["POST"])
 @require_role("manager")
 def recon_reset(submission_id):

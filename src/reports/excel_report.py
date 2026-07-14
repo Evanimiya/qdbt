@@ -274,3 +274,98 @@ def generate_bid_report(bid, data: dict) -> Path:
     out_path = OUTPUT_DIR / f"입찰비교_{safe_name}.xlsx"
     wb.save(out_path)
     return out_path
+
+
+# ─── [#3] 레벨별 캔버스 엑셀 추출 ──────────────────────────────
+
+def export_level_tree_xlsx(submission_id) -> Path:
+    """확정/연계 레벨 트리를 엑셀로. 열 = 대/중/소/세/품명/부품 + 규격·수량·단위·단가·금액
+    (+부품수량·부품단가·파트금액). 상위 분류 셀은 반복 생략(병합 느낌), 빈 레벨은 빈 칸,
+    부품 행은 합계 제외(단가 내역), 합계 = Σ품목금액. 재구성 오버레이(recon) 반영.
+    """
+    from db.queries import build_items_tree, get_submission, get_conn, _split_path
+    sub = get_submission(submission_id)
+    tree = build_items_tree(submission_id)   # recon 뷰(레벨·이동·재레벨 반영)
+
+    # 품목(잎)을 조상 체인(level,name)과 함께 평면화.
+    leaves = []
+    def _walk(nodes, chain):
+        for n in nodes:
+            ch = chain + [(n.get("level") or n.get("depth") or 1, n.get("name"))]
+            if n.get("is_leaf"):
+                leaves.append((ch, n.get("leaf_data") or {}, n.get("path")))
+            else:
+                _walk(n.get("children") or [], ch)
+    _walk(tree.get("tree") or [], [])
+
+    # 부품(bom_part) — 품목 전체경로별.
+    parts_by_path = {}
+    with get_conn() as c:
+        for r in c.execute("""
+            SELECT name_normalized, part_qty, part_price, part_amount, path
+            FROM submission_items WHERE submission_id=? AND part_amount IS NOT NULL
+            ORDER BY sort_order
+        """, (submission_id,)):
+            d = dict(r)
+            parts_by_path.setdefault(" > ".join(_split_path(d["path"] or "")), []).append(d)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "레벨트리"
+    HEAD = ["대분류", "중분류", "소분류", "세분류", "품명", "부품",
+            "규격", "수량", "단위", "단가", "금액", "부품수량", "부품단가", "파트금액"]
+    for ci, h in enumerate(HEAD, 1):
+        _h(ws.cell(row=1, column=ci), h)
+    NUM = "#,##0"
+    row = 2
+    prev = [None] * 6   # 대~부품 상위 셀 반복 생략용
+    total = 0.0
+    for chain, ld, fullpath in leaves:
+        cells = [None] * 6   # 1..5 분류/품명, 6 부품(품목행은 빈칸)
+        for lv, nm in chain:
+            # placeholder(⟨미연계·N분류⟩)는 '빈 레벨'로 취급 → 빈 칸.
+            if 1 <= lv <= 5 and nm and not str(nm).startswith("⟨미연계"):
+                cells[lv - 1] = nm
+        # 상위 분류(1..4) 반복 생략(병합 느낌). 품명(5)은 항상 표기.
+        for k in range(4):
+            if cells[k] is not None and cells[k] == prev[k]:
+                _d(ws.cell(row=row, column=k + 1), None)
+            else:
+                _d(ws.cell(row=row, column=k + 1), cells[k])
+                prev[k] = cells[k]
+                for j in range(k + 1, 4):
+                    prev[j] = None   # 상위 바뀌면 하위 반복상태 리셋
+        _d(ws.cell(row=row, column=5), cells[4])   # 품명
+        _d(ws.cell(row=row, column=6), None)        # 품목행 부품칸 빈칸
+        _d(ws.cell(row=row, column=7), ld.get("spec"))
+        _d(ws.cell(row=row, column=8), ld.get("qty"), align=R, fmt=NUM)
+        _d(ws.cell(row=row, column=9), ld.get("unit"), align=C)
+        _d(ws.cell(row=row, column=10), ld.get("unit_price"), align=R, fmt=NUM)
+        _d(ws.cell(row=row, column=11), ld.get("amount"), align=R, fmt=NUM)
+        total += (ld.get("amount") or 0)
+        row += 1
+        # 부품 행(합계 제외).
+        for p in parts_by_path.get(" > ".join(_split_path(fullpath or "")), []):
+            _d(ws.cell(row=row, column=6), "↳ " + str(p.get("name_normalized") or ""))
+            _d(ws.cell(row=row, column=12), p.get("part_qty"), align=R, fmt=NUM)
+            _d(ws.cell(row=row, column=13), p.get("part_price"), align=R, fmt=NUM)
+            _d(ws.cell(row=row, column=14), p.get("part_amount"), align=R, fmt=NUM)
+            row += 1
+    # 합계 행(Σ품목금액, 부품 제외).
+    _h(ws.cell(row=row, column=1), "합계 (품목 금액 합 · 부품 제외)", font=BF, fill=GREY, align=L)
+    for ci in range(2, 11):
+        _d(ws.cell(row=row, column=ci), None, font=BF)
+    _d(ws.cell(row=row, column=11), round(total), font=BF, align=R, fmt=NUM)
+    for ci in range(12, 15):
+        _d(ws.cell(row=row, column=ci), None, font=BF)
+
+    widths = [12, 12, 12, 12, 16, 16, 14, 8, 7, 12, 14, 9, 11, 12]
+    for ci, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.freeze_panes = "A2"
+
+    vend = (dict(sub).get("vendor_name") if sub else None) or submission_id
+    safe = str(vend).replace("/", "_").replace("\\", "_")
+    out_path = OUTPUT_DIR / f"레벨트리_{safe}.xlsx"
+    wb.save(out_path)
+    return out_path
