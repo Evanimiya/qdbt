@@ -905,16 +905,23 @@ def set_bid_base_currency(bid_id: str, currency: str):
     return cur
 
 
-def set_submission_unit_count(submission_id: str, n: int):
-    """[추출 기준정보] 장비 대수 설정(≥1). 대당 단가 = 총액/대수."""
+def set_submission_unit_count(submission_id: str, n: int, basis: str = None):
+    """[추출 기준정보] 장비 대수(≥1) + 총액 기준 설정.
+    basis='total'(기본): 총액이 n대분 → 대당단가=총액÷n.
+    basis='per_unit': 총액이 1대 단가 → n대 총액=총액×n.
+    basis=None이면 대수만 갱신(기존 basis 유지)."""
     try:
         n = int(n)
     except (TypeError, ValueError):
         n = 1
     n = max(1, n)
     with get_conn() as c:
-        c.execute("UPDATE submissions SET unit_count = ? WHERE submission_id = ?",
-                  (n, submission_id))
+        if basis in ("total", "per_unit"):
+            c.execute("UPDATE submissions SET unit_count = ?, unit_basis = ? "
+                      "WHERE submission_id = ?", (n, basis, submission_id))
+        else:
+            c.execute("UPDATE submissions SET unit_count = ? WHERE submission_id = ?",
+                      (n, submission_id))
     return n
 
 

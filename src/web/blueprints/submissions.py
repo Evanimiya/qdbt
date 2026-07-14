@@ -2399,8 +2399,8 @@ def set_unit_count(submission_id):
     if not sub:
         abort(404)
     p = request.get_json(silent=True) or {}
-    n = set_submission_unit_count(submission_id, p.get("unit_count"))
-    return jsonify({"ok": True, "unit_count": n})
+    n = set_submission_unit_count(submission_id, p.get("unit_count"), p.get("basis"))
+    return jsonify({"ok": True, "unit_count": n, "basis": p.get("basis")})
 
 
 @bp.route("/<submission_id>/nego/add", methods=["POST"])

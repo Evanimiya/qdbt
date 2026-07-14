@@ -495,14 +495,24 @@
       {% else %}<span class="font-semibold">{{ sub.unit_count or 1 }}</span>{% endif %}
       <span class="text-gray-600 break-ko">대</span>
     </div>
+    <div class="flex items-center gap-2 text-sm">
+      <label class="text-gray-600 break-ko">총액 기준</label>
+      {% if has_role('manager') %}
+      <select id="unitBasisSel" onchange="saveUnitBasis(this.value)"
+              class="text-sm border border-gray-300 rounded-lg px-2 py-1 break-ko">
+        <option value="total" {% if (sub.unit_basis or 'total')=='total' %}selected{% endif %}>총액이 n대분 (÷ 대당단가)</option>
+        <option value="per_unit" {% if sub.unit_basis=='per_unit' %}selected{% endif %}>1대 단가 (× n대 총액)</option>
+      </select>
+      {% else %}<span class="font-semibold break-ko">{{ '1대 단가(×)' if sub.unit_basis=='per_unit' else '총액 n대분(÷)' }}</span>{% endif %}
+    </div>
     <div class="text-sm">
-      <span class="text-gray-600 break-ko">총액(n대 기준)</span>
+      <span id="basisTotalLabel" class="text-gray-600 break-ko">총액(n대 기준)</span>
       <span id="basisTotal" class="font-semibold text-gray-900 ml-1"></span>
     </div>
     <div class="text-sm">
       <span class="text-gray-600 break-ko">대당 단가</span>
       <span id="perUnitPrice" class="font-bold text-blue-700 ml-1"></span>
-      <span class="text-xs text-gray-400 break-ko">= 총액 ÷ 대수</span>
+      <span id="perUnitLabel" class="text-xs text-gray-400 break-ko">= 총액 ÷ 대수</span>
     </div>
   </div>
   <p class="text-[11px] text-gray-400 mt-1.5 break-ko">
@@ -1213,6 +1223,7 @@ function initTreeOpen() {
 const wonKR = function(n){ return Math.round(n||0).toLocaleString('ko-KR'); };
 
 const UNIT_COUNT = {{ sub.unit_count or 1 }};
+const UNIT_BASIS = "{{ sub.unit_basis or 'total' }}";   // 'total'(÷) | 'per_unit'(×)
 function renderTree() {
   const body = document.getElementById('treeBody');
   if (!body) return;
@@ -1220,12 +1231,33 @@ function renderTree() {
   let total = 0;
   sortSiblings(TREE_DATA.tree).forEach(function(node){ total += node.amount; renderNode(node, body, 0); });
   document.getElementById('treeTotal').textContent = wonKR(total);
-  // [추출 기준정보] 대당 단가 = 총액(n대 총계, nego 포함) ÷ 대수
+  // [추출 기준정보] 총액 기준(basis)에 따라 대당단가/총액 계산.
   const n = Math.max(1, UNIT_COUNT);
   const bt = document.getElementById('basisTotal');
   const pu = document.getElementById('perUnitPrice');
-  if (bt) bt.textContent = wonKR(total) + ' 원';
-  if (pu) pu.textContent = wonKR(total / n) + ' 원' + (n > 1 ? ' /대' : '');
+  const btL = document.getElementById('basisTotalLabel');
+  const puL = document.getElementById('perUnitLabel');
+  if (UNIT_BASIS === 'per_unit') {
+    // 총액 = 1대 단가 → n대 총액 = 총액 × n, 대당단가 = 총액(그대로).
+    if (bt) bt.textContent = wonKR(total * n) + ' 원';
+    if (pu) pu.textContent = wonKR(total) + ' 원' + (n > 1 ? ' /대' : '');
+    if (btL) btL.textContent = '총액(' + n + '대 환산 = ×' + n + ')';
+    if (puL) puL.textContent = '= 1대 단가(총액 그대로)';
+  } else {
+    // 총액 = n대분 → 대당단가 = 총액 ÷ n.
+    if (bt) bt.textContent = wonKR(total) + ' 원';
+    if (pu) pu.textContent = wonKR(total / n) + ' 원' + (n > 1 ? ' /대' : '');
+    if (btL) btL.textContent = '총액(' + n + '대 기준)';
+    if (puL) puL.textContent = '= 총액 ÷ 대수';
+  }
+}
+function saveUnitBasis(v){
+  fetch('/submissions/' + SUB_ID + '/unit-count', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({unit_count: UNIT_COUNT, basis: v})
+  }).then(function(r){return r.json();}).then(function(d){
+    if(d.ok) location.reload();
+  }).catch(function(e){ alert('저장 실패: ' + e); });
 }
 function saveUnitCount(v){
   var n = Math.max(1, parseInt(v) || 1);

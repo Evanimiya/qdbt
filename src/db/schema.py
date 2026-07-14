@@ -591,6 +591,10 @@ def migrate_db(db_path=None):
     #  special nego 등 총계 반영 항목도 대당 표기 시 /대수. 기본 1.
     if "unit_count" not in sub_cols:
         migrations.append("ALTER TABLE submissions ADD COLUMN unit_count INTEGER NOT NULL DEFAULT 1")
+    # [단가 기준] 'total'=총액이 대수(n)분 → 대당단가=총액÷n(기본).
+    #             'per_unit'=총액이 1대 단가 → n대 총액=총액×n.
+    if "unit_basis" not in sub_cols:
+        migrations.append("ALTER TABLE submissions ADD COLUMN unit_basis TEXT")
 
     # submission_items 컬럼 추가
     si_cols = [c[1] for c in conn.execute("PRAGMA table_info(submission_items)").fetchall()]
