@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans CJK KR',sans-serif">
+  <rect width="960" height="430" fill="#eef3f6"/>
+  <text x="24" y="32" font-size="18" font-weight="800" fill="#0F2A43">#4 드래그 재레벨링 (안 A) — 레벨만 조정·부모 유지·서브트리 동반·양방향</text>
+  <text x="24" y="54" font-size="12" fill="#64748B">묶음을 아래(더 하위 레벨) 열로 드래그하면 그 레벨만 바뀌고, 하위가 함께 따라가며 빈 열을 연결선이 가로지름. 표시 전용·Δ=0.</text>
+
+  <!-- headers helper -->
+  <g font-size="11" font-weight="700" fill="#fff">
+    <!-- before -->
+    <rect x="24" y="76" width="440" height="24" rx="6" fill="#0F2A43"/>
+    <text x="60" y="92" text-anchor="middle">대분류</text><text x="148" y="92" text-anchor="middle">중분류</text><text x="236" y="92" text-anchor="middle">소분류</text><text x="324" y="92" text-anchor="middle">세분류</text><text x="418" y="92" text-anchor="middle">품명</text>
+    <!-- after -->
+    <rect x="496" y="76" width="440" height="24" rx="6" fill="#0F2A43"/>
+    <text x="532" y="92" text-anchor="middle">대분류</text><text x="620" y="92" text-anchor="middle">중분류</text><text x="708" y="92" text-anchor="middle">소분류</text><text x="796" y="92" text-anchor="middle">세분류</text><text x="890" y="92" text-anchor="middle">품명</text>
+  </g>
+
+  <!-- BEFORE label -->
+  <text x="24" y="124" font-size="12.5" font-weight="800" fill="#334155">전  ·  "경비"가 소분류 레벨</text>
+  <!-- BEFORE nodes -->
+  <g>
+    <rect x="26" y="134" width="70" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="36" y="153" font-size="11.5" font-weight="700" fill="#0F2A43">공사비</text>
+    <rect x="114" y="134" width="70" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="124" y="153" font-size="11.5" fill="#0F2A43">관리비</text>
+    <rect x="202" y="134" width="70" height="30" rx="7" fill="#eef6f2" stroke="#3FA372" stroke-width="1.6"/><text x="212" y="153" font-size="11.5" font-weight="700" fill="#1e7d4f">경비 ⇩</text>
+    <!-- connectors before -->
+    <path d="M96 149 L114 149" stroke="#1C7293" stroke-width="2"/>
+    <path d="M184 149 L202 149" stroke="#1C7293" stroke-width="2"/>
+    <!-- child of 경비 (유류비) at 품명 -->
+    <rect x="384" y="134" width="76" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="394" y="153" font-size="11.5" fill="#0F2A43">유류비</text>
+    <path d="M272 149 C330 149 320 149 384 149" stroke="#3FA372" stroke-width="2"/>
+  </g>
+
+  <!-- arrow -->
+  <text x="480" y="153" font-size="20" fill="#64748B" text-anchor="middle">▶</text>
+
+  <!-- AFTER label -->
+  <text x="496" y="124" font-size="12.5" font-weight="800" fill="#334155">후  ·  "경비"를 세분류로 내림(빈 소분류 보임)</text>
+  <!-- AFTER nodes -->
+  <g>
+    <rect x="498" y="134" width="70" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="508" y="153" font-size="11.5" font-weight="700" fill="#0F2A43">공사비</text>
+    <rect x="586" y="134" width="70" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="596" y="153" font-size="11.5" fill="#0F2A43">관리비</text>
+    <!-- 소분류 열 빈칸 (708) -->
+    <rect x="674" y="134" width="70" height="30" rx="7" fill="none" stroke="#e2e8f0" stroke-dasharray="3 3"/><text x="709" y="152" font-size="9" fill="#aab4c0" text-anchor="middle">(빈 소분류)</text>
+    <!-- 경비 now at 세분류 (762) -->
+    <rect x="762" y="134" width="70" height="30" rx="7" fill="#eef6f2" stroke="#3FA372" stroke-width="1.6"/><text x="772" y="153" font-size="11.5" font-weight="700" fill="#1e7d4f">경비</text>
+    <!-- connectors after: 관리비 -> 경비 spans empty 소분류 -->
+    <path d="M568 149 L586 149" stroke="#1C7293" stroke-width="2"/>
+    <path d="M656 149 C710 149 700 149 762 149" stroke="#3FA372" stroke-width="2.2"/>
+    <!-- child 유류비 follows, still 품명 -->
+    <rect x="854" y="134" width="76" height="30" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="864" y="153" font-size="11.5" fill="#0F2A43">유류비</text>
+    <path d="M832 149 L854 149" stroke="#3FA372" stroke-width="2"/>
+  </g>
+
+  <!-- notes -->
+  <rect x="24" y="196" width="912" height="210" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+  <text x="44" y="224" font-size="13" font-weight="800" fill="#0F2A43">동작 요약</text>
+  <text x="44" y="250" font-size="12" fill="#0F2A43">· "경비"를 소분류 → 세분류 열로 드래그 = <tspan font-weight="700" fill="#1e7d4f">레벨만 조정</tspan> (부모=관리비 그대로 유지)</text>
+  <text x="44" y="274" font-size="12" fill="#0F2A43">· 하위 "유류비"는 <tspan font-weight="700">서브트리로 함께</tspan> 따라감 (잎이라 품명 열 유지)</text>
+  <text x="44" y="298" font-size="12" fill="#0F2A43">· 빈 소분류 열이 그대로 보이고, 부모→경비 연결선이 그 위를 가로지름 (어느 계층이 비었는지 가시화)</text>
+  <text x="44" y="322" font-size="12" fill="#0F2A43">· <tspan font-weight="700">양방향</tspan>: 위(상위 레벨)로도 재레벨 가능 · 부모 레벨보다 위로 못 감(역전 방지) · 순환 방지 · 품명 초과 시 클램프</text>
+  <text x="44" y="352" font-size="12" fill="#b03a2e">· 비파괴: cat_levels/level 오버레이만 변경 → 금액·건수·경로 Δ=0, 되돌리기 가능</text>
+  <text x="44" y="382" font-size="11.5" fill="#64748B" font-style="italic">저장은 #2 사용자 재구성층(map_config.recon)과 통합 예정 — 정본 submission_items 불변</text>
+</svg>

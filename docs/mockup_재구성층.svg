@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans CJK KR',sans-serif">
+  <rect width="1000" height="620" fill="#eef3f6"/>
+  <text x="24" y="34" font-size="19" font-weight="800" fill="#0F2A43">#2 신규 분류 (사용자 재구성층) — 목업</text>
+  <text x="24" y="56" font-size="12.5" fill="#64748B">대분류뿐 아니라 중/소/세 어느 레벨에서도 '+ 신규 분류'를 만들어 항목을 재구성. 견적 원본(정본)은 안 건드리는 비파괴 오버레이.</text>
+
+  <!-- 원본 스트립 -->
+  <text x="24" y="88" font-size="12.5" font-weight="800" fill="#334155">원본(추출) — 재료비 아래 품목이 평평하게</text>
+  <g>
+    <rect x="24" y="96" width="952" height="52" rx="9" fill="#ffffff" stroke="#D8E3EA"/>
+    <rect x="40" y="108" width="110" height="28" rx="7" fill="#fff" stroke="#cbd5e1"/><text x="52" y="126" font-size="11.5" font-weight="700" fill="#0F2A43">재료비</text>
+    <g font-size="11" fill="#334155">
+      <rect x="180" y="108" width="90" height="28" rx="7" fill="#f8fafc" stroke="#e2e8f0"/><text x="192" y="126">파이프</text>
+      <rect x="280" y="108" width="90" height="28" rx="7" fill="#f8fafc" stroke="#e2e8f0"/><text x="292" y="126">밸브</text>
+      <rect x="380" y="108" width="90" height="28" rx="7" fill="#f8fafc" stroke="#e2e8f0"/><text x="392" y="126">비계재</text>
+      <rect x="480" y="108" width="90" height="28" rx="7" fill="#f8fafc" stroke="#e2e8f0"/><text x="492" y="126">발판</text>
+    </g>
+    <text x="600" y="126" font-size="10.5" fill="#94a3b8">← 중분류 없음 (원본 경로 그대로 보존)</text>
+  </g>
+
+  <text x="470" y="180" font-size="20" fill="#64748B" text-anchor="middle">▼ 사용자가 중분류 2개 신규 생성 · 항목 이동</text>
+
+  <!-- 재구성 캔버스 -->
+  <text x="24" y="212" font-size="12.5" font-weight="800" fill="#334155">사용자 재구성 (오버레이) — 어느 레벨이든 '+ 신규 분류'</text>
+  <g>
+    <rect x="24" y="222" width="952" height="278" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+    <!-- headers -->
+    <g font-size="11" font-weight="700" fill="#fff">
+      <rect x="40" y="236" width="150" height="26" rx="6" fill="#0F2A43"/><text x="115" y="253" text-anchor="middle">대분류</text>
+      <rect x="210" y="236" width="180" height="26" rx="6" fill="#0F2A43"/><text x="300" y="253" text-anchor="middle">중분류</text>
+      <rect x="410" y="236" width="150" height="26" rx="6" fill="#0F2A43"/><text x="485" y="253" text-anchor="middle">소분류</text>
+      <rect x="580" y="236" width="150" height="26" rx="6" fill="#0F2A43"/><text x="655" y="253" text-anchor="middle">세분류</text>
+      <rect x="750" y="236" width="210" height="26" rx="6" fill="#1C7293"/><text x="855" y="253" text-anchor="middle">품명</text>
+    </g>
+    <!-- 대분류 -->
+    <rect x="40" y="276" width="150" height="34" rx="8" fill="#fff" stroke="#cbd5e1"/><text x="52" y="298" font-size="11.5" font-weight="700" fill="#0F2A43">재료비</text>
+    <rect x="52" y="316" width="126" height="20" rx="10" fill="#f3f0ff" stroke="#a99df0"/><text x="115" y="330" font-size="9.5" font-weight="700" fill="#5b4fc4" text-anchor="middle">＋ 신규 하위분류</text>
+
+    <!-- 신규 중분류 2개 (사용자 정의) -->
+    <rect x="210" y="276" width="180" height="42" rx="8" fill="#f3f0ff" stroke="#7f77dd" stroke-width="1.6"/><text x="224" y="294" font-size="11.5" font-weight="800" fill="#3c3489">배관자재</text><text x="224" y="309" font-size="8.5" font-weight="700" fill="#7f77dd">✚ 사용자 정의(오버레이)</text>
+    <rect x="210" y="360" width="180" height="42" rx="8" fill="#f3f0ff" stroke="#7f77dd" stroke-width="1.6"/><text x="224" y="378" font-size="11.5" font-weight="800" fill="#3c3489">가설재</text><text x="224" y="393" font-size="8.5" font-weight="700" fill="#7f77dd">✚ 사용자 정의(오버레이)</text>
+
+    <!-- 품명 (이동됨) -->
+    <g font-size="11" fill="#0F2A43">
+      <rect x="750" y="272" width="150" height="26" rx="7" fill="#fff" stroke="#a9ddc0"/><text x="762" y="289">파이프</text>
+      <rect x="750" y="302" width="150" height="26" rx="7" fill="#fff" stroke="#a9ddc0"/><text x="762" y="319">밸브</text>
+      <rect x="750" y="358" width="150" height="26" rx="7" fill="#fff" stroke="#a9ddc0"/><text x="762" y="375">비계재</text>
+      <rect x="750" y="388" width="150" height="26" rx="7" fill="#fff" stroke="#a9ddc0"/><text x="762" y="405">발판</text>
+    </g>
+    <!-- connectors: 재료비→중분류, 중분류→품명 (빈 소/세 가로지름) -->
+    <path d="M190 293 C205 293 200 297 210 297" stroke="#7f77dd" stroke-width="2"/>
+    <path d="M190 293 C205 293 200 381 210 381" stroke="#7f77dd" stroke-width="2"/>
+    <path d="M390 297 C560 297 560 285 750 285" stroke="#3FA372" stroke-width="1.8"/>
+    <path d="M390 297 C560 297 560 315 750 315" stroke="#3FA372" stroke-width="1.8"/>
+    <path d="M390 381 C560 381 560 371 750 371" stroke="#3FA372" stroke-width="1.8"/>
+    <path d="M390 381 C560 381 560 401 750 401" stroke="#3FA372" stroke-width="1.8"/>
+
+    <text x="40" y="440" font-size="11.5" fill="#0F2A43">· '＋ 신규 분류' 버튼은 대분류뿐 아니라 <tspan font-weight="700">중/소/세 어느 레벨</tspan> 노드에도. 새 분류 아래로 항목/묶음 이동.</text>
+    <text x="40" y="462" font-size="11.5" fill="#5b4fc4">· 신규 노드 = 보라 '사용자 정의(오버레이)' 배지 — 사람이 만든 재구성층.</text>
+    <text x="40" y="484" font-size="11.5" fill="#b03a2e">· 정본(추출 원본) 경로는 불변 · 비교/클러스터링은 item_id 기준이라 무영향 · 총액 Δ=0.</text>
+  </g>
+
+  <!-- footer -->
+  <rect x="24" y="512" width="952" height="88" rx="10" fill="#0F2A43"/>
+  <text x="44" y="540" font-size="13" font-weight="800" fill="#fff">원칙 정합</text>
+  <text x="44" y="564" font-size="12.5" fill="#CADCFC">· 매칭 3단계 중 '사람(3단계) 재구성' — 자동 연계(코드·LLM)와 분리된 사용자 레이어.</text>
+  <text x="44" y="586" font-size="12.5" fill="#eafaf1">· 저장: map_config.recon 오버레이(정본 submission_items 불변) · 되돌리기 가능 · 원본 보기/재구성 보기 전환.</text>
+</svg>

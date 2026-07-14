@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QDBT · 다중 시트 연계 (목록·트리·세부) 목업</title>
+<style>
+  :root{
+    --navy:#0F2A43; --navy8:#0B2135; --deep:#0B3C5D; --teal:#1C7293; --aqua:#21A0A0;
+    --ice:#E8F1F5; --cloud:#F5F9FB; --ink:#1E293B; --slate:#64748B; --line:#D8E3EA;
+    --white:#fff; --green:#3FA372; --amber:#E0A458; --coral:#D96C5F; --mute:#94A3B8;
+    --list:#7C5CBF; --tree:#1C7293; --detail:#C98A2B;
+    --list-bg:#F1ECFA; --tree-bg:#E6F0F5; --detail-bg:#FBF2E3;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Pretendard','Malgun Gothic',-apple-system,'Segoe UI',sans-serif;
+    background:var(--cloud);color:var(--ink);line-height:1.5;padding:0;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto;padding:20px}
+  h1{font-size:19px;font-weight:800;color:var(--navy);letter-spacing:-.01em}
+  .sub{font-size:12.5px;color:var(--slate);margin-top:3px;margin-bottom:16px}
+
+  /* stepper */
+  .steps{display:flex;gap:0;margin-bottom:20px;background:#fff;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden}
+  .step{flex:1;padding:12px 14px;display:flex;align-items:center;gap:9px;cursor:pointer;
+    border-right:1px solid var(--line);transition:.15s;position:relative}
+  .step:last-child{border-right:0}
+  .step:hover{background:var(--cloud)}
+  .step.on{background:var(--navy);color:#fff}
+  .step .n{width:22px;height:22px;border-radius:50%;background:var(--ice);color:var(--slate);
+    display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;flex-shrink:0}
+  .step.on .n{background:var(--aqua);color:#fff}
+  .step.done .n{background:var(--green);color:#fff}
+  .step .t{font-size:12.5px;font-weight:700}
+  .step .d{font-size:10px;opacity:.7}
+
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;
+    box-shadow:0 2px 10px rgba(15,42,67,.04);min-height:440px}
+  .pheader{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .ptitle{font-size:15px;font-weight:800;color:var(--navy)}
+  .pnote{font-size:11.5px;color:var(--slate)}
+  .btn{font-size:12px;font-weight:700;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--teal);color:#fff} .btn-primary:hover{background:var(--deep)}
+  .btn-ghost{background:var(--ice);color:var(--navy)} .btn-ghost:hover{background:#dCe8ef}
+
+  /* legend */
+  .legend{display:flex;gap:14px;margin-bottom:12px;font-size:11px}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .chip{width:11px;height:11px;border-radius:3px}
+  .c-list{background:var(--list)} .c-tree{background:var(--tree)} .c-detail{background:var(--detail)}
+
+  /* ── STEP 1: 추출 (시트별 레벨) ── */
+  .sheets{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .sheet{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .sheet-h{padding:9px 12px;font-size:12px;font-weight:800;color:#fff;display:flex;
+    align-items:center;justify-content:space-between}
+  .sh-list{background:var(--list)} .sh-tree{background:var(--tree)} .sh-detail{background:var(--detail)}
+  .sheet-b{padding:10px}
+  .lvl-badge{font-size:9px;font-weight:700;background:rgba(255,255,255,.25);border-radius:10px;padding:1px 7px}
+  .row{font-size:11.5px;padding:5px 8px;border-radius:6px;margin-bottom:3px;background:var(--cloud)}
+  .row .k{font-weight:700;color:var(--navy)}
+  .row .m{color:var(--slate);font-size:10.5px}
+
+  /* ── STEP 2·3: 연계 캔버스 (3열 + 드래그) ── */
+  .canvas{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;position:relative}
+  .col{padding:0 12px}
+  .col:not(:last-child){border-right:1px dashed var(--line)}
+  .col-h{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;
+    padding:6px 8px;border-radius:6px;margin-bottom:10px;color:#fff;text-align:center}
+  .ch-list{background:var(--list)} .ch-tree{background:var(--tree)} .ch-detail{background:var(--detail)}
+  .node{border:1.5px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px;
+    background:#fff;cursor:grab;transition:.12s;position:relative}
+  .node:active{cursor:grabbing}
+  .node.dragging{opacity:.4}
+  .node.over{border-color:var(--aqua);background:var(--ice);border-style:dashed}
+  .node .nm{font-size:12px;font-weight:700;color:var(--navy)}
+  .node .meta{font-size:10px;color:var(--slate);margin-top:2px;display:flex;gap:8px}
+  .node .amt{font-weight:700;color:var(--teal)}
+  .node.linked{border-left:3px solid var(--green)}
+  .node.unlinked{border-left:3px solid var(--coral)}
+  .link-tag{position:absolute;top:6px;right:8px;font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px}
+  .lt-ok{background:#E6F5EC;color:var(--green)} .lt-no{background:#FCEBE9;color:var(--coral)}
+  .lt-auto{background:#EAF0F5;color:var(--teal)}
+
+  /* SVG link layer */
+  #linksvg{position:absolute;inset:0;pointer-events:none;z-index:1}
+  #linksvg path{stroke:var(--aqua);stroke-width:2;fill:none;opacity:.55}
+  #linksvg path.auto{stroke:var(--teal);stroke-dasharray:4 3}
+  #linksvg path.manual{stroke:var(--green)}
+
+  /* validation bar */
+  .valbar{margin-top:14px;padding:11px 14px;border-radius:9px;font-size:12px;display:flex;
+    align-items:center;gap:10px}
+  .val-ok{background:#EAF6EF;color:#256b45;border:1px solid #b5ddc5}
+  .val-warn{background:#FBF1E3;color:#8a5a1c;border:1px solid #e6c99a}
+  .val-list{margin-top:8px;font-size:11px;color:var(--slate);display:flex;flex-direction:column;gap:3px}
+
+  /* ── STEP 4: 확정 데이터 (통합 트리) ── */
+  .final-tree{font-size:12.5px}
+  .ft-node{padding:5px 10px;border-radius:6px;margin-bottom:2px;display:flex;
+    align-items:center;justify-content:space-between}
+  .ft-cat{background:var(--tree-bg);font-weight:800;color:var(--navy)}
+  .ft-sub{background:var(--cloud);font-weight:600;color:var(--deep)}
+  .ft-leaf{color:var(--ink)}
+  .ft-amt{font-weight:700;color:var(--teal)}
+  .ft-src{font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:8px}
+  .src-list{background:var(--list-bg);color:var(--list)}
+  .src-tree{background:var(--tree-bg);color:var(--tree)}
+  .src-detail{background:var(--detail-bg);color:var(--detail)}
+  .ver-bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:9px 13px;
+    background:var(--ice);border-radius:9px;font-size:11.5px}
+  .ver-badge{font-size:10px;font-weight:800;background:var(--navy);color:#fff;padding:2px 9px;border-radius:10px}
+
+  .hint{margin-top:14px;font-size:11.5px;color:var(--slate);background:var(--cloud);
+    border:1px dashed var(--line);border-radius:9px;padding:11px 13px;line-height:1.55}
+  .hint b{color:var(--navy)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>다중 시트 연계 — 목록 · 트리 · 세부</h1>
+  <div class="sub">서식이 제각각인 시트들(목록/트리/세부)을 드래그로 연계해 하나의 검증된 데이터셋으로 확정합니다.</div>
+
+  <!-- stepper -->
+  <div class="steps" id="stepper">
+    <div class="step done" data-s="1" onclick="go(1)"><span class="n">1</span>
+      <span><span class="t">추출</span><br><span class="d">시트별 레벨 인식</span></span></div>
+    <div class="step on" data-s="2" onclick="go(2)"><span class="n">2</span>
+      <span><span class="t">정합성 제안</span><br><span class="d">시스템 자동 연계</span></span></div>
+    <div class="step" data-s="3" onclick="go(3)"><span class="n">3</span>
+      <span><span class="t">수기 조정·확정</span><br><span class="d">드래그로 보정</span></span></div>
+    <div class="step" data-s="4" onclick="go(4)"><span class="n">4</span>
+      <span><span class="t">확정 데이터</span><br><span class="d">통합·버전</span></span></div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="panel" id="p1">
+    <div class="pheader"><div class="ptitle">1단계 — 추출: 시트별 데이터 레벨 인식</div>
+      <button class="btn btn-primary" onclick="go(2)">정합성 제안 →</button></div>
+    <div class="legend">
+      <span><i class="chip c-list"></i> 목록 (대분류 나열)</span>
+      <span><i class="chip c-tree"></i> 트리 (계층·소계)</span>
+      <span><i class="chip c-detail"></i> 세부 (품목·단가)</span>
+    </div>
+    <div class="sheets">
+      <div class="sheet">
+        <div class="sheet-h sh-list">① 공종목록 <span class="lvl-badge">목록</span></div>
+        <div class="sheet-b">
+          <div class="row"><span class="k">1. 자재</span> <span class="m">합계 12.5억</span></div>
+          <div class="row"><span class="k">2. 시공</span> <span class="m">합계 8.2억</span></div>
+          <div class="row"><span class="k">3. 관리</span> <span class="m">합계 2.1억</span></div>
+        </div>
+      </div>
+      <div class="sheet">
+        <div class="sheet-h sh-tree">② 내역트리 <span class="lvl-badge">트리</span></div>
+        <div class="sheet-b">
+          <div class="row"><span class="k">1.1 서버장비</span> <span class="m">소계 6.0억</span></div>
+          <div class="row"><span class="k">1.2 네트워크</span> <span class="m">소계 6.5억</span></div>
+          <div class="row"><span class="k">2.1 설치공사</span> <span class="m">소계 8.2억</span></div>
+        </div>
+      </div>
+      <div class="sheet">
+        <div class="sheet-h sh-detail">③ 품목세부 <span class="lvl-badge">세부</span></div>
+        <div class="sheet-b">
+          <div class="row"><span class="k">GPU 서버</span> <span class="m">3대 × 1.2억</span></div>
+          <div class="row"><span class="k">스토리지</span> <span class="m">2대 × 1.2억</span></div>
+          <div class="row"><span class="k">스위치 48P</span> <span class="m">10대 × …</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="hint">각 시트가 서로 다른 <b>데이터 레벨</b>로 추출됐습니다. 목록은 대분류만, 트리는 계층·소계, 세부는 실제 품목입니다.
+    다음 단계에서 시스템이 이 시트들을 <b>자동으로 연계 제안</b>합니다(번호·이름·소계 기반).</div>
+  </div>
+
+  <!-- STEP 2·3 shared canvas -->
+  <div class="panel hidden" id="p23">
+    <div class="pheader">
+      <div class="ptitle" id="p23title">2단계 — 정합성 제안</div>
+      <div style="display:flex;gap:8px">
+        <span class="pnote" id="p23note">시스템이 번호·이름·소계로 자동 연계했습니다. 파선=자동 제안.</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="chip c-list"></i> 레벨1 (최상위)</span>
+      <span><i class="chip c-tree"></i> 레벨2 (중간)</span>
+      <span><i class="chip c-detail"></i> 레벨3 (세부)</span>
+      <span style="margin-left:auto;color:var(--slate)">※ 시트 순서 ≠ 레벨 (셋째 시트가 최상위)</span>
+    </div>
+    <div class="canvas" id="canvas">
+      <svg id="linksvg"></svg>
+      <!-- 시트③(셋째 추출)이 최상위 레벨1 — 순서와 레벨 무관 시연 -->
+      <div class="col" data-col="list" data-level="1">
+        <div class="col-h ch-list">시트③ · 레벨1 (최상위)</div>
+        <div class="node linked" data-id="L1" data-amt="1250000000" draggable="true">
+          <div class="nm">1. 자재</div><div class="meta"><span class="amt">12.5억</span></div>
+          <span class="link-tag lt-auto">자동</span></div>
+        <div class="node linked" data-id="L2" data-amt="820000000" draggable="true">
+          <div class="nm">2. 시공</div><div class="meta"><span class="amt">8.2억</span></div>
+          <span class="link-tag lt-auto">자동</span></div>
+        <div class="node unlinked" data-id="L3" data-amt="210000000" draggable="true">
+          <div class="nm">3. 관리</div><div class="meta"><span class="amt">2.1억</span></div>
+          <span class="link-tag lt-no">미연계</span></div>
+      </div>
+      <!-- 시트①(첫째 추출)이 중간 레벨2 -->
+      <div class="col" data-col="tree" data-level="2">
+        <div class="col-h ch-tree">시트① · 레벨2 (중간)</div>
+        <div class="node linked" data-id="T1" data-parent="L1" data-amt="600000000" draggable="true">
+          <div class="nm">1.1 서버장비</div><div class="meta">→ <b>1.자재</b> · <span class="amt">6.0억</span></div></div>
+        <div class="node linked" data-id="T2" data-parent="L1" data-amt="650000000" draggable="true">
+          <div class="nm">1.2 네트워크</div><div class="meta">→ <b>1.자재</b> · <span class="amt">6.5억</span></div></div>
+        <div class="node linked" data-id="T3" data-parent="L2" data-amt="820000000" draggable="true">
+          <div class="nm">2.1 설치공사</div><div class="meta">→ <b>2.시공</b> · <span class="amt">8.2억</span></div></div>
+      </div>
+      <!-- 시트②(둘째 추출)이 하위 레벨3 -->
+      <div class="col" data-col="detail" data-level="3">
+        <div class="col-h ch-detail">시트② · 레벨3 (세부)</div>
+        <div class="node linked" data-id="D1" data-parent="T1" data-amt="360000000" draggable="true">
+          <div class="nm">GPU 서버</div><div class="meta">→ <b>1.1 서버장비</b> · <span class="amt">3.6억</span></div></div>
+        <div class="node linked" data-id="D2" data-parent="T1" data-amt="240000000" draggable="true">
+          <div class="nm">스토리지</div><div class="meta">→ <b>1.1 서버장비</b> · <span class="amt">2.4억</span></div></div>
+        <div class="node unlinked" data-id="D3" data-parent="" data-amt="650000000" draggable="true">
+          <div class="nm">스위치 48P</div><div class="meta" style="color:var(--coral)">미연계 — 상위 레벨로 드래그</div></div>
+      </div>
+    </div>
+
+    <div class="valbar val-warn" id="valbar">
+      <span>⚠</span><span id="valmsg">검증: 2건 불일치 — 목록 "3.관리" 미연계, 세부 "스위치 48P" 미연계</span>
+    </div>
+    <div class="val-list" id="vallist">
+      <span>• 목록 <b>3.관리</b>(2.1억) ↔ 트리에 대응 노드 없음 → 트리 노드 연결 필요</span>
+      <span>• 세부 <b>스위치 48P</b>(6.5억) ↔ 상위 트리 미지정 → <b>1.2 네트워크</b>로 드래그하면 소계 정합(6.5억=6.5억)</span>
+    </div>
+
+    <div class="pheader" style="margin-top:16px">
+      <div class="pnote" id="p23hint">3단계에서 미연계 노드를 상위로 <b>드래그</b>하면 자동 검증됩니다.</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" id="btnToAdjust" onclick="go(3)">수기 조정 →</button>
+        <button class="btn btn-primary hidden" id="btnConfirm" onclick="confirmData()">확정 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="panel hidden" id="p4">
+    <div class="pheader"><div class="ptitle">4단계 — 확정 데이터 (통합 트리)</div>
+      <button class="btn btn-ghost" onclick="reopenEdit()">✎ 확정 취소·수정</button></div>
+    <div class="ver-bar">
+      <span class="ver-badge">확정 v1</span>
+      <span>3개 시트(목록·트리·세부)가 하나의 트리로 통합됨 · 총액 <b>22.8억</b> · 소계 전항목 정합 ✓</span>
+      <span style="margin-left:auto;color:var(--slate)">스냅샷 저장됨 · 수정 시 v2로 승격</span>
+    </div>
+    <div class="final-tree" id="finaltree"></div>
+    <div class="hint">확정된 데이터는 <b>스냅샷</b>으로 보존됩니다. 품목·단가 등 세부는 수정 가능하며, 트리·분류 구조는 유지가 원칙입니다.
+    수정 시 <b>새 버전(v2)</b>으로 확정되고 이전 버전은 이력으로 남습니다. "✎ 확정 취소·수정"으로 편집 상태로 되돌릴 수 있습니다.</div>
+  </div>
+</div>
+
+<script>
+let cur=1, adjusted=false;
+
+function go(s){
+  cur=s;
+  document.querySelectorAll('.step').forEach(st=>{
+    const n=+st.dataset.s;
+    st.classList.toggle('on', n===s);
+    st.classList.toggle('done', n<s);
+  });
+  p1.classList.toggle('hidden', s!==1);
+  p23.classList.toggle('hidden', !(s===2||s===3));
+  p4.classList.toggle('hidden', s!==4);
+  if(s===2){ setProposeMode(); }
+  if(s===3){ setAdjustMode(); }
+  if(s===4){ renderFinal(); }
+  if(s===2||s===3) requestAnimationFrame(drawLinks);
+}
+
+function setProposeMode(){
+  document.getElementById('p23title').textContent='2단계 — 정합성 제안';
+  document.getElementById('p23note').textContent='시스템이 번호·이름·소계로 자동 연계했습니다. 파선=자동 제안.';
+  document.getElementById('btnToAdjust').classList.remove('hidden');
+  document.getElementById('btnConfirm').classList.add('hidden');
+  document.getElementById('p23hint').innerHTML='3단계에서 미연계 노드를 상위로 <b>드래그</b>하면 자동 검증됩니다.';
+}
+function setAdjustMode(){
+  document.getElementById('p23title').textContent='3단계 — 수기 조정·확정';
+  document.getElementById('p23note').textContent='미연계 노드를 상위 노드로 드래그해 연결하세요. 드래그=수기 확정(초록).';
+  document.getElementById('p23hint').innerHTML='모든 노드가 연계되면 <b>확정</b>할 수 있습니다.';
+  enableDrag();
+  updateValidation();
+}
+
+/* ── 드래그 연결 ── */
+function enableDrag(){
+  const nodes=document.querySelectorAll('.node');   // 전 노드 draggable (방향 자유)
+  const targets=document.querySelectorAll('.node');
+  let dragId=null;
+  nodes.forEach(n=>{
+    n.ondragstart=e=>{ dragId=n.dataset.id; n.classList.add('dragging'); };
+    n.ondragend=e=>{ n.classList.remove('dragging'); document.querySelectorAll('.over').forEach(x=>x.classList.remove('over')); };
+  });
+  targets.forEach(t=>{
+    t.ondragover=e=>{ e.preventDefault(); if(canLink(dragId,t.dataset.id)) t.classList.add('over'); };
+    t.ondragleave=e=>t.classList.remove('over');
+    t.ondrop=e=>{
+      e.preventDefault(); t.classList.remove('over');
+      if(!canLink(dragId,t.dataset.id)) return;
+      linkNode(dragId, t.dataset.id);
+    };
+  });
+}
+// 연결 규칙: 레벨이 다르면 연결 가능(상하관계). 방향 자유 — 레벨 높은 쪽이 부모.
+// 레벨은 시트 순서 무관. 같은 레벨끼리는 연결 불가.
+function canLink(fromId,toId){
+  if(!fromId||!toId||fromId===toId) return false;
+  const lf=nodeLevel(fromId), lt=nodeLevel(toId);
+  return lf!==lt;   // 레벨 다르면 연결(상하관계 성립). 방향은 drop 시 자동 판정.
+}
+// 각 노드의 레벨(열의 data-level). list=1(최상위)이 아니라 지정된 레벨 번호.
+function nodeLevel(id){
+  const n=document.querySelector(`.node[data-id="${id}"]`);
+  return n ? +n.closest('.col').dataset.level : 0;
+}
+function col(id){
+  const n=document.querySelector(`.node[data-id="${id}"]`);
+  return n ? n.closest('.col').dataset.col : '';
+}
+
+function linkNode(aId, bId){
+  // 방향 자유: 레벨 높은(번호 작은) 쪽이 부모, 낮은 쪽이 자식
+  const la=nodeLevel(aId), lb=nodeLevel(bId);
+  const childId = la > lb ? aId : bId;   // 레벨 번호 큰 쪽 = 하위 = 자식
+  const parentId= la > lb ? bId : aId;
+  const child=document.querySelector(`.node[data-id="${childId}"]`);
+  const parent=document.querySelector(`.node[data-id="${parentId}"]`);
+  child.dataset.parent=parentId;
+  child.classList.remove('unlinked'); child.classList.add('linked');
+  const tag=child.querySelector('.link-tag'); if(tag) tag.remove();
+  const pnm=parent.querySelector('.nm').textContent;
+  child.querySelector('.meta').innerHTML=`→ <b>${pnm}</b> · <span class="amt">${fmt(+child.dataset.amt)}</span>`;
+  child.querySelector('.meta').style.color='';
+  // 부모가 미연계 표시였으면 연계로
+  parent.classList.remove('unlinked');
+  const pt=parent.querySelector('.link-tag'); if(pt){pt.className='link-tag lt-ok';pt.textContent='연계';}
+  adjusted=true;
+  updateValidation(); drawLinks();
+}
+
+function updateValidation(){
+  const unlinked=[...document.querySelectorAll('.node.unlinked')];
+  const vb=document.getElementById('valbar'), vm=document.getElementById('valmsg'),
+        vl=document.getElementById('vallist'), bc=document.getElementById('btnConfirm'),
+        ba=document.getElementById('btnToAdjust');
+  if(unlinked.length===0){
+    vb.className='valbar val-ok'; vm.innerHTML='✓ 전 노드 연계 완료 · 소계 정합: 목록=트리=세부 합계 일치 (22.8억)';
+    vl.innerHTML='<span>• 목록 3.관리 ↔ 트리 연결됨 · 세부 스위치 48P ↔ 1.2 네트워크 (6.5억=6.5억) ✓</span>';
+    bc.classList.remove('hidden'); ba.classList.add('hidden');
+  }else{
+    vb.className='valbar val-warn';
+    vm.innerHTML=`⚠ 검증: ${unlinked.length}건 미연계 — 상위 노드로 드래그하세요`;
+    bc.classList.add('hidden');
+  }
+}
+
+/* ── SVG 연결선 ── */
+function drawLinks(){
+  const svg=document.getElementById('linksvg');
+  const canvas=document.getElementById('canvas');
+  if(!canvas||canvas.classList.contains('hidden')) return;
+  const cr=canvas.getBoundingClientRect();
+  svg.setAttribute('width',cr.width); svg.setAttribute('height',cr.height);
+  let paths='';
+  document.querySelectorAll('.node[data-parent]').forEach(n=>{
+    const pid=n.dataset.parent; if(!pid) return;
+    const p=document.querySelector(`.node[data-id="${pid}"]`); if(!p) return;
+    const a=n.getBoundingClientRect(), b=p.getBoundingClientRect();
+    const x1=a.left-cr.left, y1=a.top-cr.top+a.height/2;
+    const x2=b.right-cr.left, y2=b.top-cr.top+b.height/2;
+    const mx=(x1+x2)/2;
+    const cls = (cur===2)?'auto':'manual';
+    paths+=`<path class="${cls}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+  });
+  svg.innerHTML=paths;
+}
+window.addEventListener('resize',()=>{ if(cur===2||cur===3) drawLinks(); });
+
+/* ── 확정 데이터 ── */
+function confirmData(){ go(4); }
+function reopenEdit(){ go(3); }
+
+function renderFinal(){
+  const tree=[
+    {t:'cat',nm:'1. 자재',amt:'12.5억',src:'목록'},
+    {t:'sub',nm:'　1.1 서버장비',amt:'6.0억',src:'트리'},
+    {t:'leaf',nm:'　　GPU 서버 (3대)',amt:'3.6억',src:'세부'},
+    {t:'leaf',nm:'　　스토리지 (2대)',amt:'2.4억',src:'세부'},
+    {t:'sub',nm:'　1.2 네트워크',amt:'6.5억',src:'트리'},
+    {t:'leaf',nm:'　　스위치 48P (10대)',amt:'6.5억',src:'세부'},
+    {t:'cat',nm:'2. 시공',amt:'8.2억',src:'목록'},
+    {t:'sub',nm:'　2.1 설치공사',amt:'8.2억',src:'트리'},
+    {t:'cat',nm:'3. 관리',amt:'2.1억',src:'목록'},
+  ];
+  const srcClass={'목록':'src-list','트리':'src-tree','세부':'src-detail'};
+  document.getElementById('finaltree').innerHTML=tree.map(n=>
+    `<div class="ft-node ft-${n.t}">
+       <span>${n.nm}<span class="ft-src ${srcClass[n.src]}">${n.src}</span></span>
+       <span class="ft-amt">${n.amt}</span>
+     </div>`).join('');
+}
+
+function fmt(v){ return (v/100000000).toFixed(1)+'억'; }
+go(2);
+</script>
+</body>
+</html>

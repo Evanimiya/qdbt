@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>클러스터 잎 펼치기 — 팝업 목업</title>
+<style>
+  body{margin:0;background:#eef3f6;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif;color:#0f2a43}
+  .clx{ --navy:#0F2A43; --teal:#1C7293; --ice:#E8F1F5; --line:#D8E3EA; --slate:#64748B;
+        --green:#2f8f5b; --lowbg:#eafaf1; --lowbd:#a9ddc0; max-width:820px;margin:0 auto;position:relative}
+  .clx h1{font-size:18px;font-weight:800;margin:0 0 2px}
+  .sub{font-size:12.5px;color:var(--slate);margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:10px 14px;font-size:13px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{background:var(--navy);color:#fff;font-weight:700}
+  tbody tr:last-child td{border-bottom:0}
+  .unit{font-weight:700;color:var(--navy)}
+  .caret{display:inline-block;width:16px;color:var(--teal);font-weight:800;cursor:pointer}
+  .bundle-tag{font-size:9px;font-weight:700;background:var(--ice);color:var(--teal);border-radius:8px;padding:1px 6px;margin-left:6px}
+  .low{background:var(--lowbg);color:var(--green);font-weight:800;box-shadow:inset 0 0 0 1px var(--lowbd)}
+  .rowopen td{background:#f2f8fb}
+  .veil{position:absolute;inset:0;background:rgba(15,42,67,.45);border-radius:12px;display:flex;align-items:center;justify-content:center;padding:16px}
+  .modal{width:100%;max-width:600px;background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden}
+  .mhead{background:var(--teal);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+  .mhead .t{font-size:14px;font-weight:800}
+  .mhead .x{font-size:16px;font-weight:800;opacity:.9;cursor:pointer}
+  .mnote{font-size:11.5px;color:var(--slate);padding:9px 16px;background:#f7fafc;border-bottom:1px solid var(--line)}
+  .mtable thead th{background:#eef3f6;color:var(--navy);font-size:11.5px}
+  .leafnm{color:#334155}
+  .subrow td{background:#f0f7f2;font-weight:800;color:var(--navy);font-size:12px}
+  .chk{font-size:11.5px;color:var(--green);font-weight:700}
+</style></head>
+<body><div class="clx">
+  <h1>업체별 비교 — 데이터센터 증설</h1>
+  <div class="sub">비교 단위(묶음)별 업체 견적. 묶음 왼쪽 ▸ 를 누르면 하위 잎이 팝업으로 펼쳐집니다. (표시 전용 · 원본 불변)</div>
+  <table>
+    <thead><tr><th>비교 단위 (묶음)</th><th>A상사</th><th>B엔지니어링</th><th>C테크</th></tr></thead>
+    <tbody>
+      <tr><td><span class="unit">48P 스위치</span></td><td class="low">300,000,000</td><td>318,000,000</td><td>305,000,000</td></tr>
+      <tr><td><span class="unit">코어 라우터</span></td><td>170,000,000</td><td class="low">162,000,000</td><td>171,000,000</td></tr>
+      <tr class="rowopen"><td><span class="caret">▾</span><span class="unit">UTP 배선 자재</span><span class="bundle-tag">묶음 5</span></td><td class="low">120,000,000</td><td>131,000,000</td><td>126,000,000</td></tr>
+      <tr><td><span class="caret">▸</span><span class="unit">설치 공사</span><span class="bundle-tag">묶음 3</span></td><td>88,000,000</td><td class="low">84,000,000</td><td>90,000,000</td></tr>
+    </tbody>
+  </table>
+  <div class="veil">
+    <div class="modal">
+      <div class="mhead"><span class="t">UTP 배선 자재 — 하위 잎 펼치기</span><span class="x">✕</span></div>
+      <div class="mnote">이 묶음을 구성하는 원 항목(잎)입니다. 표시 전용 — 원본은 변경되지 않습니다. 같은 이름 잎끼리 최저가를 강조합니다.</div>
+      <table class="mtable">
+        <thead><tr><th>잎 항목</th><th>A상사</th><th>B엔지니어링</th><th>C테크</th></tr></thead>
+        <tbody>
+          <tr><td class="leafnm">UTP Cat6 (300m)</td><td class="low">62,000,000</td><td>68,000,000</td><td>64,000,000</td></tr>
+          <tr><td class="leafnm">UTP Cat6 (500m)</td><td class="low">41,000,000</td><td>45,000,000</td><td>43,000,000</td></tr>
+          <tr><td class="leafnm">RJ45 커넥터 외 3종</td><td>17,000,000</td><td>18,000,000</td><td class="low">16,500,000</td></tr>
+          <tr class="subrow"><td>Σ 잎 합계</td><td>120,000,000</td><td>131,000,000</td><td>123,500,000</td></tr>
+        </tbody>
+      </table>
+      <div class="mnote"><span class="chk">✓ 소계 정합</span> — 잎 합계 = 묶음 금액(A상사 120,000,000) 일치 · 총액 불변</div>
+    </div>
+  </div>
+</div></body></html>

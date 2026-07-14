@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="892" viewBox="0 0 900 892" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans CJK KR',sans-serif">
+  <rect width="900" height="892" fill="#eef3f6"/>
+  <text x="30" y="34" font-size="20" font-weight="800" fill="#0F2A43">업체별 비교 — 데이터센터 증설</text>
+  <text x="30" y="56" font-size="12.5" fill="#64748B">묶음의 [펼치기]를 누르면 하위 잎이 접이식 트리 + 검색 팝업으로 열립니다 (표시 전용 · 원본·총액 불변)</text>
+
+  <!-- comparison table -->
+  <g>
+    <rect x="30" y="74" width="840" height="152" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+    <rect x="30" y="74" width="840" height="32" fill="#0F2A43"/>
+    <rect x="30" y="74" width="10" height="32" fill="#0F2A43"/>
+    <text x="46" y="95" font-size="12.5" font-weight="700" fill="#ffffff">비교 단위 (묶음)</text>
+    <text x="600" y="95" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="end">A상사</text>
+    <text x="735" y="95" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="end">B엔지니어링</text>
+    <text x="856" y="95" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="end">C테크</text>
+
+    <!-- row1 -->
+    <text x="46" y="127" font-size="12.5" font-weight="700" fill="#0F2A43">48P 스위치</text>
+    <rect x="486" y="112" width="118" height="26" rx="5" fill="#eafaf1" stroke="#a9ddc0"/>
+    <text x="596" y="129" font-size="12.5" font-weight="800" fill="#2f8f5b" text-anchor="end">300,000,000</text>
+    <text x="735" y="129" font-size="12.5" fill="#0F2A43" text-anchor="end">318,000,000</text>
+    <text x="856" y="129" font-size="12.5" fill="#0F2A43" text-anchor="end">305,000,000</text>
+    <line x1="30" y1="140" x2="870" y2="140" stroke="#eef2f6"/>
+    <!-- row2 -->
+    <text x="46" y="159" font-size="12.5" font-weight="700" fill="#0F2A43">코어 라우터</text>
+    <text x="596" y="161" font-size="12.5" fill="#0F2A43" text-anchor="end">170,000,000</text>
+    <rect x="622" y="144" width="118" height="26" rx="5" fill="#eafaf1" stroke="#a9ddc0"/>
+    <text x="735" y="161" font-size="12.5" font-weight="800" fill="#2f8f5b" text-anchor="end">162,000,000</text>
+    <text x="856" y="161" font-size="12.5" fill="#0F2A43" text-anchor="end">171,000,000</text>
+    <line x1="30" y1="172" x2="870" y2="172" stroke="#eef2f6"/>
+    <!-- row3 highlighted (opened) -->
+    <rect x="30" y="172" width="840" height="28" fill="#f2f8fb"/>
+    <rect x="42" y="178" width="18" height="16" rx="4" fill="#ffffff" stroke="#1C7293"/>
+    <text x="51" y="190" font-size="11" font-weight="800" fill="#1C7293" text-anchor="middle">▾</text>
+    <text x="68" y="190" font-size="12.5" font-weight="700" fill="#0F2A43">UTP 배선 자재</text>
+    <rect x="176" y="180" width="52" height="14" rx="7" fill="#E8F1F5"/>
+    <text x="202" y="190" font-size="9" font-weight="700" fill="#1C7293" text-anchor="middle">묶음 34</text>
+    <rect x="486" y="176" width="118" height="20" rx="5" fill="#eafaf1" stroke="#a9ddc0"/>
+    <text x="596" y="190" font-size="12.5" font-weight="800" fill="#2f8f5b" text-anchor="end">120,000,000</text>
+    <text x="735" y="190" font-size="12.5" fill="#0F2A43" text-anchor="end">131,000,000</text>
+    <text x="856" y="190" font-size="12.5" fill="#0F2A43" text-anchor="end">123,500,000</text>
+    <line x1="30" y1="200" x2="870" y2="200" stroke="#eef2f6"/>
+    <!-- row4 -->
+    <rect x="42" y="206" width="18" height="16" rx="4" fill="#ffffff" stroke="#1C7293"/>
+    <text x="51" y="218" font-size="11" font-weight="800" fill="#1C7293" text-anchor="middle">▸</text>
+    <text x="68" y="218" font-size="12.5" font-weight="700" fill="#0F2A43">설치 공사</text>
+    <text x="596" y="218" font-size="12.5" fill="#0F2A43" text-anchor="end">88,000,000</text>
+    <rect x="622" y="204" width="118" height="24" rx="5" fill="#eafaf1" stroke="#a9ddc0"/>
+    <text x="735" y="218" font-size="12.5" font-weight="800" fill="#2f8f5b" text-anchor="end">84,000,000</text>
+    <text x="856" y="218" font-size="12.5" fill="#0F2A43" text-anchor="end">90,000,000</text>
+  </g>
+
+  <text x="450" y="252" font-size="11.5" fill="#64748B" text-anchor="middle">▾  "UTP 배선 자재"의 [펼치기]를 누르면 아래 팝업이 열립니다</text>
+
+  <!-- popup (opened) -->
+  <g>
+    <rect x="90" y="266" width="720" height="600" rx="14" fill="#ffffff" stroke="#c9d6df"/>
+    <!-- head -->
+    <path d="M90 280 a14 14 0 0 1 14 -14 h692 a14 14 0 0 1 14 14 v24 h-720 z" fill="#1C7293"/>
+    <text x="108" y="291" font-size="14" font-weight="800" fill="#ffffff">UTP 배선 자재 — 하위 잎 (34개)</text>
+    <text x="792" y="292" font-size="15" font-weight="800" fill="#ffffff" text-anchor="end">✕</text>
+    <!-- tools -->
+    <rect x="90" y="304" width="720" height="40" fill="#f7fafc" stroke="#D8E3EA"/>
+    <rect x="106" y="312" width="430" height="24" rx="7" fill="#ffffff" stroke="#D8E3EA"/>
+    <text x="118" y="328" font-size="12" fill="#9aa6b2">잎 이름 검색…</text>
+    <text x="548" y="328" font-size="10.5" fill="#64748B">그룹 접힘 — 필요한 것만 펼치기</text>
+    <rect x="720" y="311" width="76" height="26" rx="6" fill="#ffffff" stroke="#D8E3EA"/>
+    <text x="758" y="328" font-size="10.5" font-weight="700" fill="#0F2A43" text-anchor="middle">모두 펼치기</text>
+
+    <!-- group1 header (open) -->
+    <rect x="102" y="352" width="696" height="28" rx="8" fill="#eef3f6"/>
+    <text x="116" y="371" font-size="12.5" font-weight="800" fill="#1C7293">▾</text>
+    <text x="134" y="371" font-size="12.5" font-weight="800" fill="#0F2A43">케이블</text>
+    <text x="786" y="371" font-size="10.5" font-weight="700" fill="#64748B" text-anchor="end">5개</text>
+    <!-- col head -->
+    <text x="134" y="396" font-size="10.5" font-weight="800" fill="#64748B">잎 항목</text>
+    <text x="568" y="396" font-size="10.5" font-weight="800" fill="#64748B" text-anchor="end">A상사</text>
+    <text x="678" y="396" font-size="10.5" font-weight="800" fill="#64748B" text-anchor="end">B엔지</text>
+    <text x="788" y="396" font-size="10.5" font-weight="800" fill="#64748B" text-anchor="end">C테크</text>
+
+    <!-- leaf rows -->
+    <g font-size="12">
+      <text x="134" y="420" fill="#334155">UTP Cat6 300m</text>
+      <text x="568" y="420" fill="#2f8f5b" font-weight="800" text-anchor="end">62,000,000</text>
+      <text x="678" y="420" fill="#0F2A43" text-anchor="end">68,000,000</text>
+      <text x="788" y="420" fill="#0F2A43" text-anchor="end">64,000,000</text>
+      <line x1="112" y1="430" x2="788" y2="430" stroke="#f1f5f9"/>
+      <text x="134" y="446" fill="#334155">UTP Cat6 500m</text>
+      <text x="568" y="446" fill="#2f8f5b" font-weight="800" text-anchor="end">41,000,000</text>
+      <text x="678" y="446" fill="#0F2A43" text-anchor="end">45,000,000</text>
+      <text x="788" y="446" fill="#0F2A43" text-anchor="end">43,000,000</text>
+      <line x1="112" y1="456" x2="788" y2="456" stroke="#f1f5f9"/>
+      <text x="134" y="472" fill="#334155">UTP Cat6A 100m</text>
+      <text x="568" y="472" fill="#2f8f5b" font-weight="800" text-anchor="end">9,000,000</text>
+      <text x="678" y="472" fill="#0F2A43" text-anchor="end">10,000,000</text>
+      <text x="788" y="472" fill="#0F2A43" text-anchor="end">9,500,000</text>
+      <line x1="112" y1="482" x2="788" y2="482" stroke="#f1f5f9"/>
+      <text x="134" y="498" fill="#334155">광점퍼코드 LC-LC</text>
+      <text x="568" y="498" fill="#2f8f5b" font-weight="800" text-anchor="end">3,200,000</text>
+      <text x="678" y="498" fill="#0F2A43" text-anchor="end">3,400,000</text>
+      <text x="788" y="498" fill="#0F2A43" text-anchor="end">3,300,000</text>
+      <line x1="112" y1="508" x2="788" y2="508" stroke="#f1f5f9"/>
+      <text x="134" y="524" fill="#334155">광점퍼코드 SC-LC</text>
+      <text x="568" y="524" fill="#0F2A43" text-anchor="end">2,100,000</text>
+      <text x="678" y="524" fill="#0F2A43" text-anchor="end">2,200,000</text>
+      <text x="788" y="524" fill="#2f8f5b" font-weight="800" text-anchor="end">2,050,000</text>
+    </g>
+
+    <!-- group2 collapsed -->
+    <rect x="102" y="540" width="696" height="28" rx="8" fill="#eef3f6"/>
+    <text x="116" y="559" font-size="12.5" font-weight="800" fill="#1C7293">▸</text>
+    <text x="134" y="559" font-size="12.5" font-weight="800" fill="#0F2A43">커넥터·모듈</text>
+    <text x="786" y="559" font-size="10.5" font-weight="700" fill="#64748B" text-anchor="end">4개</text>
+    <!-- group3 collapsed -->
+    <rect x="102" y="574" width="696" height="28" rx="8" fill="#eef3f6"/>
+    <text x="116" y="593" font-size="12.5" font-weight="800" fill="#1C7293">▸</text>
+    <text x="134" y="593" font-size="12.5" font-weight="800" fill="#0F2A43">부속·소모</text>
+    <text x="786" y="593" font-size="10.5" font-weight="700" fill="#64748B" text-anchor="end">3개</text>
+
+    <!-- footer -->
+    <rect x="90" y="820" width="720" height="46" rx="0" fill="#f0f7f2"/>
+    <rect x="90" y="820" width="720" height="2" fill="#D8E3EA"/>
+    <text x="108" y="848" font-size="11.5" font-weight="800" fill="#2f8f5b">✓ 소계 정합 — 잎 합 = 묶음 금액 (총액 불변)</text>
+    <text x="792" y="848" font-size="11.5" fill="#0F2A43" text-anchor="end">▼ 120,000,000  ·  131,000,000  ·  123,500,000</text>
+  </g>
+</svg>

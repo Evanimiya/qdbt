@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>클러스터 잎 펼치기 — 라이브 목업 (접이식 트리 팝업)</title>
+<style>
+  body{margin:0;background:#eef3f6;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif;color:#0f2a43}
+  .clx{ --navy:#0F2A43; --teal:#1C7293; --ice:#E8F1F5; --line:#D8E3EA; --slate:#64748B;
+        --green:#2f8f5b; --lowbg:#eafaf1; --lowbd:#a9ddc0; max-width:840px;margin:0 auto;position:relative;min-height:420px}
+  .clx h1{font-size:18px;font-weight:800;margin:0 0 2px}
+  .sub{font-size:12.5px;color:var(--slate);margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:10px 14px;font-size:13px;text-align:right;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{background:var(--navy);color:#fff;font-weight:700}
+  tbody tr:last-child td{border-bottom:0}
+  .unit{font-weight:700;color:var(--navy)}
+  .exp{display:inline-block;border:1px solid var(--teal);color:var(--teal);background:#fff;border-radius:6px;font-size:10.5px;font-weight:800;padding:2px 8px;margin-right:8px;cursor:pointer}
+  .exp:hover{background:var(--ice)}
+  .tag{font-size:9px;font-weight:700;background:var(--ice);color:var(--teal);border-radius:8px;padding:1px 6px;margin-left:6px}
+  .low{background:var(--lowbg);color:var(--green);font-weight:800;box-shadow:inset 0 0 0 1px var(--lowbd)}
+  .veil{position:absolute;inset:0;background:rgba(15,42,67,.45);border-radius:12px;display:flex;align-items:center;justify-content:center;padding:16px}
+  .modal{width:100%;max-width:620px;max-height:100%;display:flex;flex-direction:column;background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden}
+  .mhead{background:var(--teal);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto}
+  .mhead .t{font-size:14px;font-weight:800}
+  .mhead .x{font-size:16px;font-weight:800;cursor:pointer;opacity:.9}
+  .mtools{display:flex;gap:8px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);background:#f7fafc;flex:0 0 auto}
+  .mtools input{flex:1;font-size:12.5px;border:1px solid var(--line);border-radius:7px;padding:7px 10px;outline:none}
+  .mtools .mini{font-size:11px;color:var(--slate);white-space:nowrap}
+  .mtools button{font-size:11px;font-weight:700;border:1px solid var(--line);background:#fff;color:var(--navy);border-radius:6px;padding:6px 9px;cursor:pointer}
+  .mbody{overflow:auto;max-height:300px;padding:6px 8px}
+  .grp{margin:3px 4px}
+  .grph{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#eef3f6;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:800;color:var(--navy)}
+  .grph .car{color:var(--teal);width:12px}
+  .grph .cnt{font-size:10.5px;font-weight:700;color:var(--slate);margin-left:auto}
+  .leaf{display:grid;grid-template-columns:1fr 100px 100px 100px;padding:7px 10px 7px 32px;font-size:12px;border-bottom:1px solid #f1f5f9}
+  .leaf .lv{text-align:right;font-variant-numeric:tabular-nums}
+  .leaf .lo{color:var(--green);font-weight:800}
+  .leaf .nm{color:#334155}
+  .colhead{display:grid;grid-template-columns:1fr 100px 100px 100px;padding:5px 10px 5px 32px;font-size:10.5px;font-weight:800;color:var(--slate)}
+  .colhead span{text-align:right}.colhead span:first-child{text-align:left}
+  .mfoot{flex:0 0 auto;border-top:1px solid var(--line);padding:9px 16px;font-size:11.5px;background:#f0f7f2;color:var(--navy);display:flex;justify-content:space-between;align-items:center}
+  .chk{color:var(--green);font-weight:800}
+  .hintbar{font-size:11.5px;color:var(--slate);margin-top:10px}
+</style></head>
+<body><div class="clx" id="clxRoot">
+  <h1>업체별 비교 — 데이터센터 증설</h1>
+  <div class="sub">묶음의 [펼치기]를 누르면 하위 잎이 <b>접이식 트리 + 검색</b> 팝업으로 열립니다. 항목이 많아도 그룹만 접어두고 필요한 것만 펼쳐 봅니다. <b>클릭해 보세요.</b></div>
+  <table><thead><tr><th>비교 단위 (묶음)</th><th>A상사</th><th>B엔지니어링</th><th>C테크</th></tr></thead><tbody id="clxRows"></tbody></table>
+  <div class="hintbar">💡 트리(그룹)로 접어두고, 원하는 그룹만 펼치거나 검색으로 잎을 바로 찾습니다. 표시 전용 — 원본·총액 불변.</div>
+</div>
+<script>
+(function(){
+  var root=document.getElementById('clxRoot'); var won=function(n){return n.toLocaleString('en-US');};
+  var clusters=[
+    {nm:'48P 스위치', amt:[300000000,318000000,305000000], leaves:0},
+    {nm:'코어 라우터', amt:[170000000,162000000,171000000], leaves:0},
+    {nm:'UTP 배선 자재', amt:[120000000,131000000,123500000], leaves:34, groups:[
+      {g:'케이블', items:[
+        {nm:'UTP Cat6 300m', v:[62000000,68000000,64000000]},
+        {nm:'UTP Cat6 500m', v:[41000000,45000000,43000000]},
+        {nm:'UTP Cat6A 100m', v:[9000000,10000000,9500000]},
+        {nm:'광점퍼코드 LC-LC', v:[3200000,3400000,3300000]},
+        {nm:'광점퍼코드 SC-LC', v:[2100000,2200000,2050000]}]},
+      {g:'커넥터·모듈', items:[
+        {nm:'RJ45 커넥터 (박스)', v:[4200000,4500000,4100000]},
+        {nm:'키스톤잭 Cat6', v:[3800000,3900000,3700000]},
+        {nm:'광 모듈 SFP+', v:[5600000,6000000,5800000]},
+        {nm:'패치패널 24P', v:[2900000,3100000,3000000]}]},
+      {g:'부속·소모', items:[
+        {nm:'케이블타이 외 3종', v:[900000,950000,880000]},
+        {nm:'라벨·표시자재', v:[600000,620000,610000]},
+        {nm:'배관·몰딩 외 6종', v:[1400000,1500000,1450000]}]}
+    ]}
+  ];
+  var rows=document.getElementById('clxRows');
+  clusters.forEach(function(c,ci){
+    var lo=Math.min.apply(null,c.amt);
+    var tds=c.amt.map(function(a){return '<td class="'+(a===lo?'low':'')+'">'+won(a)+'</td>';}).join('');
+    var btn=c.leaves? '<span class="exp" data-ci="'+ci+'">펼치기</span>':'';
+    var tag=c.leaves? '<span class="tag">묶음 '+c.leaves+'</span>':'';
+    rows.insertAdjacentHTML('beforeend','<tr><td>'+btn+'<span class="unit">'+c.nm+'</span>'+tag+'</td>'+tds+'</tr>');
+  });
+  function openModal(c){
+    var veil=document.createElement('div'); veil.className='veil';
+    var groupsHtml=c.groups.map(function(gr,gi){
+      var leaves=gr.items.map(function(it){
+        var lo=Math.min.apply(null,it.v);
+        var cells=it.v.map(function(x){return '<span class="lv '+(x===lo?'lo':'')+'">'+won(x)+'</span>';}).join('');
+        return '<div class="leaf" data-nm="'+it.nm.toLowerCase()+'"><span class="nm">'+it.nm+'</span>'+cells+'</div>';
+      }).join('');
+      return '<div class="grp" data-gi="'+gi+'"><div class="grph"><span class="car">▸</span><span>'+gr.g+'</span><span class="cnt">'+gr.items.length+'개</span></div><div class="colhead" style="display:none"><span>잎 항목</span><span>A상사</span><span>B엔지</span><span>C테크</span></div><div class="leaves" style="display:none">'+leaves+'</div></div>';
+    }).join('');
+    var lo=Math.min.apply(null,c.amt);
+    var foot=c.amt.map(function(a){return (a===lo?'▼ ':'')+won(a);}).join('  ·  ');
+    veil.innerHTML='<div class="modal"><div class="mhead"><span class="t">'+c.nm+' — 하위 잎 ('+c.leaves+'개)</span><span class="x">✕</span></div><div class="mtools"><input placeholder="잎 이름 검색…"><span class="mini">그룹 접힘 — 필요한 것만 펼치기</span><button class="allbtn">모두 펼치기</button></div><div class="mbody">'+groupsHtml+'</div><div class="mfoot"><span class="chk">✓ 소계 정합 — 잎 합 = 묶음 금액 (총액 불변)</span><span>'+foot+'</span></div></div>';
+    root.appendChild(veil);
+    var body=veil.querySelector('.mbody');
+    veil.querySelector('.x').onclick=function(){root.removeChild(veil);};
+    veil.onclick=function(e){if(e.target===veil)root.removeChild(veil);};
+    body.querySelectorAll('.grph').forEach(function(h){h.onclick=function(){var grp=h.parentNode,on=grp.querySelector('.leaves').style.display!=='none';grp.querySelector('.leaves').style.display=on?'none':'block';grp.querySelector('.colhead').style.display=on?'none':'grid';h.querySelector('.car').textContent=on?'▸':'▾';};});
+    veil.querySelector('.allbtn').onclick=function(){var anyClosed=[].some.call(body.querySelectorAll('.leaves'),function(l){return l.style.display==='none';});body.querySelectorAll('.grp').forEach(function(grp){grp.querySelector('.leaves').style.display=anyClosed?'block':'none';grp.querySelector('.colhead').style.display=anyClosed?'grid':'none';grp.querySelector('.car').textContent=anyClosed?'▾':'▸';});this.textContent=anyClosed?'모두 접기':'모두 펼치기';};
+    veil.querySelector('input').oninput=function(){var q=this.value.trim().toLowerCase();body.querySelectorAll('.grp').forEach(function(grp){var shown=0;grp.querySelectorAll('.leaf').forEach(function(lf){var hit=!q||lf.dataset.nm.indexOf(q)>=0;lf.style.display=hit?'grid':'none';if(hit)shown++;});var open=q!=='';grp.querySelector('.leaves').style.display=(open&&shown)?'block':(q?'none':grp.querySelector('.leaves').style.display);grp.querySelector('.colhead').style.display=(open&&shown)?'grid':(q?'none':grp.querySelector('.colhead').style.display);grp.querySelector('.car').textContent=(open&&shown)?'▾':'▸';grp.style.display=(q&&!shown)?'none':'block';});};
+  }
+  rows.querySelectorAll('.exp').forEach(function(b){b.onclick=function(){openModal(clusters[+b.dataset.ci]);};});
+})();
+</script>
+</body></html>

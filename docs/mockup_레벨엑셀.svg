@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="520" viewBox="0 0 1000 520" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans CJK KR',sans-serif">
+  <rect width="1000" height="520" fill="#eef3f6"/>
+  <text x="24" y="32" font-size="19" font-weight="800" fill="#0F2A43">#3 레벨별 캔버스 엑셀 추출 — 목업</text>
+  <text x="24" y="54" font-size="12.5" fill="#64748B">열 = 대/중/소/세/품명(+부품) + 규격·수량·단가·금액. 상위 분류 셀은 병합, 빈 레벨은 빈 칸, 잎=품명. 합계=Σ품목금액(부품 제외).</text>
+
+  <!-- spreadsheet grid -->
+  <g font-size="11">
+    <!-- header row -->
+    <g font-weight="700" fill="#fff">
+      <rect x="24" y="70" width="90" height="30" fill="#1e7d4f" stroke="#fff"/><text x="69" y="90" text-anchor="middle">대분류</text>
+      <rect x="114" y="70" width="90" height="30" fill="#1e7d4f" stroke="#fff"/><text x="159" y="90" text-anchor="middle">중분류</text>
+      <rect x="204" y="70" width="80" height="30" fill="#1e7d4f" stroke="#fff"/><text x="244" y="90" text-anchor="middle">소분류</text>
+      <rect x="284" y="70" width="80" height="30" fill="#1e7d4f" stroke="#fff"/><text x="324" y="90" text-anchor="middle">세분류</text>
+      <rect x="364" y="70" width="120" height="30" fill="#0f6e56" stroke="#fff"/><text x="424" y="90" text-anchor="middle">품명</text>
+      <rect x="484" y="70" width="120" height="30" fill="#0B3C5D" stroke="#fff"/><text x="544" y="90" text-anchor="middle">부품</text>
+      <rect x="604" y="70" width="90" height="30" fill="#334155" stroke="#fff"/><text x="649" y="90" text-anchor="middle">규격</text>
+      <rect x="694" y="70" width="70" height="30" fill="#334155" stroke="#fff"/><text x="729" y="90" text-anchor="middle">수량</text>
+      <rect x="764" y="70" width="105" height="30" fill="#334155" stroke="#fff"/><text x="816" y="90" text-anchor="middle">단가</text>
+      <rect x="869" y="70" width="107" height="30" fill="#334155" stroke="#fff"/><text x="922" y="90" text-anchor="middle">금액</text>
+    </g>
+
+    <!-- body grid lines helper: cells drawn per row -->
+    <!-- Row group: 재료비 (merged) -->
+    <rect x="24" y="100" width="90" height="120" fill="#f0f7f2" stroke="#cbd5e1"/><text x="34" y="164" font-size="11.5" font-weight="700" fill="#0f6e56">재료비</text>
+    <!-- 중분류 배관자재 (merged 2) -->
+    <rect x="114" y="100" width="90" height="60" fill="#f8fafc" stroke="#cbd5e1"/><text x="124" y="134" font-weight="700" fill="#0F2A43">배관자재</text>
+    <!-- 파이프 row -->
+    <rect x="204" y="100" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="284" y="100" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="364" y="100" width="120" height="30" fill="#fff" stroke="#e2e8f0"/><text x="372" y="120" fill="#0F2A43">파이프</text>
+    <rect x="484" y="100" width="120" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="604" y="100" width="90" height="30" fill="#fff" stroke="#e2e8f0"/><text x="612" y="120" fill="#64748b">STS304</text>
+    <rect x="694" y="100" width="70" height="30" fill="#fff" stroke="#e2e8f0"/><text x="758" y="120" text-anchor="end">10</text>
+    <rect x="764" y="100" width="105" height="30" fill="#fff" stroke="#e2e8f0"/><text x="863" y="120" text-anchor="end">50,000</text>
+    <rect x="869" y="100" width="107" height="30" fill="#fff" stroke="#e2e8f0"/><text x="970" y="120" text-anchor="end" font-weight="700">500,000</text>
+    <!-- 밸브 row -->
+    <rect x="204" y="130" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="284" y="130" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="364" y="130" width="120" height="30" fill="#fff" stroke="#e2e8f0"/><text x="372" y="150" fill="#0F2A43">밸브</text>
+    <rect x="484" y="130" width="120" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="604" y="130" width="90" height="30" fill="#fff" stroke="#e2e8f0"/><text x="612" y="150" fill="#64748b">2인치</text>
+    <rect x="694" y="130" width="70" height="30" fill="#fff" stroke="#e2e8f0"/><text x="758" y="150" text-anchor="end">5</text>
+    <rect x="764" y="130" width="105" height="30" fill="#fff" stroke="#e2e8f0"/><text x="863" y="150" text-anchor="end">80,000</text>
+    <rect x="869" y="130" width="107" height="30" fill="#fff" stroke="#e2e8f0"/><text x="970" y="150" text-anchor="end" font-weight="700">400,000</text>
+
+    <!-- 중분류 가설재 -->
+    <rect x="114" y="160" width="90" height="60" fill="#f8fafc" stroke="#cbd5e1"/><text x="124" y="194" font-weight="700" fill="#0F2A43">가설재</text>
+    <!-- 납블록(품목) + 부품 2행 (부품행 회색) -->
+    <rect x="204" y="160" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="284" y="160" width="80" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="364" y="160" width="120" height="30" fill="#fff" stroke="#e2e8f0"/><text x="372" y="180" fill="#0F2A43">납블록</text>
+    <rect x="484" y="160" width="120" height="30" fill="#fff" stroke="#e2e8f0"/>
+    <rect x="604" y="160" width="90" height="30" fill="#fff" stroke="#e2e8f0"/><text x="612" y="180" fill="#64748b">BLOCK</text>
+    <rect x="694" y="160" width="70" height="30" fill="#fff" stroke="#e2e8f0"/><text x="758" y="180" text-anchor="end">2</text>
+    <rect x="764" y="160" width="105" height="30" fill="#fff" stroke="#e2e8f0"/><text x="863" y="180" text-anchor="end">300,000</text>
+    <rect x="869" y="160" width="107" height="30" fill="#fff" stroke="#e2e8f0"/><text x="970" y="180" text-anchor="end" font-weight="700">600,000</text>
+    <!-- 부품행 순납강판 (회색) -->
+    <rect x="204" y="190" width="280" height="30" fill="#f8fafc" stroke="#e2e8f0"/>
+    <rect x="484" y="190" width="120" height="30" fill="#eef2f6" stroke="#e2e8f0"/><text x="492" y="210" fill="#475569">순납강판</text>
+    <rect x="604" y="190" width="90" height="30" fill="#f8fafc" stroke="#e2e8f0"/><text x="612" y="210" fill="#94a3b8">3.2T</text>
+    <rect x="694" y="190" width="70" height="30" fill="#f8fafc" stroke="#e2e8f0"/><text x="758" y="210" text-anchor="end" fill="#94a3b8">3</text>
+    <rect x="764" y="190" width="105" height="30" fill="#f8fafc" stroke="#e2e8f0"/><text x="863" y="210" text-anchor="end" fill="#94a3b8">50,000</text>
+    <rect x="869" y="190" width="107" height="30" fill="#f8fafc" stroke="#e2e8f0"/><text x="970" y="210" text-anchor="end" fill="#94a3b8">150,000</text>
+  </g>
+
+  <!-- 합계 행 -->
+  <rect x="24" y="220" width="845" height="30" fill="#0F2A43"/><text x="40" y="240" font-size="12" font-weight="700" fill="#fff">합계 (Σ품목금액 · 부품 제외)</text>
+  <rect x="869" y="220" width="107" height="30" fill="#0F2A43"/><text x="970" y="240" font-size="12.5" font-weight="800" fill="#eafaf1" text-anchor="end">1,500,000</text>
+
+  <!-- notes -->
+  <rect x="24" y="272" width="952" height="230" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+  <text x="44" y="300" font-size="13" font-weight="800" fill="#0F2A43">동작 요약</text>
+  <text x="44" y="326" font-size="12" fill="#0F2A43">· 열 = 대/중/소/세/품명 + 부품 + 규격·수량·단가·금액. 캔버스 헤더와 동일 구조.</text>
+  <text x="44" y="348" font-size="12" fill="#0F2A43">· 상위 분류(재료비·배관자재 등)는 <tspan font-weight="700">셀 병합</tspan>으로 반복 생략(견적서 스타일).</text>
+  <text x="44" y="370" font-size="12" fill="#0F2A43">· 빈 중간 레벨(소/세)은 <tspan font-weight="700">빈 칸</tspan> — 어느 계층이 비었는지 그대로 보임(직접 붙임).</text>
+  <text x="44" y="392" font-size="12" fill="#475569">· 부품 행(순납강판 등)은 회색·단가 내역 — <tspan font-weight="700" fill="#b03a2e">합계에서 제외</tspan>(총액=Σ품목금액).</text>
+  <text x="44" y="414" font-size="12" fill="#0F2A43">· 다운로드: 비교 화면/제출서에서 <tspan font-weight="700">「레벨 트리 엑셀」</tspan> 버튼 → .xlsx.</text>
+  <text x="44" y="440" font-size="11.5" fill="#64748B" font-style="italic">· 확인해 주실 옵션: 상위 셀 병합(권장) vs 매 행 반복 · 열 5레벨(+부품) 고정(권장) vs 데이터에 있는 레벨만 가변.</text>
+  <text x="44" y="470" font-size="11.5" fill="#1e7d4f">· 기존 엑셀 추출 코드(openpyxl) 재사용 · 총액·건수 Δ=0(표시 산출물).</text>
+</svg>

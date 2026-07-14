@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="720" viewBox="0 0 1000 720" font-family="'Malgun Gothic','Apple SD Gothic Neo','Noto Sans CJK KR',sans-serif">
+  <rect width="1000" height="720" fill="#eef3f6"/>
+  <text x="24" y="34" font-size="19" font-weight="800" fill="#0F2A43">부품(BOM) 이중 경제구조 — 목업</text>
+  <text x="24" y="56" font-size="12.5" fill="#64748B">품목 아래 '부품' 레벨. 단가 = Σ파트금액(1대분 BOM), 금액 = 수량×단가. 부품 파트금액은 단가의 내역이라 총액에 미포함.</text>
+
+  <!-- ===== Panel 1: 라인아이템 상세표 ===== -->
+  <text x="24" y="88" font-size="13.5" font-weight="800" fill="#334155">① 라인아이템 상세 (품목 + 부품 내역)</text>
+  <g>
+    <rect x="24" y="98" width="952" height="234" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+    <!-- header -->
+    <rect x="24" y="98" width="952" height="30" fill="#0F2A43"/>
+    <text x="40" y="118" font-size="12" font-weight="700" fill="#fff">항목</text>
+    <text x="360" y="118" font-size="12" font-weight="700" fill="#fff">규격</text>
+    <text x="560" y="118" font-size="12" font-weight="700" fill="#fff" text-anchor="end">수량</text>
+    <text x="740" y="118" font-size="12" font-weight="700" fill="#fff" text-anchor="end">단가(원)</text>
+    <text x="956" y="118" font-size="12" font-weight="700" fill="#fff" text-anchor="end">금액(원)</text>
+
+    <!-- 품목 행 -->
+    <rect x="24" y="128" width="952" height="34" fill="#f2f8fb"/>
+    <text x="40" y="150" font-size="13" font-weight="800" fill="#0F2A43">▸ 납블록 <tspan font-size="9" font-weight="600" fill="#1C7293">[품목]</tspan></text>
+    <text x="360" y="150" font-size="12" fill="#334155">순납 BLOCK</text>
+    <text x="560" y="150" font-size="12.5" font-weight="700" fill="#0F2A43" text-anchor="end">2</text>
+    <text x="740" y="150" font-size="12.5" font-weight="800" fill="#1C7293" text-anchor="end">300,000</text>
+    <text x="956" y="150" font-size="12.5" font-weight="800" fill="#0F2A43" text-anchor="end">600,000</text>
+
+    <!-- 부품 소제목 -->
+    <text x="56" y="182" font-size="10.5" font-weight="700" fill="#94a3b8">└ 부품 내역 (단가 구성 · 합계 제외)</text>
+
+    <!-- 부품 행1 -->
+    <text x="72" y="206" font-size="12" fill="#475569">├ 순납강판 <tspan font-size="9" fill="#94a3b8">[부품]</tspan></text>
+    <text x="360" y="206" font-size="11.5" fill="#64748B">3.2T</text>
+    <text x="560" y="206" font-size="11.5" fill="#64748B" text-anchor="end">3</text>
+    <text x="740" y="206" font-size="11.5" fill="#64748B" text-anchor="end">50,000</text>
+    <text x="956" y="206" font-size="11.5" fill="#64748B" text-anchor="end">150,000</text>
+    <line x1="40" y1="216" x2="960" y2="216" stroke="#f1f5f9"/>
+    <!-- 부품 행2 -->
+    <text x="72" y="238" font-size="12" fill="#475569">├ 볼트 M12 <tspan font-size="9" fill="#94a3b8">[부품]</tspan></text>
+    <text x="360" y="238" font-size="11.5" fill="#64748B">SUS 8.8</text>
+    <text x="560" y="238" font-size="11.5" fill="#64748B" text-anchor="end">1</text>
+    <text x="740" y="238" font-size="11.5" fill="#64748B" text-anchor="end">150,000</text>
+    <text x="956" y="238" font-size="11.5" fill="#64748B" text-anchor="end">150,000</text>
+
+    <!-- 부품 열 라벨 -->
+    <text x="560" y="266" font-size="9.5" fill="#94a3b8" text-anchor="end">부품수량</text>
+    <text x="740" y="266" font-size="9.5" fill="#94a3b8" text-anchor="end">부품단가</text>
+    <text x="956" y="266" font-size="9.5" fill="#94a3b8" text-anchor="end">파트금액</text>
+
+    <!-- 소계 정합 행 -->
+    <rect x="40" y="278" width="920" height="42" rx="8" fill="#f0f7f2"/>
+    <text x="56" y="304" font-size="12" font-weight="800" fill="#1e7d4f">✓ Σ파트금액 300,000 = 단가 300,000</text>
+    <text x="430" y="304" font-size="12" font-weight="700" fill="#0F2A43">·  수량 2 × 단가 300,000 = 금액 600,000</text>
+    <text x="956" y="304" font-size="11" font-weight="700" fill="#b03a2e" text-anchor="end">부품 300,000 → 총액 미포함</text>
+  </g>
+
+  <!-- ===== Panel 2: 레벨 캔버스 (부품 열) ===== -->
+  <text x="24" y="368" font-size="13.5" font-weight="800" fill="#334155">② 레벨 캔버스 — '부품' 열 추가</text>
+  <g>
+    <rect x="24" y="378" width="952" height="196" rx="10" fill="#ffffff" stroke="#D8E3EA"/>
+    <!-- headers -->
+    <g font-size="11" font-weight="700" fill="#fff">
+      <rect x="40" y="392" width="130" height="26" rx="6" fill="#0F2A43"/><text x="105" y="409" text-anchor="middle">대분류</text>
+      <rect x="178" y="392" width="130" height="26" rx="6" fill="#0F2A43"/><text x="243" y="409" text-anchor="middle">중분류</text>
+      <rect x="316" y="392" width="130" height="26" rx="6" fill="#0F2A43"/><text x="381" y="409" text-anchor="middle">소분류</text>
+      <rect x="454" y="392" width="130" height="26" rx="6" fill="#0F2A43"/><text x="519" y="409" text-anchor="middle">세분류</text>
+      <rect x="592" y="392" width="150" height="26" rx="6" fill="#1C7293"/><text x="667" y="409" text-anchor="middle">품명</text>
+      <rect x="750" y="392" width="210" height="26" rx="6" fill="#0B3C5D"/><text x="855" y="409" text-anchor="middle">부품 (단가 내역)</text>
+    </g>
+    <!-- nodes -->
+    <rect x="40" y="430" width="130" height="34" rx="8" fill="#fff" stroke="#cbd5e1"/><text x="52" y="452" font-size="11.5" font-weight="700" fill="#0F2A43">재료비</text>
+    <rect x="178" y="430" width="130" height="34" rx="8" fill="#fff" stroke="#cbd5e1"/><text x="190" y="452" font-size="11.5" fill="#0F2A43">차폐부</text>
+    <rect x="316" y="430" width="130" height="34" rx="8" fill="none" stroke="#e2e8f0" stroke-dasharray="3 3"/>
+    <rect x="454" y="430" width="130" height="34" rx="8" fill="none" stroke="#e2e8f0" stroke-dasharray="3 3"/>
+    <rect x="592" y="430" width="150" height="34" rx="8" fill="#fff" stroke="#a9ddc0" stroke-width="1.4"/><text x="604" y="448" font-size="11.5" font-weight="700" fill="#0F2A43">납블록</text><text x="604" y="460" font-size="8.5" fill="#1e7d4f">2×300,000=600,000</text>
+    <!-- 부품 열 노드 2개 -->
+    <rect x="750" y="426" width="210" height="26" rx="7" fill="#f7fafc" stroke="#c9d6df"/><text x="762" y="443" font-size="10.5" fill="#334155">순납강판  3×50,000=150,000</text>
+    <rect x="750" y="456" width="210" height="26" rx="7" fill="#f7fafc" stroke="#c9d6df"/><text x="762" y="473" font-size="10.5" fill="#334155">볼트 M12  1×150,000=150,000</text>
+    <!-- connectors -->
+    <path d="M170 447 L178 447" stroke="#1C7293" stroke-width="2"/>
+    <path d="M308 447 C360 447 400 447 592 447" stroke="#3FA372" stroke-width="2"/>
+    <path d="M742 447 C748 447 744 439 750 439" stroke="#0B3C5D" stroke-width="1.6" stroke-dasharray="3 2"/>
+    <path d="M742 447 C748 447 744 469 750 469" stroke="#0B3C5D" stroke-width="1.6" stroke-dasharray="3 2"/>
+    <!-- note -->
+    <text x="40" y="510" font-size="11.5" fill="#0F2A43">· 부품 열은 '단가 내역'(BOM) — 점선 연결. 파트금액은 <tspan font-weight="700" fill="#b03a2e">총액에 안 더함</tspan>(단가에 이미 반영).</text>
+    <text x="40" y="532" font-size="11.5" fill="#0F2A43">· 빈 소/세분류 열은 그대로 보임(직접 붙임). 잎(납블록)=품명 열, 그 아래 부품 열에 BOM.</text>
+    <text x="40" y="554" font-size="11.5" fill="#1e7d4f">· 검증 게이트: Σ파트금액≈단가 · 수량×단가≈금액 — 불일치 시 <tspan fill="#b03a2e">미연계·경고</tspan>(자동수정 없음).</text>
+  </g>
+
+  <!-- bottom invariant bar -->
+  <rect x="24" y="590" width="952" height="106" rx="10" fill="#0F2A43"/>
+  <text x="44" y="618" font-size="13" font-weight="800" fill="#fff">불변식 (반드시)</text>
+  <text x="44" y="644" font-size="12.5" fill="#CADCFC">· 단가 = Σ(부품수량 × 부품단가)  (1대분 BOM 원가)</text>
+  <text x="44" y="666" font-size="12.5" fill="#CADCFC">· 금액 = 품목수량 × 단가</text>
+  <text x="44" y="688" font-size="12.5" fill="#eafaf1">· 총액 = Σ(품목 금액)  ← 부품 파트금액은 미포함 (이중계상 방지) · Δ=0 보존</text>
+</svg>
