@@ -29,10 +29,11 @@ import s9_pumyeong
 import s10_pumyeong_real
 import s11_direct_attach
 import s12_level_grid
+import s13_bom
 
 MODULES = [s1_classification, s2_currency, s3_tabs, s4_numbering,
            s5_amounts, s6_misc, s7_edges, s8_link, s9_pumyeong, s10_pumyeong_real,
-           s11_direct_attach, s12_level_grid]
+           s11_direct_attach, s12_level_grid, s13_bom]
 
 DOC = ROOT / "docs" / "QDBT_견고성테스트_20260711.md"
 _MARK = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "WARN": "⚠️ WARN"}
