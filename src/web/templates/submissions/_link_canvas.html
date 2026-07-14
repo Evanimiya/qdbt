@@ -38,6 +38,7 @@
   .lkc-node.kin-desc{background:#f0fdf4}
   .lkc-node.dragging{opacity:.35}
   .lkc-node.drop-ok{outline:2px dashed #0ea5e9;outline-offset:1px;background:#eff6ff}
+  .lkc-col-h.col-drop{outline:2px dashed #6366f1;outline-offset:-2px;background:#eef2ff;color:#4338ca}
   .lkc-nm{font-weight:700;color:#0F2A43;display:block;padding-right:44px;word-break:break-all}
   .lkc-node.leaf .lkc-nm{font-weight:600}
   .lkc-meta{font-size:10px;color:#64748B;margin-top:2px}
@@ -315,13 +316,35 @@ window.LKC = (function(){
       // 드롭 대상(모든 가지)
       el.addEventListener('dragover', function(e){ if(S.drag && canDropOn(S.drag, el.dataset.path)){ e.preventDefault(); el.classList.add('drop-ok'); } });
       el.addEventListener('dragleave', function(){ el.classList.remove('drop-ok'); });
-      el.addEventListener('drop', function(e){ e.preventDefault(); el.classList.remove('drop-ok');
+      el.addEventListener('drop', function(e){ e.preventDefault(); e.stopPropagation(); el.classList.remove('drop-ok');
         if(!S.drag) return; var d=S.drag; var target=el.dataset.path; S.drag=null;
         if(!canDropOn(d, target)) return;
         if(d.kind==='multi') bulkReparent(d.paths, target);
         else if(d.kind==='leaf') reassign(d.item, target);
         else reparentBranch(d.path, target); });
     });
+    // [#4 재레벨링] 열 헤더에 가지를 드롭 → 그 '의미 레벨'로 재레벨(레벨만·부모 유지·서브트리 동반).
+    root.querySelectorAll('.lkc-col').forEach(function(col){
+      var lvl = (parseInt(col.getAttribute('data-depth'), 10) || 0) + 1;
+      var h = col.querySelector('.lkc-col-h');
+      if(!h) return;
+      h.addEventListener('dragover', function(e){
+        if(S.drag && S.drag.kind==='branch'){ e.preventDefault(); h.classList.add('col-drop'); } });
+      h.addEventListener('dragleave', function(){ h.classList.remove('col-drop'); });
+      h.addEventListener('drop', function(e){
+        h.classList.remove('col-drop');
+        if(!S.drag || S.drag.kind!=='branch') return;
+        e.preventDefault(); var d=S.drag; S.drag=null;
+        relevelBranch(d.path, lvl); });
+    });
+  }
+  function relevelBranch(path, level){
+    if(S.readonly) return;
+    fetch('/submissions/'+S.subId+'/recon/relevel', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:path, level:level})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(d.ok) location.reload(); else alert(d.error||'재레벨 실패'); })
+      .catch(function(e){ alert('오류: '+e); });
   }
 
   // 드롭 가능 판정: 잎은 어떤 가지로도 OK. 가지는 자기 자신/자기 하위엔 불가(순환 방지).
